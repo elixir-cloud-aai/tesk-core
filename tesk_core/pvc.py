@@ -1,4 +1,4 @@
-from kubernetes import client, config
+from kubernetes import client
 
 
 class PVC():
@@ -12,10 +12,11 @@ class PVC():
                          'resources': {'requests': {'storage': str(size_gb) + 'Gi'}},
                          # 'storageClassName': 'gold'
                      }
-                     }
+                    }
 
         self.subpath_idx = 0
         self.namespace = namespace
+        self.volume_mounts = None
         self.cv1 = client.CoreV1Api()
         self.cv1.create_namespaced_persistent_volume_claim(
             self.namespace, self.spec)
