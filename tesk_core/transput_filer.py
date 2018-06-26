@@ -24,7 +24,7 @@ class Type(enum.Enum):
     File = 'FILE'
     Directory = 'DIRECTORY'
 
-class Transput:
+class Transput(object):
     def __init__(self, path, url, ftype):
         self.path = path
         self.url = url

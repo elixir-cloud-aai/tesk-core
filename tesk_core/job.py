@@ -3,7 +3,7 @@ import time
 from kubernetes import client
 
 
-class Job:
+class Job(object):
     def __init__(self, body, name='task-job', namespace='default'):
         self.name = name
         self.namespace = namespace

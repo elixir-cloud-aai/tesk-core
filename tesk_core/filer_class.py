@@ -1,7 +1,7 @@
 import json
 
 
-class Filer:
+class Filer(object):
     def __init__(self, name, data, filer_version='v0.5', debug=False):
         self.name = name
         self.spec = {

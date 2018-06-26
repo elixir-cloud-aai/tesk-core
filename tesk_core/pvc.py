@@ -1,7 +1,7 @@
 from kubernetes import client
 
 
-class PVC():
+class PVC(object):
     def __init__(self, name='task-pvc', size_gb=1, namespace='default'):
         self.name = name
         self.spec = {'apiVersion': 'v1',
