@@ -1,6 +1,6 @@
 import logging
 import time
-from kubernetes import client, config
+from kubernetes import client
 
 
 class Job:
@@ -30,13 +30,12 @@ class Job:
     def get_status(self):
         job = self.bv1.read_namespaced_job(self.name, self.namespace)
         try:
-            if job.status.conditions[0].type == 'Complete' and job.status.conditions[0].status:
-                self.status = 'Complete'
-            elif job.status.conditions[0].type == 'Failed' and job.status.conditions[0].status:
-                self.status = 'Failed'
+            job_condition = job.status.conditions[0]
+            if job_condition.status and job_condition.type in ['Complete', 'Failed']:
+                self.status = job_condition.type
             else:
                 self.status = 'Error'
-        except TypeError:  # The condition is not initialized, so it is not complete yet, wait for it
+        except TypeError:  # The condition is not initialized, so the job is not complete yet
             self.status = 'Running'
 
         return self.status
