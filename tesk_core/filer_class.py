@@ -19,8 +19,7 @@ class Filer:
                             "env": [],
                             "volumeMounts": [],
                             "imagePullPolicy": "IfNotPresent"
-                        }
-                        ],
+                        }],
                         "volumes": [],
                         "restartPolicy": "Never"
                     }
@@ -35,10 +34,10 @@ class Filer:
         container['env'].append(
             {"name": "JSON_INPUT", "value": json.dumps(data)})
 
-    def set_ftp(self, user, pw):
+    def set_ftp(self, user, password):
         env = self.spec['spec']['template']['spec']['containers'][0]['env']
         env.append({"name": "TESK_FTP_USERNAME", "value": user})
-        env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
+        env.append({"name": "TESK_FTP_PASSWORD", "value": password})
 
     def set_volume_mounts(self, pvc):
         tempspec = self.spec['spec']['template']['spec']
