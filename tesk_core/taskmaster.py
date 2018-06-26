@@ -1,6 +1,5 @@
 #!/usr/bin/env python2
 
-from __future__ import print_function
 import argparse
 import json
 import os
@@ -8,9 +7,9 @@ import re
 import sys
 import logging
 from kubernetes import client, config
-from job import Job
-from pvc import PVC
-from filer_class import Filer
+from tesk_core.job import Job
+from tesk.core.pvc import PVC
+from tesk_core.filer_class import Filer
 
 created_jobs = []
 poll_interval = 5
@@ -26,9 +25,9 @@ def run_executor(executor, namespace, pvc=None):
         spec['volumes'] = [{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}]
 
-    logger.debug('Created job: ' + jobname)
+    logger.debug('Created job: %s', jobname)
     job = Job(executor, jobname, namespace)
-    logger.debug('Job spec: ' + str(job.body))
+    logger.debug('Job spec: %s', str(job.body))
 
     global created_jobs
     created_jobs.append(job)
@@ -37,9 +36,8 @@ def run_executor(executor, namespace, pvc=None):
     if status != 'Complete':
         exit_cancelled('Got status ' + status)
 
+
 # TODO move this code to PVC class
-
-
 def append_mount(volume_mounts, name, path, pvc):
 
     # Checks all mount paths in volume_mounts if the path given is already in
@@ -50,10 +48,8 @@ def append_mount(volume_mounts, name, path, pvc):
     # If not, add mount path
     if duplicate is None:
         subpath = pvc.get_subpath()
-        logger.debug(' '.join(
-            ['appending' + name +
-             'at path' + path +
-             'with subPath:' + subpath]))
+        logger.debug(
+            'appending %s at path %s with subPath: %s', name, path, subpath)
         volume_mounts.append(
             {'name': name, 'mountPath': path, 'subPath': subpath})
 
@@ -61,13 +57,13 @@ def append_mount(volume_mounts, name, path, pvc):
 def dirname(iodata):
     if iodata['type'] == 'FILE':
         # strip filename from path
-        r = '(.*)/'
-        dirname = re.match(r, iodata['path']).group(1)
-        logger.debug('dirname of ' + iodata['path'] + 'is: ' + dirname)
+        basename = '(.*)/'
+        directory = re.match(basename, iodata['path']).group(1)
+        logger.debug('dirname of %s is: %s', iodata['path'], directory)
     elif iodata['type'] == 'DIRECTORY':
-        dirname = iodata['path']
+        directory = iodata['path']
 
-    return dirname
+    return directory
 
 
 def generate_mounts(data, pvc):
@@ -102,8 +98,8 @@ def init_pvc(data, filer):
     created_pvc = pvc
 
     mounts = generate_mounts(data, pvc)
-    logging.debug(mounts)
-    logging.debug(type(mounts))
+    logger.debug(mounts)
+    logger.debug(type(mounts))
     pvc.set_volume_mounts(mounts)
 
     filer.set_volume_mounts(pvc)
@@ -140,7 +136,7 @@ def run_task(data, filer_version):
         run_executor(executor, args.namespace, pvc)
 
     # run executors
-    logging.debug("Finished running executors")
+    logger.debug("Finished running executors")
 
     # upload files and delete pvc
     if data['volumes'] or data['inputs'] or data['outputs']:
@@ -160,7 +156,7 @@ def run_task(data, filer_version):
             pvc.delete()
 
 
-def main(argv):
+def main():
     parser = argparse.ArgumentParser(description='TaskMaster main module')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -203,16 +199,15 @@ def main(argv):
 
     poll_interval = args.poll_interval
 
-    loglevel = logging.ERROR
-    if args.debug:
-        loglevel = logging.DEBUG
+    loglevel = logging.DEBUG if args.debug else logging.ERROR
 
-    global logger
     logging.basicConfig(
         format='%(asctime)s %(levelname)s: %(message)s',
         datefmt='%m/%d/%Y %I:%M:%S',
         level=loglevel)
     logging.getLogger('kubernetes.client').setLevel(logging.CRITICAL)
+
+    global logger
     logger = logging.getLogger(__name__)
     logger.debug('Starting taskmaster')
 
@@ -222,8 +217,8 @@ def main(argv):
     elif args.file == '-':
         data = json.load(sys.stdin)
     else:
-        with open(args.file) as fh:
-            data = json.load(fh)
+        with open(args.file) as input_file:
+            data = json.load(input_file)
 
     # Load kubernetes config file
     config.load_incluster_config()
@@ -251,23 +246,22 @@ def clean_on_interrupt():
 def exit_cancelled(reason='Unknown reason'):
     if created_pvc:
         created_pvc.delete()
-    logger.error('Cancelling taskmaster: ' + reason)
+    logger.error('Cancelling taskmaster: %s', reason)
     sys.exit(0)
 
 
 def check_cancelled():
-    with open('/podinfo/labels') as fh:
-        for line in fh.readlines():
-            name, label = line.split('=')
-            logging.debug('Got label: ' + label)
-            if label == '"Cancelled"':
-                return True
+    def is_cancelled(label):
+        logging.debug('Got label: %s', label)
+        _, value = label.split('=')
+        return value == '"Cancelled"'
 
-    return False
+    with open('/podinfo/labels') as labels:
+        return any(is_cancelled(label) for label in labels.readlines())
 
 
 if __name__ == "__main__":
     try:
-        main(sys.argv)
+        main()
     except KeyboardInterrupt:
         clean_on_interrupt()
