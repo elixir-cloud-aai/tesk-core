@@ -8,7 +8,7 @@ import sys
 import logging
 from kubernetes import client, config
 from tesk_core.job import Job
-from tesk.core.pvc import PVC
+from tesk_core.pvc import PVC
 from tesk_core.filer_class import Filer
 
 created_jobs = []
