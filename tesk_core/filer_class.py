@@ -39,11 +39,11 @@ class Filer(object):
         env.append({"name": "TESK_FTP_USERNAME", "value": user})
         env.append({"name": "TESK_FTP_PASSWORD", "value": password})
 
-    def set_volume_mounts(self, pvc):
+    def set_volume_mounts(self, name, volume_mounts):
         tempspec = self.spec['spec']['template']['spec']
-        tempspec['containers'][0]['volumeMounts'] = pvc.volume_mounts
+        tempspec['containers'][0]['volumeMounts'] = volume_mounts
         tempspec['volumes'] = [{"name": "task-volume",
-                                "persistentVolumeClaim": {"claimName": pvc.name}}]
+                                "persistentVolumeClaim": {"claimName": name}}]
 
     def get_spec(self, mode, debug=False):
         self.spec['spec']['template']['spec']['containers'][0]['args'] = [
