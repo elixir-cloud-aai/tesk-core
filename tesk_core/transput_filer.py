@@ -9,7 +9,7 @@ import json
 import re
 import os
 import enum
-import distutils.dir_util
+import distutils.dir_util  # pylint: disable=import-error,no-name-in-module
 import logging
 import requests
 
@@ -216,7 +216,7 @@ class FTPTransput(Transput):
     def download_file(self):
         logging.debug('Downloading ftp file: "%s" Target: %s', self.url, self.path)
         basedir = os.path.dirname(self.path)
-        distutils.dir_util.mkpath(basedir)
+        distutils.dir_util.mkpath(basedir)  # pylint: disable=no-member
 
         return ftp_download_file(self.ftp_connection, self.url_path, self.path)
 
