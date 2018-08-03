@@ -100,7 +100,8 @@ class FTPTransput(Transput):
                 user = os.environ['TESK_FTP_USERNAME']
                 pw = os.environ['TESK_FTP_PASSWORD']
                 self.ftp.login(user, pw)
-            except ftplib.error_perm:
+            except ftplib.error_perm as err:
+                logging.error(str(err))
                 self.ftp.login()
         else:
             self.ftp.login()
