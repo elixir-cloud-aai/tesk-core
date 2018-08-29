@@ -6,13 +6,14 @@ import os
 import sys
 import logging
 from kubernetes import config
-from tesk_core.job import Job
+from tesk_core.job import Job, State
 from tesk_core.pvc import PVC
 from tesk_core.filer_class import Filer
 
 CREATED_JOBS = []
 CREATED_PVC = None
 POLL_INTERVAL = 5
+DEBUG = False
 
 
 def run_executor(executor, namespace, jobs, pvc=None):
@@ -25,13 +26,13 @@ def run_executor(executor, namespace, jobs, pvc=None):
 
     logger.debug('Created job: %s', jobname)
     job = Job(executor, jobname, namespace)
-    logger.debug('Job spec: %s', str(job.body))
+    logger.debug('Job spec: %s', str(executor))
 
     jobs.append(job)
 
-    status = job.run_to_completion(POLL_INTERVAL, check_cancelled)
-    if status != 'Complete':
-        exit_cancelled(pvc, 'Got status ' + status)
+    status = job.run_to_completion(POLL_INTERVAL, is_task_cancelled)
+    if status != State.Complete:
+        exit_cancelled(pvc, 'Got status ' + status.value)
 
 
 def dirname_from(iodata):
@@ -43,75 +44,77 @@ def dirname_from(iodata):
     return directory
 
 
-def init_pvc(data, task_name, volume_basename):
+def init_pvc(task, task_name, volume_basename, namespace):
     pvc_name = task_name + '-pvc'
-    pvc_size = data['resources']['disk_gb']
+    pvc_size = task['resources']['disk_gb']
 
     # paths that need to be mounted
-    paths = data['volumes']
+    paths = task['volumes']
     # inputs/outputs that need to be present, from FILE and DIRECTORY entries
-    paths += [dirname_from(io) for io in data['inputs'] + data['outputs']]
+    paths += [dirname_from(io) for io in task['inputs'] + task['outputs']]
 
-    pvc = PVC(paths, volume_basename, pvc_name, pvc_size, args.namespace)
+    pvc = PVC(paths, volume_basename, pvc_name, pvc_size, namespace)
 
     logger.debug(pvc.volume_mounts)
     logger.debug(type(pvc.volume_mounts))
     return pvc
 
-def download_inputs(filer, pvc, task_name, jobs):
+def download_inputs(filer, pvc, task_name, jobs, namespace):
     filer.set_volume_mounts(pvc.name, pvc.volume_mounts)
     filerjob = Job(
-        filer.get_spec('inputs', args.debug),
+        filer.get_spec('inputs', DEBUG),
         task_name + '-inputs-filer',
-        args.namespace)
+        namespace)
 
     jobs.append(filerjob)
 
-    status = filerjob.run_to_completion(POLL_INTERVAL, check_cancelled)
-    if status != 'Complete':
-        exit_cancelled(pvc, 'Got status ' + status)
+    status = filerjob.run_to_completion(POLL_INTERVAL, is_task_cancelled)
+    if status != State.Complete:
+        exit_cancelled(pvc, 'Got status ' + status.value)
 
 
-def run_task(data, filer_version):
+def run_task(task, filer_version, namespace):
     global CREATED_PVC
     global CREATED_JOBS
-    task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
+    task_name = task['executors'][0]['metadata']['labels']['taskmaster-name']
     volume_basename = 'task-volume'
     pvc = None
 
-    if data['volumes'] or data['inputs'] or data['outputs']:
+    def io_in_job(params):
+        return params['volumes'] or params['inputs'] or params['outputs']
 
-        filer = Filer(task_name + '-filer', data, filer_version, args.debug)
+    if io_in_job(task):
+        filer = Filer(task_name + '-filer', task, filer_version, DEBUG)
         if os.environ.get('TESK_FTP_USERNAME') is not None:
             filer.set_ftp(
                 os.environ['TESK_FTP_USERNAME'],
                 os.environ['TESK_FTP_PASSWORD'])
 
-        pvc = init_pvc(data, task_name, volume_basename)
-        download_inputs(filer, pvc, task_name, CREATED_JOBS)
+        pvc = init_pvc(task, task_name, volume_basename, namespace)
+        download_inputs(filer, pvc, task_name, CREATED_JOBS, namespace)
 
         # Store to a global to be able to clean up
         CREATED_PVC = pvc
 
 
-    for executor in data['executors']:
-        run_executor(executor, args.namespace, CREATED_JOBS, pvc)
+    for executor in task['executors']:
+        run_executor(executor, namespace, CREATED_JOBS, pvc)
 
     # run executors
     logger.debug("Finished running executors")
 
     # upload files and delete pvc
-    if data['volumes'] or data['inputs'] or data['outputs']:
+    if io_in_job(task):
         filerjob = Job(
-            filer.get_spec('outputs', args.debug),
+            filer.get_spec('outputs', DEBUG),
             task_name + '-outputs-filer',
-            args.namespace)
+            namespace)
 
         CREATED_JOBS.append(filerjob)
 
-        status = filerjob.run_to_completion(POLL_INTERVAL, check_cancelled)
-        if status != 'Complete':
-            exit_cancelled(pvc, 'Got status ' + status)
+        status = filerjob.run_to_completion(POLL_INTERVAL, is_task_cancelled)
+        if status != State.Complete:
+            exit_cancelled(pvc, 'Got status ' + status.value)
         else:
             pvc.delete()
 
@@ -154,13 +157,15 @@ def main():
         help='Set debug mode',
         action='store_true')
 
-    global args
     args = parser.parse_args()
+
+    global DEBUG
+    DEBUG = args.debug
 
     global POLL_INTERVAL
     POLL_INTERVAL = args.poll_interval
 
-    loglevel = logging.DEBUG if args.debug else logging.ERROR
+    loglevel = logging.DEBUG if DEBUG else logging.ERROR
 
     logging.basicConfig(
         format='%(asctime)s %(levelname)s: %(message)s',
@@ -174,21 +179,23 @@ def main():
 
     # Get input JSON
     if args.file is None:
-        data = json.loads(args.json)
+        job_json = args.json
     elif args.file == '-':
-        data = json.load(sys.stdin)
+        job_json = sys.stdin.read()
     else:
         with open(args.file) as input_file:
-            data = json.load(input_file)
+            job_json = input_file.read()
+
+    task = json.loads(job_json)
 
     # Load kubernetes config file
     config.load_incluster_config()
 
     # Check if we're cancelled during init
-    if check_cancelled():
+    if is_task_cancelled():
         exit_cancelled(None, 'Cancelled during init')
 
-    run_task(data, args.filer_version)
+    run_task(task, args.filer_version, args.namespace)
 
 
 def clean_on_interrupt():
@@ -215,7 +222,7 @@ def exit_cancelled(pvc, reason='Unknown reason'):
     sys.exit(0)
 
 
-def check_cancelled():
+def is_task_cancelled():
     def is_cancelled(label):
         logging.debug('Got label: %s', label)
         _, value = label.split('=')
