@@ -12,6 +12,9 @@ import enum
 import distutils.dir_util
 import logging
 import requests
+from minio import Minio
+from minio.error import (ResponseError, BucketAlreadyOwnedByYou,
+                         BucketAlreadyExists)
 
 try:
     from urllib.parse import urlparse
@@ -23,6 +26,7 @@ except ImportError:
 class Type(enum.Enum):
     File = 'FILE'
     Directory = 'DIRECTORY'
+
 
 class Transput:
     def __init__(self, path, url, ftype):
@@ -73,6 +77,7 @@ class Transput:
         self.delete()
         # Swallow all exceptions since the filer mostly works with error codes
         return False
+
 
 class HTTPTransput(Transput):
     def __init__(self, path, url, ftype):
@@ -236,6 +241,7 @@ def ftp_login(ftp_connection):
     else:
         ftp_connection.login()
 
+
 def ftp_check_directory(ftp_connection, path):
     """
     Following convention with the rest of the code,
@@ -270,6 +276,7 @@ def ftp_check_directory(ftp_connection, path):
 
     return 0 if is_directory else 1
 
+
 def ftp_upload_file(ftp_connection, local_source_path, remote_destination_path):
     try:
         with open(local_source_path, 'r+b') as file:
@@ -290,6 +297,7 @@ def ftp_upload_file(ftp_connection, local_source_path, remote_destination_path):
         return 1
     return 0
 
+
 def ftp_download_file(ftp_connection, remote_source_path, local_destination_path):
     try:
         with open(local_destination_path, 'w+b') as file:
@@ -303,6 +311,7 @@ def ftp_download_file(ftp_connection, remote_source_path, local_destination_path
         )
         return 1
     return 0
+
 
 def subfolders_in(whole_path):
     """
@@ -326,6 +335,7 @@ def subfolders_in(whole_path):
         path += '/' + fragment
         subfolders.append(path)
     return subfolders
+
 
 def ftp_make_dirs(ftp_connection, path):
     response = ftp_connection.pwd()
@@ -367,10 +377,98 @@ def ftp_make_dirs(ftp_connection, path):
         return 1
     return 0
 
+
+class S3Transput(Transput):
+
+    def __init__(self, path, url, ftype):
+        Transput.__init__(self, path, url, ftype)
+
+        self.endpoint, self.secure, self.bucket_name, self.object_name = self.parseUrl(url)
+
+        access_key, secret_key = getAccessKeys();
+
+        self.client = Minio(self.endpoint, access_key, secret_key, self.secure)
+
+    def parseUrl(self, url):
+        #return None, False, None, None
+        raise NotImplementedError()
+
+    def getAccessKeys(self):
+        raise NotImplementedError()
+
+    def download_file(self):
+
+        try:
+            obj = self.client.fget_object(self.bucket_name, self.object_name, self.path)
+
+        except ResponseError as err:
+            logging.error('Got status code: %d', err.code)
+            logging.error(err.message)
+            return 1
+
+        #logging.debug('OK, got status code: %d', req.status_code)
+
+        #with open(self.path, 'wb') as file:
+        #    file.write(obj..content)
+        return 0
+
+    def upload_file(self):
+
+        try:
+            self.client.fput_object(self.bucket_name, self.object_name, self.path)
+
+            #with open(self.path, 'r') as file:
+            #    file_contents = file.read();
+            #   self.client.put_object(bucket, object_name, data=file_contents, )
+
+        except ResponseError as err:
+
+            logging.error('Got status code: %d', err.code)
+            logging.error(err.message)
+            return 1
+
+        # logging.debug('OK, got status code: %d', )
+
+        return 0
+
+    def upload_dir(self):
+        to_upload = []
+        for listing in os.listdir(self.path):
+            file_path = self.path + '/' + listing
+            if os.path.isdir(file_path):
+                ftype = Type.Directory
+            elif os.path.isfile(file_path):
+                ftype = Type.File
+            else:
+                return 1
+            to_upload.append(S3Transput(file_path, self.url + '/' + listing, ftype))
+
+        # return 1 if any upload failed
+        return min(sum([transput.upload() for transput in to_upload]), 1)
+
+    def download_dir(self):
+
+        # Stat the contents of the bucket
+        objects = self.client.list_objects(self.bucket_name, self.object_name, recursive=True)
+        # self.client.list_objects_v2(self.bucket_name, self.object_name, recursive=True)
+
+        for obj in objects:
+            if obj.is_dir:
+                # create local dir?
+                continue
+            else:
+                # construct the path from obj.object_name trimming the prefix.
+                file_path = None
+                self.client.fget_object(obj.bucket_name, obj.object_name, file_path)
+
+        return 1
+
+
 def file_from_content(filedata):
     with open(filedata['path'], 'w') as file:
         file.write(str(filedata['content']))
     return 0
+
 
 def process_file(ttype, filedata):
     if 'content' in filedata:
@@ -385,6 +483,8 @@ def process_file(ttype, filedata):
         trans = FTPTransput
     elif scheme in ['http', 'https']:
         trans = HTTPTransput
+    elif scheme in ['s3']:
+        trans = S3Transput
     else:
         logging.error('Unknown protocol "%s" in url "%s"', scheme, filedata['url'])
         return 1
