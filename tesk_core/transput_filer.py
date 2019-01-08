@@ -383,49 +383,79 @@ class S3Transput(Transput):
     def __init__(self, path, url, ftype):
         Transput.__init__(self, path, url, ftype)
 
-        self.endpoint, self.secure, self.bucket_name, self.object_name = self.parseUrl(url)
 
-        access_key, secret_key = getAccessKeys();
+    # entice users to use contexts when using this class
+    def __enter__(self):
 
-        self.client = Minio(self.endpoint, access_key, secret_key, self.secure)
+        # self.endpoint, self.secure, self.bucket_name, self.object_name = self.parseUrl(url)
+
+        access_key, secret_key = self.getAccessKeys()
+
+        # self.client = Minio(self.endpoint, access_key, secret_key, self.secure)
+
+        self.minioClient = Minio(self.netloc, access_key, secret_key, True)
+
+        return self
+
 
     def parseUrl(self, url):
         #return None, False, None, None
         raise NotImplementedError()
 
     def getAccessKeys(self):
-        raise NotImplementedError()
+
+        if 'TESK_S3_ACCESS_KEY' in os.environ and 'TESK_S3_SECRET_KEY' in os.environ:
+            return os.environ['TESK_S3_ACCESS_KEY'], os.environ['TESK_S3_SECRET_KEY']
+
+        return None,None
 
     def download_file(self):
 
-        try:
-            obj = self.client.fget_object(self.bucket_name, self.object_name, self.path)
+        logging.debug('Downloading s3 object: "%s" Target: %s', self.url, self.path)
+        basedir = os.path.dirname(self.path)
+        distutils.dir_util.mkpath(basedir)
 
+        try:
+            # with open(self.path, 'w+b') as file:
+            obj = self.minioClient.fget_object('tesk-bucket', self.url_path, self.path)
         except ResponseError as err:
             logging.error('Got status code: %d', err.code)
             logging.error(err.message)
+
             return 1
-
-        #logging.debug('OK, got status code: %d', req.status_code)
-
-        #with open(self.path, 'wb') as file:
-        #    file.write(obj..content)
         return 0
 
     def upload_file(self):
 
+        # Make a bucket with the make_bucket API call.
         try:
-            self.client.fput_object(self.bucket_name, self.object_name, self.path)
-
-            #with open(self.path, 'r') as file:
-            #    file_contents = file.read();
-            #   self.client.put_object(bucket, object_name, data=file_contents, )
-
+            self.minioClient.make_bucket("tesk-bucket", location="us-east-1")
+        except BucketAlreadyOwnedByYou as err:
+            pass
+        except BucketAlreadyExists as err:
+            pass
         except ResponseError as err:
+            raise
+        else:
+            # Put an object <url_path> with contents from <file>.
+            try:
+                with open(self.path, 'r+b') as file:
+                    self.minioClient.fput_object('tesk-bucket', self.url_path, file)
+            except ResponseError as err:
+                print(err)
 
-            logging.error('Got status code: %d', err.code)
-            logging.error(err.message)
-            return 1
+        # try:
+        #     self.client.fput_object(self.bucket_name, self.object_name, self.path)
+        #
+        #     #with open(self.path, 'r') as file:
+        #     #    file_contents = file.read();
+        #     #   self.client.put_object(bucket, object_name, data=file_contents, )
+        #
+        # except ResponseError as err:
+        #
+        #     logging.error('Got status code: %d', err.code)
+        #     logging.error(err.message)
+        #     return 1
 
         # logging.debug('OK, got status code: %d', )
 
@@ -445,6 +475,7 @@ class S3Transput(Transput):
 
         # return 1 if any upload failed
         return min(sum([transput.upload() for transput in to_upload]), 1)
+
 
     def download_dir(self):
 
