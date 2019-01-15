@@ -198,21 +198,6 @@ def process_http_file(ftype, afile):
         return 1
 
 
-def download_s3_file(bucket, object_name, target, minioClient):
-    logging.debug('Downloading s3 object: "%s" Target: %s', bucket + "/" + object_name, target)
-    basedir = os.path.dirname(target)
-    distutils.dir_util.mkpath(basedir)
-
-    try:
-        minioClient.fget_object(bucket, object_name, target)
-    except ResponseError as err:
-        logging.error('Got status code: %d', err.code)
-        logging.error(err.message)
-
-        return 1
-    return 0
-
-
 def get_path_folders(whole_path):
     """
     Returns all subfolders in a path, in order
@@ -229,67 +214,169 @@ def get_path_folders(whole_path):
     return subfolders
 
 
-def process_s3_file(ftype, afile):
+def subfolders_in(whole_path):
+    """
+    Returns all subfolders in a path, in order
 
-    parseUrl = urlparse(afile['url'])
-    s3_baseurl = parseUrl.netloc;
-    s3_path = parseUrl.path;
+    >>> subfolders_in('/')
+    ['/']
 
-    subfolders = get_path_folders(s3_path)
-    print(subfolders)
+    >>> subfolders_in('/this/is/a/path')
+    ['/this', '/this/is', '/this/is/a', '/this/is/a/path']
+
+    >>> subfolders_in('this/is/a/path')
+    ['this', 'this/is', 'this/is/a', 'this/is/a/path']
+    """
+    path_fragments = whole_path.lstrip('/').split('/')
+    if whole_path.startswith('/'):
+        path_fragments[0] = '/' + path_fragments[0]
+    path = path_fragments[0]
+    subfolders = [path]
+    for fragment in path_fragments[1:]:
+        path += '/' + fragment
+        subfolders.append(path)
+    return subfolders
+
+
+def get_bucket_object(path):
+
+    subfolders = get_path_folders(path)
 
     # First dir in path indicates the bucket
     bucket = subfolders.pop(0).lstrip('/')
-    print(bucket)
-    print(subfolders)
     # Rest of them indicate the name of the object
     object_name = ""
     for subfolder in subfolders:
         object_name += "/" + subfolder
     object_name = object_name.lstrip("/")
+    if object_name.endswith("/"):
+        object_name = object_name.rstrip("/")
 
-    # + "/" + get_path_folders(afile['path']).pop(-1)  # suffix
-    print(object_name)
+    return bucket, object_name
 
-    # print(bucket)
+
+def upload_s3_dir(bucket, object_name, source, minio_client):
+
+    for listing in os.listdir(source):
+
+        file_path = source + '/' + listing
+        object_path = listing if object_name == "" else object_name + '/' + listing
+
+        if os.path.isdir(file_path):
+            logging.debug('Uploading %s\t"%s"', "DIRECTORY", file_path)
+            upload_s3_dir(bucket, object_path, file_path, minio_client)
+
+        elif os.path.isfile(file_path):
+            logging.debug('Uploading %s\t"%s"', "FILE", file_path)
+            upload_s3_file(bucket, object_path, file_path, minio_client)
+
+        else:
+            logging.error(
+                'Directory listing in is neither file nor directory: "%s"',
+                file_path
+            )
+            return 1
+    return 0
+
+
+def download_s3_dir(bucket, object_name, target, minio_client):
+    logging.debug('Downloading s3 dir: %s Target: %s', bucket + "/" + object_name, target)
+
+    subfolders = subfolders_in(object_name)
+
+    offset = len(subfolders[-2]) + 1 if len(subfolders) > 1 else 0
+
+    if not target.endswith("/"):
+        target += "/"
+
+    # List the contents of the bucket
+    objects = minio_client.list_objects(bucket, object_name, recursive=True)
+    for obj in objects:
+        print(obj.object_name)
+
+        basedir = os.path.dirname(obj.object_name[offset:])
+        file_path = target + basedir
+        print(file_path)
+        distutils.dir_util.mkpath(file_path)
+
+        file_path += "/" + get_path_folders(obj.object_name).pop(-1)
+        print(file_path)
+
+        try:
+            minio_client.fget_object(obj.bucket_name, obj.object_name, file_path)
+
+        except ResponseError as err:
+            logging.error('Got status code: %d', err.code)
+            logging.error(err.message)
+
+            return 1
+
+    return 0
+
+
+def upload_s3_file(bucket, object_name, source, minio_client):
+
+    try:
+        minio_client.fput_object(bucket, object_name, source)
+    except ResponseError as err:
+        print(err)
+
+
+def download_s3_file(bucket, object_name, target, minio_client):
+    logging.debug('Downloading s3 object: "%s" Target: %s', bucket + "/" + object_name, target)
+    basedir = os.path.dirname(target)
+    distutils.dir_util.mkpath(basedir)
+
+    try:
+        minio_client.fget_object(bucket, object_name, target)
+    except ResponseError as err:
+        logging.error('Got status code: %d', err.code)
+        logging.error(err.message)
+
+        return 1
+    return 0
+
+
+def process_s3_file(ftype, afile):
+
+    parseUrl = urlparse(afile['url'])
+    s3_baseurl = parseUrl.netloc
+    s3_path = parseUrl.path
+
+    bucket, object_name = get_bucket_object(s3_path)
+
     # if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
 
     access_key = "AKIAIOSFODNN7EXAMPLE"                                 #os.environ['TESK_S3_ACCESS_KEY']
     secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"             #os.environ['TESK_S3_SECRET_KEY']
-    minioClient = Minio(s3_baseurl, access_key, secret_key, False)
+    minio_client = Minio(s3_baseurl, access_key, secret_key, False)
 
     if ftype == 'inputs':
         if afile['type'] == 'FILE':
-            return download_s3_file(bucket, object_name, afile['path'], minioClient)
-        # elif afile['type'] == 'DIRECTORY':
-        #     return process_ftp_dir(s3_path, afile['path'], minioClient)
+            return download_s3_file(bucket, object_name, afile['path'], minio_client)
+        elif afile['type'] == 'DIRECTORY':
+            return download_s3_dir(bucket, object_name, afile['path'], minio_client)
         else:
             print('Unknown file type')
             return 1
     elif ftype == 'outputs':
+
+        try:
+            minio_client.make_bucket(bucket)
+
+        except BucketAlreadyOwnedByYou as err:
+            pass
+        except BucketAlreadyExists as err:
+            pass
+        except ResponseError as err:
+            raise
+
         if afile['type'] == 'FILE':
-
-            # Make a bucket with the make_bucket API call.
-            try:
-                minioClient.make_bucket(bucket)
-                buckets = minioClient.list_buckets()
-                for buck in buckets:
-                    print(buck.name, buck.creation_date)
-
-            except BucketAlreadyOwnedByYou as err:
-                pass
-            except BucketAlreadyExists as err:
-                pass
-            except ResponseError as err:
-                raise
-
-            try:
-                minioClient.fput_object(bucket, object_name, afile['path'])
-            except ResponseError as err:
-                print(err)
-
-        # elif afile['type'] == 'DIRECTORY':
-        #     return process_upload_dir(afile['path'], ftp_path, ftp)
+            return upload_s3_file(bucket, object_name, afile['path'], minio_client)
+        elif afile['type'] == 'DIRECTORY':
+            # tmp = os.path.basename(afile['path'])
+            # object_name = tmp if object_name == "" else object_name + "/" + tmp
+            return upload_s3_dir(bucket, object_name, afile['path'], minio_client)
         else:
             logging.error('Unknown file type: ' + afile['type'])
             return 1
@@ -352,14 +439,9 @@ def main(argv):
         help='file description data, see docs for structure')
     args = parser.parse_args()
 
-    print(args.filetype)
-    print(args.data)
     data = json.loads(args.data)
-    # print(data)
 
     for afile in data[args.filetype]:
-
-        print(afile['path'])
 
         logging.debug('processing file: ' + afile['path'])
         if process_file(args.filetype, afile):

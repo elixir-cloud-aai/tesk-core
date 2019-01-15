@@ -377,6 +377,7 @@ def ftp_make_dirs(ftp_connection, path):
         return 1
     return 0
 
+
 def get_path_folders(whole_path):
     """
     Returns all subfolders in a path, in order
@@ -397,23 +398,12 @@ class S3Transput(Transput):
 
     def __init__(self, path, url, ftype):
         Transput.__init__(self, path, url, ftype)
-
+        self.bucket, self.object_name = self.get_bucket_object()
 
     # entice users to use contexts when using this class
     def __enter__(self):
-
-        # Parse url_path and extract bucket and object_name
-        subfolders = get_path_folders(self.url_path)
-        # First dir in path indicates the bucket
-        self.bucket = subfolders.pop(0).lstrip('/')
-        object_name = ""
-        for subfolder in subfolders:
-            object_name += "/" + subfolder
-        self.object_name = object_name.lstrip("/")
-
         access_key, secret_key = self.get_access_keys()
-
-        self.minioClient = Minio(self.netloc, access_key, secret_key, False)
+        self.minio_client = Minio(self.netloc, access_key, secret_key, False)
 
         return self
 
@@ -424,29 +414,10 @@ class S3Transput(Transput):
 
         return None, None
 
-    def download_file(self):
-
-        logging.debug('Downloading s3 object: "%s" Target: %s', self.bucket + "/" + self.object_name, self.path)
-        basedir = os.path.dirname(self.path)
-        distutils.dir_util.mkpath(basedir)
-
-        try:
-            self.minioClient.fget_object(self.bucket, self.object_name, self.path)
-        except ResponseError as err:
-            logging.error('Got status code: %d', err.code)
-            logging.error(err.message)
-
-            return 1
-        return 0
-
     def upload_file(self):
 
-        # Make a bucket with the make_bucket API call.
         try:
-            self.minioClient.make_bucket(self.bucket)
-            buckets = self.minioClient.list_buckets()
-            for buck in buckets:
-                print(buck.name, buck.creation_date)
+            self.minio_client.make_bucket(self.bucket)
 
         except BucketAlreadyOwnedByYou as err:
             pass
@@ -456,45 +427,99 @@ class S3Transput(Transput):
             raise
 
         try:
-            self.minioClient.fput_object(self.bucket, self.object_name, self.path)
+            self.minio_client.fput_object(self.bucket, self.object_name, self.path)
         except ResponseError as err:
             print(err)
 
         return 0
 
-    # TO-DO
-    # def upload_dir(self):
-    #     to_upload = []
-    #     for listing in os.listdir(self.path):
-    #         file_path = self.path + '/' + listing
-    #         if os.path.isdir(file_path):
-    #             ftype = Type.Directory
-    #         elif os.path.isfile(file_path):
-    #             ftype = Type.File
-    #         else:
-    #             return 1
-    #         to_upload.append(S3Transput(file_path, self.url + '/' + listing, ftype))
-    #
-    #     # return 1 if any upload failed
-    #     return min(sum([transput.upload() for transput in to_upload]), 1)
-    #
-    #
-    # def download_dir(self):
-    #
-    #     # Stat the contents of the bucket
-    #     objects = self.client.list_objects(self.bucket_name, self.object_name, recursive=True)
-    #     # self.client.list_objects_v2(self.bucket_name, self.object_name, recursive=True)
-    #
-    #     for obj in objects:
-    #         if obj.is_dir:
-    #             # create local dir?
-    #             continue
-    #         else:
-    #             # construct the path from obj.object_name trimming the prefix.
-    #             file_path = None
-    #             self.client.fget_object(obj.bucket_name, obj.object_name, file_path)
-    #
-    #     return 1
+    def upload_dir(self):
+
+        for listing in os.listdir(self.path):
+
+            file_path = self.path + '/' + listing
+            object_path = self.url + '/' + listing
+            #
+            if os.path.isdir(file_path):
+                ftype = Type.Directory
+            elif os.path.isfile(file_path):
+                ftype = Type.File
+            else:
+                logging.error(
+                    'Directory listing in is neither file nor directory: "%s"',
+                    file_path
+                )
+                return 1
+
+            logging.debug('Uploading %s\t"%s"', ftype.value, file_path)
+
+            with S3Transput(file_path, object_path, ftype) as transfer:
+                if transfer.upload():
+                    return 1
+        return 0
+
+    def download_file(self):
+
+        logging.debug('Downloading s3 object: "%s" Target: %s', self.bucket + "/" + self.object_name, self.path)
+        basedir = os.path.dirname(self.path)
+        distutils.dir_util.mkpath(basedir)
+
+        try:
+            self.minio_client.fget_object(self.bucket, self.object_name, self.path)
+        except ResponseError as err:
+            logging.error('Got status code: %d', err.code)
+            logging.error(err.message)
+
+            return 1
+        return 0
+
+    def download_dir(self):
+
+        logging.debug('Downloading s3 dir: %s Target: %s', self.bucket + "/" + self.object_name, self.path)
+
+        subfolders = subfolders_in(self.object_name)
+
+        offset = len(subfolders[-2])+1 if len(subfolders) > 1 else 0
+
+        if not self.path.endswith("/"):
+            self.path += "/"
+
+        # List the contents of the bucket
+        objects = self.minio_client.list_objects(self.bucket, self.object_name, recursive=True)
+        for obj in objects:
+
+            basedir = os.path.dirname(obj.object_name[offset:])
+            file_path = self.path + basedir
+            distutils.dir_util.mkpath(file_path)
+
+            file_path += "/" + get_path_folders(obj.object_name).pop(-1)
+
+            try:
+                self.minio_client.fget_object(obj.bucket_name, obj.object_name, file_path)
+
+            except ResponseError as err:
+                logging.error('Got status code: %d', err.code)
+                logging.error(err.message)
+
+                return 1
+        return 0
+
+    def get_bucket_object(self):
+
+        subfolders = get_path_folders(self.path)
+
+        # First dir in path indicates the bucket
+        bucket = subfolders.pop(0).lstrip('/')
+
+        # Rest of them indicate the name of the object
+        object_name = ""
+        for subfolder in subfolders:
+            object_name += "/" + subfolder
+        object_name = object_name.lstrip("/")
+        if object_name.endswith("/"):
+            object_name = object_name.rstrip("/")
+
+        return bucket, object_name
 
 
 def file_from_content(filedata):
