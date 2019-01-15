@@ -40,6 +40,11 @@ class Filer:
         env.append({"name": "TESK_FTP_USERNAME", "value": user})
         env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
 
+    def set_s3(self, user, pw):
+        env = self.spec['spec']['template']['spec']['containers'][0]['env']
+        env.append({"name": "TESK_S3_ACCESS_KEY", "value": user})
+        env.append({"name": "TESK_S3_SECRET_KEY", "value": pw})
+
     def set_volume_mounts(self, pvc):
         tempspec = self.spec['spec']['template']['spec']
         tempspec['containers'][0]['volumeMounts'] = pvc.volume_mounts

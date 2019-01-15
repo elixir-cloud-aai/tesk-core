@@ -377,6 +377,21 @@ def ftp_make_dirs(ftp_connection, path):
         return 1
     return 0
 
+def get_path_folders(whole_path):
+    """
+    Returns all subfolders in a path, in order
+
+
+    >>> subfolders_in('this/is/a/path')
+    ['this', 'is', 'a', 'path']
+    """
+    path_fragments = whole_path.lstrip('/').split('/')
+    path = path_fragments[0]
+    subfolders = [path]
+    for fragment in path_fragments[1:]:
+        subfolders.append(fragment)
+    return subfolders
+
 
 class S3Transput(Transput):
 
@@ -387,37 +402,36 @@ class S3Transput(Transput):
     # entice users to use contexts when using this class
     def __enter__(self):
 
-        # self.endpoint, self.secure, self.bucket_name, self.object_name = self.parseUrl(url)
+        # Parse url_path and extract bucket and object_name
+        subfolders = get_path_folders(self.url_path)
+        # First dir in path indicates the bucket
+        self.bucket = subfolders.pop(0).lstrip('/')
+        object_name = ""
+        for subfolder in subfolders:
+            object_name += "/" + subfolder
+        self.object_name = object_name.lstrip("/")
 
-        access_key, secret_key = self.getAccessKeys()
+        access_key, secret_key = self.get_access_keys()
 
-        # self.client = Minio(self.endpoint, access_key, secret_key, self.secure)
-
-        self.minioClient = Minio(self.netloc, access_key, secret_key, True)
+        self.minioClient = Minio(self.netloc, access_key, secret_key, False)
 
         return self
 
-
-    def parseUrl(self, url):
-        #return None, False, None, None
-        raise NotImplementedError()
-
-    def getAccessKeys(self):
+    def get_access_keys(self):
 
         if 'TESK_S3_ACCESS_KEY' in os.environ and 'TESK_S3_SECRET_KEY' in os.environ:
             return os.environ['TESK_S3_ACCESS_KEY'], os.environ['TESK_S3_SECRET_KEY']
 
-        return None,None
+        return None, None
 
     def download_file(self):
 
-        logging.debug('Downloading s3 object: "%s" Target: %s', self.url, self.path)
+        logging.debug('Downloading s3 object: "%s" Target: %s', self.bucket + "/" + self.object_name, self.path)
         basedir = os.path.dirname(self.path)
         distutils.dir_util.mkpath(basedir)
 
         try:
-            # with open(self.path, 'w+b') as file:
-            obj = self.minioClient.fget_object('tesk-bucket', self.url_path, self.path)
+            self.minioClient.fget_object(self.bucket, self.object_name, self.path)
         except ResponseError as err:
             logging.error('Got status code: %d', err.code)
             logging.error(err.message)
@@ -429,70 +443,58 @@ class S3Transput(Transput):
 
         # Make a bucket with the make_bucket API call.
         try:
-            self.minioClient.make_bucket("tesk-bucket", location="us-east-1")
+            self.minioClient.make_bucket(self.bucket)
+            buckets = self.minioClient.list_buckets()
+            for buck in buckets:
+                print(buck.name, buck.creation_date)
+
         except BucketAlreadyOwnedByYou as err:
             pass
         except BucketAlreadyExists as err:
             pass
         except ResponseError as err:
             raise
-        else:
-            # Put an object <url_path> with contents from <file>.
-            try:
-                with open(self.path, 'r+b') as file:
-                    self.minioClient.fput_object('tesk-bucket', self.url_path, file)
-            except ResponseError as err:
-                print(err)
 
-        # try:
-        #     self.client.fput_object(self.bucket_name, self.object_name, self.path)
-        #
-        #     #with open(self.path, 'r') as file:
-        #     #    file_contents = file.read();
-        #     #   self.client.put_object(bucket, object_name, data=file_contents, )
-        #
-        # except ResponseError as err:
-        #
-        #     logging.error('Got status code: %d', err.code)
-        #     logging.error(err.message)
-        #     return 1
-
-        # logging.debug('OK, got status code: %d', )
+        try:
+            self.minioClient.fput_object(self.bucket, self.object_name, self.path)
+        except ResponseError as err:
+            print(err)
 
         return 0
 
-    def upload_dir(self):
-        to_upload = []
-        for listing in os.listdir(self.path):
-            file_path = self.path + '/' + listing
-            if os.path.isdir(file_path):
-                ftype = Type.Directory
-            elif os.path.isfile(file_path):
-                ftype = Type.File
-            else:
-                return 1
-            to_upload.append(S3Transput(file_path, self.url + '/' + listing, ftype))
-
-        # return 1 if any upload failed
-        return min(sum([transput.upload() for transput in to_upload]), 1)
-
-
-    def download_dir(self):
-
-        # Stat the contents of the bucket
-        objects = self.client.list_objects(self.bucket_name, self.object_name, recursive=True)
-        # self.client.list_objects_v2(self.bucket_name, self.object_name, recursive=True)
-
-        for obj in objects:
-            if obj.is_dir:
-                # create local dir?
-                continue
-            else:
-                # construct the path from obj.object_name trimming the prefix.
-                file_path = None
-                self.client.fget_object(obj.bucket_name, obj.object_name, file_path)
-
-        return 1
+    # TO-DO
+    # def upload_dir(self):
+    #     to_upload = []
+    #     for listing in os.listdir(self.path):
+    #         file_path = self.path + '/' + listing
+    #         if os.path.isdir(file_path):
+    #             ftype = Type.Directory
+    #         elif os.path.isfile(file_path):
+    #             ftype = Type.File
+    #         else:
+    #             return 1
+    #         to_upload.append(S3Transput(file_path, self.url + '/' + listing, ftype))
+    #
+    #     # return 1 if any upload failed
+    #     return min(sum([transput.upload() for transput in to_upload]), 1)
+    #
+    #
+    # def download_dir(self):
+    #
+    #     # Stat the contents of the bucket
+    #     objects = self.client.list_objects(self.bucket_name, self.object_name, recursive=True)
+    #     # self.client.list_objects_v2(self.bucket_name, self.object_name, recursive=True)
+    #
+    #     for obj in objects:
+    #         if obj.is_dir:
+    #             # create local dir?
+    #             continue
+    #         else:
+    #             # construct the path from obj.object_name trimming the prefix.
+    #             file_path = None
+    #             self.client.fget_object(obj.bucket_name, obj.object_name, file_path)
+    #
+    #     return 1
 
 
 def file_from_content(filedata):

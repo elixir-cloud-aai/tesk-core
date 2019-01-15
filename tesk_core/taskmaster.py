@@ -134,6 +134,11 @@ def run_task(data, filer_version):
                 os.environ['TESK_FTP_USERNAME'],
                 os.environ['TESK_FTP_PASSWORD'])
 
+        if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
+            filer.set_s3(
+                os.environ['TESK_S3_ACCESS_KEY'],
+                os.environ['TESK_S3_SECRET_KEY'])
+
         pvc = init_pvc(data, filer)
 
     for executor in data['executors']:

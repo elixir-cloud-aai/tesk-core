@@ -11,8 +11,11 @@ import os
 import distutils.dir_util
 import logging
 import requests
+from minio import Minio
+from minio.error import (ResponseError, BucketAlreadyOwnedByYou,
+                         BucketAlreadyExists)
 from io import BytesIO
-
+from urllib.parse import urlparse
 debug = True
 
 
@@ -195,6 +198,106 @@ def process_http_file(ftype, afile):
         return 1
 
 
+def download_s3_file(bucket, object_name, target, minioClient):
+    logging.debug('Downloading s3 object: "%s" Target: %s', bucket + "/" + object_name, target)
+    basedir = os.path.dirname(target)
+    distutils.dir_util.mkpath(basedir)
+
+    try:
+        minioClient.fget_object(bucket, object_name, target)
+    except ResponseError as err:
+        logging.error('Got status code: %d', err.code)
+        logging.error(err.message)
+
+        return 1
+    return 0
+
+
+def get_path_folders(whole_path):
+    """
+    Returns all subfolders in a path, in order
+
+
+    >>> subfolders_in('this/is/a/path')
+    ['this', 'is', 'a', 'path']
+    """
+    path_fragments = whole_path.lstrip('/').split('/')
+    path = path_fragments[0]
+    subfolders = [path]
+    for fragment in path_fragments[1:]:
+        subfolders.append(fragment)
+    return subfolders
+
+
+def process_s3_file(ftype, afile):
+
+    parseUrl = urlparse(afile['url'])
+    s3_baseurl = parseUrl.netloc;
+    s3_path = parseUrl.path;
+
+    subfolders = get_path_folders(s3_path)
+    print(subfolders)
+
+    # First dir in path indicates the bucket
+    bucket = subfolders.pop(0).lstrip('/')
+    print(bucket)
+    print(subfolders)
+    # Rest of them indicate the name of the object
+    object_name = ""
+    for subfolder in subfolders:
+        object_name += "/" + subfolder
+    object_name = object_name.lstrip("/")
+
+    # + "/" + get_path_folders(afile['path']).pop(-1)  # suffix
+    print(object_name)
+
+    # print(bucket)
+    # if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
+
+    access_key = "AKIAIOSFODNN7EXAMPLE"                                 #os.environ['TESK_S3_ACCESS_KEY']
+    secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"             #os.environ['TESK_S3_SECRET_KEY']
+    minioClient = Minio(s3_baseurl, access_key, secret_key, False)
+
+    if ftype == 'inputs':
+        if afile['type'] == 'FILE':
+            return download_s3_file(bucket, object_name, afile['path'], minioClient)
+        # elif afile['type'] == 'DIRECTORY':
+        #     return process_ftp_dir(s3_path, afile['path'], minioClient)
+        else:
+            print('Unknown file type')
+            return 1
+    elif ftype == 'outputs':
+        if afile['type'] == 'FILE':
+
+            # Make a bucket with the make_bucket API call.
+            try:
+                minioClient.make_bucket(bucket)
+                buckets = minioClient.list_buckets()
+                for buck in buckets:
+                    print(buck.name, buck.creation_date)
+
+            except BucketAlreadyOwnedByYou as err:
+                pass
+            except BucketAlreadyExists as err:
+                pass
+            except ResponseError as err:
+                raise
+
+            try:
+                minioClient.fput_object(bucket, object_name, afile['path'])
+            except ResponseError as err:
+                print(err)
+
+        # elif afile['type'] == 'DIRECTORY':
+        #     return process_upload_dir(afile['path'], ftp_path, ftp)
+        else:
+            logging.error('Unknown file type: ' + afile['type'])
+            return 1
+    else:
+        logging.error('Unknown file action: ' + ftype)
+        return 1
+
+
 def filefromcontent(afile):
     content = afile.get('content')
     if content is None:
@@ -210,18 +313,19 @@ def filefromcontent(afile):
 
 def process_file(ftype, afile):
     url = afile.get('url')
-
     if url is None:
         return filefromcontent(afile)
 
-    p = re.compile('([a-z]+)://')
-    protocol = p.match(url).group(1)
+    protocol = urlparse(url).scheme
+
     logging.debug('protocol is: ' + protocol)
 
     if protocol == 'ftp':
         return process_ftp_file(ftype, afile)
     elif protocol == 'http' or protocol == 'https':
         return process_http_file(ftype, afile)
+    elif protocol == 's3':
+        return process_s3_file(ftype, afile)
     else:
         print('Unknown file protocol')
         return 1
@@ -248,9 +352,15 @@ def main(argv):
         help='file description data, see docs for structure')
     args = parser.parse_args()
 
+    print(args.filetype)
+    print(args.data)
     data = json.loads(args.data)
+    # print(data)
 
     for afile in data[args.filetype]:
+
+        print(afile['path'])
+
         logging.debug('processing file: ' + afile['path'])
         if process_file(args.filetype, afile):
             logging.error('something went wrong')
