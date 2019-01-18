@@ -14,7 +14,7 @@ class Filer:
                     "spec": {
                         "containers": [{
                             "name": "filer",
-                            "image": "eu.gcr.io/tes-wes/filer:" + filer_version,
+                            "image": "registry.gitlab.com/precmed/deployment/tesk-core/filer:" + filer_version,
                             "args": [],
                             "env": [],
                             "volumeMounts": [],
