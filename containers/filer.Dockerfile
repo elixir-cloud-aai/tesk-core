@@ -23,7 +23,7 @@ RUN apk del --no-cache py2-pip
 
 FROM alpine:3.7
 
-RUN apk add --no-cache curl openssl
+RUN apk add --no-cache curl openssl expat expat-dev
 
 # https://pkgs.alpinelinux.org/contents?branch=v3.7&name=python2&arch=x86_64&repo=main
 COPY --from=builder /usr/bin/python /usr/bin/
