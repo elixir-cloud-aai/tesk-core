@@ -345,10 +345,9 @@ def process_s3_file(ftype, afile):
 
     bucket, object_name = get_bucket_object(s3_path)
 
-    # if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
-
-    access_key = "AKIAIOSFODNN7EXAMPLE"                                 #os.environ['TESK_S3_ACCESS_KEY']
-    secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"             #os.environ['TESK_S3_SECRET_KEY']
+    if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
+        access_key = os.environ['TESK_S3_ACCESS_KEY']
+        secret_key = os.environ['TESK_S3_SECRET_KEY']
     minio_client = Minio(s3_baseurl, access_key, secret_key, False)
 
     if ftype == 'inputs':

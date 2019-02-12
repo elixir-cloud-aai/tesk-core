@@ -506,7 +506,7 @@ class S3Transput(Transput):
 
     def get_bucket_object(self):
 
-        subfolders = get_path_folders(self.path)
+        subfolders = get_path_folders(self.url_path)
 
         # First dir in path indicates the bucket
         bucket = subfolders.pop(0).lstrip('/')
