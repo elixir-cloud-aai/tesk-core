@@ -11,16 +11,16 @@ before_script:
 build-taskmaster:
   stage: build
   script:
-    - docker build --pull -f containers/taskmaster.Dockerfile -t "$CI_REGISTRY_IMAGE-taskmaster" .
-    - docker push "$CI_REGISTRY_IMAGE-taskmaster"
+    - docker build --pull -f containers/taskmaster.Dockerfile -t "$CI_REGISTRY_IMAGE/taskmaster" .
+    - docker push "$CI_REGISTRY_IMAGE/taskmaster"
   only:
     - develop-pmnet
 
 build-filer:
   stage: build
   script:
-    - docker build --pull -f containers/filer.Dockerfile -t "$CI_REGISTRY_IMAGE-filer" .
-    - docker push "$CI_REGISTRY_IMAGE-filer"
+    - docker build --pull -f containers/filer.Dockerfile -t "$CI_REGISTRY_IMAGE/filer" .
+    - docker push "$CI_REGISTRY_IMAGE/filer"
   only:
     - develop-pmnet
 
