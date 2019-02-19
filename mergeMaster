@@ -1,0 +1,33 @@
+
+# gitSwitch master
+# st
+# gitPull 
+# gitSwitch testing 
+# st
+# git merge master 
+# st
+# git push
+# history
+
+
+run() {
+
+    echo "-- $@ -------------------------------------------------------------------"
+    eval "$@"
+    echo
+    echo
+}
+
+st() {
+
+    git -c color.status=always status -sb "$@"
+}
+
+
+run st
+run gitSwitch master
+run gitPull 
+run gitSwitch testing 
+run git merge master 
+run st
+
