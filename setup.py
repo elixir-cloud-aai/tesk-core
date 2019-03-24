@@ -13,7 +13,7 @@ INSTALL_DEPS = ['kubernetes==5.0.0',
                 'urllib3==1.22',
                 'future==0.16.0',
                 'enum34==1.1.6',
-                'minio']
+                'boto3']
 TEST_DEPS = ['pytest',
              'unittest2']
 DEV_DEPS = []
