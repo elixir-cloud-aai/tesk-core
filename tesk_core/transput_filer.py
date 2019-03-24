@@ -12,9 +12,8 @@ import enum
 import distutils.dir_util
 import logging
 import requests
-from minio import Minio
-from minio.error import (ResponseError, BucketAlreadyOwnedByYou,
-                         BucketAlreadyExists)
+import boto3
+import botocore
 
 try:
     from urllib.parse import urlparse
@@ -403,7 +402,10 @@ class S3Transput(Transput):
     # entice users to use contexts when using this class
     def __enter__(self):
         access_key, secret_key = self.get_access_keys()
-        self.minio_client = Minio(self.netloc, access_key, secret_key, False)
+        self.client = boto3.resource('s3',
+                                     endpoint_url="http://" + self.netloc,
+                                     aws_access_key_id=access_key,
+                                     aws_secret_access_key=secret_key)
 
         return self
 
@@ -417,18 +419,9 @@ class S3Transput(Transput):
     def upload_file(self):
 
         try:
-            self.minio_client.make_bucket(self.bucket)
-
-        except BucketAlreadyOwnedByYou as err:
-            pass
-        except BucketAlreadyExists as err:
-            pass
-        except ResponseError as err:
-            raise
-
-        try:
-            self.minio_client.fput_object(self.bucket, self.object_name, self.path)
-        except ResponseError as err:
+            bucket = self.client.Bucket(self.bucket)
+            bucket.upload_file(Filename=self.path, Key=self.object_name)
+        except botocore.exceptions.ClientError as err:
             print(err)
 
         return 0
@@ -465,10 +458,11 @@ class S3Transput(Transput):
         distutils.dir_util.mkpath(basedir)
 
         try:
-            self.minio_client.fget_object(self.bucket, self.object_name, self.path)
-        except ResponseError as err:
-            logging.error('Got status code: %d', err.code)
-            logging.error(err.message)
+            bucket = self.client.Bucket(self.bucket)
+            bucket.download_file(Filename=self.path, Key=self.object_name)
+        except botocore.exceptions.ClientError as err:
+            logging.error('Got status code: %d', err.response['Error']['Code'])
+            logging.error(err.response['Error']['Message'])
 
             return 1
         return 0
@@ -485,21 +479,23 @@ class S3Transput(Transput):
             self.path += "/"
 
         # List the contents of the bucket
-        objects = self.minio_client.list_objects(self.bucket, self.object_name, recursive=True)
-        for obj in objects:
+        response = self.client.list_objects_v2(Bucket=self.bucket, Prefix=self.object_name)
 
-            basedir = os.path.dirname(obj.object_name[offset:])
+        for obj in response['Contents']:
+
+            basedir = os.path.dirname(obj['Key'][offset:])
             file_path = self.path + basedir
             distutils.dir_util.mkpath(file_path)
 
-            file_path += "/" + get_path_folders(obj.object_name).pop(-1)
+            file_path += "/" + get_path_folders(obj['Key']).pop(-1)
 
             try:
-                self.minio_client.fget_object(obj.bucket_name, obj.object_name, file_path)
+                bucket = self.client.Bucket(self.bucket)
+                bucket.download_file(Filename=file_path, Key=obj['Key'])
 
-            except ResponseError as err:
-                logging.error('Got status code: %d', err.code)
-                logging.error(err.message)
+            except botocore.exceptions.ClientError as err:
+                logging.error('Got status code: %d', err.response['Error']['Code'])
+                logging.error(err.response['Error']['Message'])
 
                 return 1
         return 0
