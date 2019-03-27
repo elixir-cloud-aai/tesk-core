@@ -461,7 +461,7 @@ class S3Transput(Transput):
             bucket = self.client.Bucket(self.bucket)
             bucket.download_file(Filename=self.path, Key=self.object_name)
         except botocore.exceptions.ClientError as err:
-            logging.error('Got status code: %d', err.response['Error']['Code'])
+            logging.error('Got status code: %s', err.response['Error']['Code'])
             logging.error(err.response['Error']['Message'])
 
             return 1
@@ -494,7 +494,7 @@ class S3Transput(Transput):
                 bucket.download_file(Filename=file_path, Key=obj['Key'])
 
             except botocore.exceptions.ClientError as err:
-                logging.error('Got status code: %d', err.response['Error']['Code'])
+                logging.error('Got status code: %s', err.response['Error']['Code'])
                 logging.error(err.response['Error']['Message'])
 
                 return 1
