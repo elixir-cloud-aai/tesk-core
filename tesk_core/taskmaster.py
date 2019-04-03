@@ -162,8 +162,6 @@ def run_task(data, filer_version):
         if status != 'Complete':
             exit_cancelled('Got status ' + status)
         else:
-            for job in created_jobs:
-                job.delete()
             pvc.delete()
 
 
