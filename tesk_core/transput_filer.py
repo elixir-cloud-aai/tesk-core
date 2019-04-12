@@ -431,7 +431,7 @@ class S3Transput(Transput):
         for listing in os.listdir(self.path):
 
             file_path = self.path + '/' + listing
-            object_path = self.url + '/' + listing
+            object_path = self.url + listing if (self.url.endswith('/')) else self.url + '/' + listing
             #
             if os.path.isdir(file_path):
                 ftype = Type.Directory
