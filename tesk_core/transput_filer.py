@@ -572,7 +572,7 @@ def main():
     if args.debug:
         loglevel = logging.DEBUG
     else:
-        loglevel = logging.ERROR
+        loglevel = logging.INFO
 
     logging.basicConfig(
         format='%(asctime)s %(levelname)s: %(message)s',
