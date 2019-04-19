@@ -583,14 +583,18 @@ def main():
 
     data = json.loads(args.data)
 
-    for afile in data[args.transputtype]:
-        logging.debug('Processing file: %s', afile['path'])
-        if process_file(args.transputtype, afile) != 0:
-            logging.error('Unable to process file, aborting')
-            return 1
-        logging.debug('Processed file: %s', afile['path'])
+    failed = 0
 
-    return 0
+    for afile in data[args.transputtype]:
+        logging.info('Processing file: %s', afile['path'])
+        if process_file(args.transputtype, afile) != 0:
+            logging.error('Unable to process file %s', afile['path'])
+            failed = 1
+        
+        logging.info('Processed file: %s (size: %d)', afile['path'], os.path.getsize(afile['path']))
+
+    return failed
+
 
 
 if __name__ == "__main__":
