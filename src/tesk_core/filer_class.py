@@ -4,16 +4,16 @@ from tesk_core.path import fileEnabled
 
 
 class Filer:
-    
+
     def getVolumes(self):           return self.spec['spec']['template']['spec']['volumes']
-                                    
+
     def getContainer(self, i):      return self.spec['spec']['template']['spec']['containers'][i]
-    
+
     def getVolumeMounts(self):      return self.getContainer(0)['volumeMounts']
     def getEnv(self):               return self.getContainer(0)['env']
     def getImagePullPolicy(self):   return self.getContainer(0)['imagePullPolicy']
 
-    
+
     def __init__(self, name, data, filer_version='v0.5', pullPolicyAlways = False):
         self.name = name
         self.spec = {
@@ -46,15 +46,15 @@ class Filer:
         env.append({ "name": "CONTAINER_BASE_PATH"  , "value": path.CONTAINER_BASE_PATH  })
 
         if fileEnabled():
-            
-            self.getVolumeMounts().append({ 
-                
+
+            self.getVolumeMounts().append({
+
                   "name"      : 'transfer-volume'
-                , 'mountPath' : path.CONTAINER_BASE_PATH 
+                , 'mountPath' : path.CONTAINER_BASE_PATH
             })
-            
+
             self.getVolumes().append({
-                
+
                   "name"                  : 'transfer-volume'
                 , 'persistentVolumeClaim' : { 'claimName' : path.TRANSFER_PVC_NAME }
             })
@@ -64,6 +64,11 @@ class Filer:
         env = self.getEnv()
         env.append({"name": "TESK_FTP_USERNAME", "value": user})
         env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
+
+    def set_s3(self, user, pw):
+        env = self.getEnv()
+        env.append({"name": "TESK_S3_ACCESS_KEY", "value": user})
+        env.append({"name": "TESK_S3_SECRET_KEY", "value": pw})
 
     def add_volume_mount(self, pvc):
         self.getVolumeMounts().extend(pvc.volume_mounts)
