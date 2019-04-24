@@ -14,8 +14,14 @@ INSTALL_DEPS = ['kubernetes==5.0.0',
                 'future==0.16.0',
                 'enum34==1.1.6',
                 'boto3']
-TEST_DEPS = ['pytest',
-             'unittest2']
+TEST_DEPS = [ 'pytest'
+            , 'unittest2'
+            , 'mock'
+            , 'fs'
+            ]
+
+INSTALL_DEPS += TEST_DEPS    # Python 2 only
+
 DEV_DEPS = []
 
 setup(
@@ -54,20 +60,15 @@ setup(
     # What does your project relate to?
     keywords='tes kubernetes ebi',
 
-    packages=find_packages(
-        exclude=[
-            'examples',
-            'docs',
-            'tests',
-            'containers']),
+    packages = find_packages('src'),
+    package_dir = {'': 'src'},
 
     scripts=[
-        'tesk_core/taskmaster.py',
-        'tesk_core/filer.py',
-        'tesk_core/transput_filer.py',
-        'tesk_core/filer_class.py',
-        'tesk_core/pvc.py',
-        'tesk_core/job.py'
+        'src/tesk_core/taskmaster.py',
+        'src/tesk_core/filer.py',
+        'src/tesk_core/filer_class.py',
+        'src/tesk_core/pvc.py',
+        'src/tesk_core/job.py'
     ],
     test_suite='tests',
 

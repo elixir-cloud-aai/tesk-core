@@ -12,6 +12,9 @@ import enum
 import distutils.dir_util
 import logging
 import requests
+from tesk_core.exception import UnknownProtocol, FileProtocolDisabled
+import shutil
+from tesk_core.path import containerPath, getPath, fileEnabled
 import boto3
 import botocore
 
@@ -128,6 +131,54 @@ class HTTPTransput(Transput):
             'Won\'t crawl http directory, so unable to download url: %s',
             self.url)
         return 1
+
+
+def copyContent(src, dst, symlinks=False, ignore=None):
+    '''
+    https://stackoverflow.com/a/12514470/1553043
+    '''
+
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
+
+
+def copyDir(src, dst):
+    '''
+    Limitation of shutil.copytree:
+
+    > The destination directory, named by dst, must not already exist; it will be created as well as missing parent directories.
+    '''
+
+    if os.path.exists(dst):
+
+        copyContent(src, dst)
+
+    else:
+
+        shutil.copytree(src, dst)
+
+
+class FileTransput(Transput):
+    def __init__(self, path, url, ftype):
+        Transput.__init__(self, path, url, ftype)
+
+        self.urlContainerPath = containerPath(getPath(self.url))
+
+
+    def transfer(self, copyFn, src, dst):
+
+        logging.debug("Copying {src} to {dst}".format(**locals()))
+        copyFn(src, dst)
+
+    def download_file(self): self.transfer(shutil.copy  , self.urlContainerPath , self.path)
+    def download_dir(self):  self.transfer(copyDir      , self.urlContainerPath , self.path)
+    def upload_file(self):   self.transfer(shutil.copy  , self.path             , self.urlContainerPath)
+    def upload_dir(self):    self.transfer(copyDir      , self.path             , self.urlContainerPath)
 
 
 class FTPTransput(Transput):
@@ -524,7 +575,33 @@ def file_from_content(filedata):
     return 0
 
 
+def newTransput(scheme):
+
+    def fileTransputIfEnabled():
+
+        if fileEnabled():
+            return FileTransput
+        else:
+            raise FileProtocolDisabled( "'file:' protocol disabled\n"
+                                        "To enable it, both '{}' and '{}' environment variables must be defined."
+                                        .format('HOST_BASE_PATH', 'CONTAINER_BASE_PATH')
+                                      )
+
+
+    if   scheme == 'ftp'                : return FTPTransput
+    elif scheme == 'file'               : return fileTransputIfEnabled()
+    elif scheme in ['http', 'https']    : return HTTPTransput
+    elif scheme in ['s3']               : return S3Transput
+    else:
+        raise UnknownProtocol("Unknown protocol: '{scheme}'".format(**locals()))
+
+
 def process_file(ttype, filedata):
+    '''
+    @param ttype: str
+           Can be 'inputs' or 'outputs'
+    '''
+
     if 'content' in filedata:
         return file_from_content(filedata)
 
@@ -533,15 +610,7 @@ def process_file(ttype, filedata):
         logging.error('Could not determine protocol for url: "%s"', filedata['url'])
         return 1
 
-    if scheme == 'ftp':
-        trans = FTPTransput
-    elif scheme in ['http', 'https']:
-        trans = HTTPTransput
-    elif scheme in ['s3']:
-        trans = S3Transput
-    else:
-        logging.error('Unknown protocol "%s" in url "%s"', scheme, filedata['url'])
-        return 1
+    trans = newTransput(scheme)
 
     with trans(filedata['path'], filedata['url'], Type(filedata['type'])) as transfer:
         if ttype == 'inputs':
@@ -552,6 +621,14 @@ def process_file(ttype, filedata):
     logging.info('There was no action to do with %s', filedata['path'])
     return 0
 
+
+
+def logConfig(loglevel):
+
+    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
+                        datefmt='%m/%d/%Y %I:%M:%S',
+                        level=loglevel,
+                        stream=sys.stdout)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -574,10 +651,7 @@ def main():
     else:
         loglevel = logging.INFO
 
-    logging.basicConfig(
-        format='%(asctime)s %(levelname)s: %(message)s',
-        datefmt='%m/%d/%Y %I:%M:%S',
-        level=loglevel)
+    logConfig(loglevel)
 
     logging.info('Starting %s filer...', args.transputtype)
 
@@ -590,7 +664,7 @@ def main():
         if process_file(args.transputtype, afile) != 0:
             logging.error('Unable to process file %s', afile['path'])
             failed = 1
-        
+
         logging.info('Processed file: %s (size: %d)', afile['path'], os.path.getsize(afile['path']))
 
     return failed

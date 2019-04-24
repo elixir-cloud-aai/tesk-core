@@ -1,0 +1,13 @@
+
+# 
+# Usage:
+# 
+#     buildRun filer          or
+#     buildRun taskmaster
+# 
+
+imageName="$1"
+shift
+
+docker run "eu.gcr.io/tes-wes/$imageName:testing" "$@"
+

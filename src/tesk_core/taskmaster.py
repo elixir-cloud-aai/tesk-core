@@ -15,7 +15,8 @@ from filer_class import Filer
 created_jobs = []
 poll_interval = 5
 task_volume_basename = 'task-volume'
-
+args = None
+logger = None
 
 def run_executor(executor, namespace, pvc=None):
     jobname = executor['metadata']['name']
@@ -97,16 +98,17 @@ def init_pvc(data, filer):
     pvc_size = data['resources']['disk_gb']
     pvc = PVC(pvc_name, pvc_size, args.namespace)
 
-    # to global var for cleanup purposes
-    global created_pvc
-    created_pvc = pvc
-
     mounts = generate_mounts(data, pvc)
     logging.debug(mounts)
     logging.debug(type(mounts))
     pvc.set_volume_mounts(mounts)
+    filer.add_volume_mount(pvc)
+    
+    pvc.create()
+    # to global var for cleanup purposes
+    global created_pvc
+    created_pvc = pvc
 
-    filer.set_volume_mounts(pvc)
     filerjob = Job(
         filer.get_spec('inputs', args.debug),
         task_name + '-inputs-filer',
@@ -128,7 +130,7 @@ def run_task(data, filer_version):
 
     if data['volumes'] or data['inputs'] or data['outputs']:
 
-        filer = Filer(task_name + '-filer', data, filer_version, args.debug)
+        filer = Filer(task_name + '-filer', data, filer_version, args.pull_policy_always)
         if os.environ.get('TESK_FTP_USERNAME') is not None:
             filer.set_ftp(
                 os.environ['TESK_FTP_USERNAME'],
@@ -165,7 +167,8 @@ def run_task(data, filer_version):
             pvc.delete()
 
 
-def main(argv):
+def newParser():
+    
     parser = argparse.ArgumentParser(description='TaskMaster main module')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -202,8 +205,35 @@ def main(argv):
         '--debug',
         help='Set debug mode',
         action='store_true')
+    parser.add_argument(
+        '--localKubeConfig',
+        help='Read k8s configuration from localhost',
+        action='store_true')
+    parser.add_argument(
+        '--pull-policy-always',
+        help="set imagePullPolicy = 'Always'",
+        action='store_true')
+    
+    return parser
 
+
+def newLogger(loglevel):
+    logging.basicConfig(
+        format='%(asctime)s %(levelname)s: %(message)s',
+        datefmt='%m/%d/%Y %I:%M:%S',
+        level=loglevel)
+    logging.getLogger('kubernetes.client').setLevel(logging.CRITICAL)
+    logger = logging.getLogger(__name__)
+
+    return logger
+
+
+
+def main(argv):
+    
+    parser = newParser()
     global args
+    
     args = parser.parse_args()
 
     poll_interval = args.poll_interval
@@ -213,12 +243,7 @@ def main(argv):
         loglevel = logging.DEBUG
 
     global logger
-    logging.basicConfig(
-        format='%(asctime)s %(levelname)s: %(message)s',
-        datefmt='%m/%d/%Y %I:%M:%S',
-        level=loglevel)
-    logging.getLogger('kubernetes.client').setLevel(logging.CRITICAL)
-    logger = logging.getLogger(__name__)
+    logger = newLogger(loglevel)
     logger.debug('Starting taskmaster')
 
     # Get input JSON
@@ -231,7 +256,10 @@ def main(argv):
             data = json.load(fh)
 
     # Load kubernetes config file
-    config.load_incluster_config()
+    if args.localKubeConfig:
+        config.load_kube_config()
+    else:
+        config.load_incluster_config()
 
     global created_pvc
     created_pvc = None
@@ -261,7 +289,13 @@ def exit_cancelled(reason='Unknown reason'):
 
 
 def check_cancelled():
-    with open('/podinfo/labels') as fh:
+    
+    labelInfoFile = '/podinfo/labels'
+    
+    if not os.path.exists(labelInfoFile):
+        return False
+        
+    with open(labelInfoFile) as fh:
         for line in fh.readlines():
             name, label = line.split('=')
             logging.debug('Got label: ' + label)
