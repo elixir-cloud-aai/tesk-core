@@ -18,7 +18,7 @@ task_volume_basename = 'task-volume'
 args = None
 logger = None
 
-def run_executor(executor, namespace, pvc=None):
+def run_executor(executor, namespace, pvc=None, is_init=True, filer=None):
     jobname = executor['metadata']['name']
     spec = executor['spec']['template']['spec']
 
@@ -26,6 +26,9 @@ def run_executor(executor, namespace, pvc=None):
         spec['containers'][0]['volumeMounts'] = pvc.volume_mounts
         spec['volumes'] = [{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}]
+        if not is_init and filer is not None:
+            input_filer_spec = filer.get_spec('inputs', args.debug)
+            spec['initContainers'] = input_filer_spec['spec']['template']['spec']['containers']
 
     logger.debug('Created job: ' + jobname)
     job = Job(executor, jobname, namespace)
@@ -92,23 +95,29 @@ def generate_mounts(data, pvc):
     return volume_mounts
 
 
-def init_pvc(data, filer):
+def get_pvc(data):
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     pvc_name = task_name + '-pvc'
     pvc_size = data['resources']['disk_gb']
     pvc = PVC(pvc_name, pvc_size, args.namespace)
-
     mounts = generate_mounts(data, pvc)
     logging.debug(mounts)
     logging.debug(type(mounts))
     pvc.set_volume_mounts(mounts)
-    filer.add_volume_mount(pvc)
-    
-    pvc.create()
-    # to global var for cleanup purposes
-    global created_pvc
-    created_pvc = pvc
+    return pvc
 
+def create_pvc(data):
+    global created_pvc
+    if created_pvc is not None:
+        return created_pvc
+    created_pvc = get_pvc(data)
+    created_pvc.create()
+    return created_pvc
+
+def init_pvc(data, filer):
+    pvc = create_pvc(data)
+
+    filer.add_volume_mount(pvc)
     filerjob = Job(
         filer.get_spec('inputs', args.debug),
         task_name + '-inputs-filer',
@@ -122,7 +131,6 @@ def init_pvc(data, filer):
         exit_cancelled('Got status ' + status)
 
     return pvc
-
 
 def run_task(data, filer_version):
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
@@ -141,10 +149,13 @@ def run_task(data, filer_version):
                 os.environ['TESK_S3_ACCESS_KEY'],
                 os.environ['TESK_S3_SECRET_KEY'])
 
-        pvc = init_pvc(data, filer)
+        pvc = create_pvc(data)
+        filer.add_volume_mount(pvc)
 
+    is_init = False
     for executor in data['executors']:
-        run_executor(executor, args.namespace, pvc)
+        run_executor(executor, args.namespace, pvc, is_init, filer)
+        is_init = True
 
     # run executors
     logging.debug("Finished running executors")
@@ -168,7 +179,7 @@ def run_task(data, filer_version):
 
 
 def newParser():
-    
+
     parser = argparse.ArgumentParser(description='TaskMaster main module')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -213,7 +224,7 @@ def newParser():
         '--pull-policy-always',
         help="set imagePullPolicy = 'Always'",
         action='store_true')
-    
+
     return parser
 
 
@@ -230,10 +241,10 @@ def newLogger(loglevel):
 
 
 def main(argv):
-    
+
     parser = newParser()
     global args
-    
+
     args = parser.parse_args()
 
     poll_interval = args.poll_interval
@@ -289,12 +300,12 @@ def exit_cancelled(reason='Unknown reason'):
 
 
 def check_cancelled():
-    
+
     labelInfoFile = '/podinfo/labels'
-    
+
     if not os.path.exists(labelInfoFile):
         return False
-        
+
     with open(labelInfoFile) as fh:
         for line in fh.readlines():
             name, label = line.split('=')
