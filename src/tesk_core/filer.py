@@ -29,7 +29,6 @@ class Type(enum.Enum):
     File = 'FILE'
     Directory = 'DIRECTORY'
 
-
 class Transput:
     def __init__(self, path, url, ftype):
         self.path = path
@@ -79,7 +78,6 @@ class Transput:
         self.delete()
         # Swallow all exceptions since the filer mostly works with error codes
         return False
-
 
 class HTTPTransput(Transput):
     def __init__(self, path, url, ftype):
@@ -137,7 +135,7 @@ def copyContent(src, dst, symlinks=False, ignore=None):
     '''
     https://stackoverflow.com/a/12514470/1553043
     '''
-
+    
     for item in os.listdir(src):
         s = os.path.join(src, item)
         d = os.path.join(dst, item)
@@ -150,37 +148,37 @@ def copyContent(src, dst, symlinks=False, ignore=None):
 def copyDir(src, dst):
     '''
     Limitation of shutil.copytree:
-
+    
     > The destination directory, named by dst, must not already exist; it will be created as well as missing parent directories.
     '''
-
+    
     if os.path.exists(dst):
-
+        
         copyContent(src, dst)
-
+        
     else:
-
+        
         shutil.copytree(src, dst)
 
 
 class FileTransput(Transput):
     def __init__(self, path, url, ftype):
         Transput.__init__(self, path, url, ftype)
-
+        
         self.urlContainerPath = containerPath(getPath(self.url))
 
 
     def transfer(self, copyFn, src, dst):
-
+        
         logging.debug("Copying {src} to {dst}".format(**locals()))
         copyFn(src, dst)
 
     def download_file(self): self.transfer(shutil.copy  , self.urlContainerPath , self.path)
     def download_dir(self):  self.transfer(copyDir      , self.urlContainerPath , self.path)
-    def upload_file(self):   self.transfer(shutil.copy  , self.path             , self.urlContainerPath)
-    def upload_dir(self):    self.transfer(copyDir      , self.path             , self.urlContainerPath)
-
-
+    def upload_file(self):   self.transfer(shutil.copy  , self.path             , self.urlContainerPath)        
+    def upload_dir(self):    self.transfer(copyDir      , self.path             , self.urlContainerPath)        
+        
+    
 class FTPTransput(Transput):
     def __init__(self, path, url, ftype, ftp_conn=None):
         Transput.__init__(self, path, url, ftype)
@@ -291,7 +289,6 @@ def ftp_login(ftp_connection):
     else:
         ftp_connection.login()
 
-
 def ftp_check_directory(ftp_connection, path):
     """
     Following convention with the rest of the code,
@@ -326,7 +323,6 @@ def ftp_check_directory(ftp_connection, path):
 
     return 0 if is_directory else 1
 
-
 def ftp_upload_file(ftp_connection, local_source_path, remote_destination_path):
     try:
         with open(local_source_path, 'r+b') as file:
@@ -347,7 +343,6 @@ def ftp_upload_file(ftp_connection, local_source_path, remote_destination_path):
         return 1
     return 0
 
-
 def ftp_download_file(ftp_connection, remote_source_path, local_destination_path):
     try:
         with open(local_destination_path, 'w+b') as file:
@@ -361,7 +356,6 @@ def ftp_download_file(ftp_connection, remote_source_path, local_destination_path
         )
         return 1
     return 0
-
 
 def subfolders_in(whole_path):
     """
@@ -385,7 +379,6 @@ def subfolders_in(whole_path):
         path += '/' + fragment
         subfolders.append(path)
     return subfolders
-
 
 def ftp_make_dirs(ftp_connection, path):
     response = ftp_connection.pwd()
@@ -576,32 +569,32 @@ def file_from_content(filedata):
 
 
 def newTransput(scheme):
-
+    
     def fileTransputIfEnabled():
-
-        if fileEnabled():
-            return FileTransput
+        
+        if fileEnabled(): 
+            return FileTransput  
         else:
             raise FileProtocolDisabled( "'file:' protocol disabled\n"
                                         "To enable it, both '{}' and '{}' environment variables must be defined."
                                         .format('HOST_BASE_PATH', 'CONTAINER_BASE_PATH')
                                       )
-
-
+    
+    
     if   scheme == 'ftp'                : return FTPTransput
     elif scheme == 'file'               : return fileTransputIfEnabled()
     elif scheme in ['http', 'https']    : return HTTPTransput
     elif scheme in ['s3']               : return S3Transput
     else:
         raise UnknownProtocol("Unknown protocol: '{scheme}'".format(**locals()))
-
+    
 
 def process_file(ttype, filedata):
     '''
     @param ttype: str
            Can be 'inputs' or 'outputs'
     '''
-
+    
     if 'content' in filedata:
         return file_from_content(filedata)
 
@@ -624,9 +617,9 @@ def process_file(ttype, filedata):
 
 
 def logConfig(loglevel):
-
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
-                        datefmt='%m/%d/%Y %I:%M:%S',
+    
+    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', 
+                        datefmt='%m/%d/%Y %I:%M:%S', 
                         level=loglevel,
                         stream=sys.stdout)
 

@@ -132,6 +132,7 @@ def init_pvc(data, filer):
 
     return pvc
 
+
 def run_task(data, filer_version):
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     pvc = None
@@ -179,7 +180,7 @@ def run_task(data, filer_version):
 
 
 def newParser():
-
+    
     parser = argparse.ArgumentParser(description='TaskMaster main module')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -224,7 +225,7 @@ def newParser():
         '--pull-policy-always',
         help="set imagePullPolicy = 'Always'",
         action='store_true')
-
+    
     return parser
 
 
@@ -241,10 +242,10 @@ def newLogger(loglevel):
 
 
 def main(argv):
-
+    
     parser = newParser()
     global args
-
+    
     args = parser.parse_args()
 
     poll_interval = args.poll_interval
@@ -300,12 +301,12 @@ def exit_cancelled(reason='Unknown reason'):
 
 
 def check_cancelled():
-
+    
     labelInfoFile = '/podinfo/labels'
-
+    
     if not os.path.exists(labelInfoFile):
         return False
-
+        
     with open(labelInfoFile) as fh:
         for line in fh.readlines():
             name, label = line.split('=')
