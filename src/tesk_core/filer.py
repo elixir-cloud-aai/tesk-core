@@ -9,8 +9,7 @@ import json
 import re
 import os
 import enum
-import distutils
-from distutils import dir_util
+import distutils.dir_util
 import logging
 import requests
 from tesk_core.exception import UnknownProtocol, FileProtocolDisabled
