@@ -108,15 +108,16 @@ def get_pvc(data):
 
 def create_pvc(data):
     global created_pvc
-    if created_pvc is not None:
-        return created_pvc
+    if 'created_pvc' in globals():
+        if created_pvc is not None:
+            return created_pvc
     created_pvc = get_pvc(data)
     created_pvc.create()
     return created_pvc
 
 def init_pvc(data, filer):
     pvc = create_pvc(data)
-
+    task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     filer.add_volume_mount(pvc)
     filerjob = Job(
         filer.get_spec('inputs', args.debug),
