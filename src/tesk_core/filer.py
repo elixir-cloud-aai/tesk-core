@@ -642,7 +642,7 @@ def main():
     if args.debug:
         loglevel = logging.DEBUG
     else:
-        loglevel = logging.INFO
+        loglevel = logging.ERROR
 
     logConfig(loglevel)
 
@@ -650,18 +650,12 @@ def main():
 
     data = json.loads(args.data)
 
-    failed = 0
-
     for afile in data[args.transputtype]:
-        logging.info('Processing file: %s', afile['path'])
-        if process_file(args.transputtype, afile) != 0:
-            logging.error('Unable to process file %s', afile['path'])
-            failed = 1
+        logging.debug('Processing file: %s', afile['path'])
+        process_file(args.transputtype, afile)
+        logging.debug('Processed file: %s', afile['path'])
 
-        logging.info('Processed file: %s (size: %d)', afile['path'], os.path.getsize(afile['path']))
-
-    return failed
-
+    return 0
 
 
 if __name__ == "__main__":

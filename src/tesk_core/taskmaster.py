@@ -18,7 +18,7 @@ task_volume_basename = 'task-volume'
 args = None
 logger = None
 
-def run_executor(executor, namespace, pvc=None, is_init=True, filer=None):
+def run_executor(executor, namespace, pvc=None):
     jobname = executor['metadata']['name']
     spec = executor['spec']['template']['spec']
 
@@ -26,9 +26,6 @@ def run_executor(executor, namespace, pvc=None, is_init=True, filer=None):
         spec['containers'][0]['volumeMounts'] = pvc.volume_mounts
         spec['volumes'] = [{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}]
-        if not is_init and filer is not None:
-            input_filer_spec = filer.get_spec('inputs', args.debug)
-            spec['initContainers'] = input_filer_spec['spec']['template']['spec']['containers']
 
     logger.debug('Created job: ' + jobname)
     job = Job(executor, jobname, namespace)
@@ -95,30 +92,23 @@ def generate_mounts(data, pvc):
     return volume_mounts
 
 
-def get_pvc(data):
+def init_pvc(data, filer):
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     pvc_name = task_name + '-pvc'
     pvc_size = data['resources']['disk_gb']
     pvc = PVC(pvc_name, pvc_size, args.namespace)
+
     mounts = generate_mounts(data, pvc)
     logging.debug(mounts)
     logging.debug(type(mounts))
     pvc.set_volume_mounts(mounts)
-    return pvc
-
-def create_pvc(data):
-    global created_pvc
-    if 'created_pvc' in globals():
-        if created_pvc is not None:
-            return created_pvc
-    created_pvc = get_pvc(data)
-    created_pvc.create()
-    return created_pvc
-
-def init_pvc(data, filer):
-    pvc = create_pvc(data)
-    task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     filer.add_volume_mount(pvc)
+    
+    pvc.create()
+    # to global var for cleanup purposes
+    global created_pvc
+    created_pvc = pvc
+
     filerjob = Job(
         filer.get_spec('inputs', args.debug),
         task_name + '-inputs-filer',
@@ -145,19 +135,16 @@ def run_task(data, filer_version):
             filer.set_ftp(
                 os.environ['TESK_FTP_USERNAME'],
                 os.environ['TESK_FTP_PASSWORD'])
-
+                
         if os.environ.get('TESK_S3_ACCESS_KEY') is not None:
             filer.set_s3(
                 os.environ['TESK_S3_ACCESS_KEY'],
-                os.environ['TESK_S3_SECRET_KEY'])
+                os.environ['TESK_S3_SECRET_KEY']) 
 
-        pvc = create_pvc(data)
-        filer.add_volume_mount(pvc)
+        pvc = init_pvc(data, filer)
 
-    is_init = False
     for executor in data['executors']:
-        run_executor(executor, args.namespace, pvc, is_init, filer)
-        is_init = True
+        run_executor(executor, args.namespace, pvc)
 
     # run executors
     logging.debug("Finished running executors")
