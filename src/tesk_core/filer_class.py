@@ -83,7 +83,7 @@ class Filer:
 
     def add_netrc_mount(self, netrc_name='netrc'):
         '''
-            Sets $HOME to a particular location (to prevent its change as a result of runAsUser), currently hardcoded to `/opt/home`
+            Sets $HOME to an arbitrary location (to prevent its change as a result of runAsUser), currently hardcoded to `/opt/home`
             Mounts the secret netrc into that location: $HOME/.netrc.
         '''
 
