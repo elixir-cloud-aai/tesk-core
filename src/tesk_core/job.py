@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from tesk_core.Util import pprint
+from tesk_core.callback_sender import CallbackSender
 
 
 logging.basicConfig(format='%(message)s', level=logging.INFO)
 class Job:
-    def __init__(self, body, name='task-job', namespace='default'):
+    def __init__(self, body, name='task-job', namespace='default', callback_url=None):
         self.name = name
         self.namespace = namespace
         self.status = 'Initialized'
@@ -17,6 +18,10 @@ class Job:
         self.timeout = 240
         self.body = body
         self.body['metadata']['name'] = self.name
+        self.callback = None
+        if callback_url:
+            task_name = '-'.join(name.split('-')[:2])
+            self.callback = CallbackSender(task_name, callback_url)
 
     def run_to_completion(self, poll_interval, check_cancelled, pod_timeout):
 
@@ -34,9 +39,15 @@ class Job:
                 raise ApiException(ex.status, ex.reason)
         is_all_pods_running = False
         status, is_all_pods_running = self.get_status(is_all_pods_running)
+        # notify the callback receiver that the job is running
+        if self.callback and status == 'Running':
+            self.callback.send('RUNNING')
         while status == 'Running':
             if check_cancelled():
                 self.delete()
+                # notify the callback receiver that the task is cancelled
+                if self.callback:
+                    self.callback.send('CANCELED')
                 return 'Cancelled'
             time.sleep(poll_interval)
             status, is_all_pods_running = self.get_status(is_all_pods_running)

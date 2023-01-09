@@ -4,20 +4,25 @@ import argparse
 import json
 import os
 import re
+from subprocess import call
 import sys
 import logging
 from kubernetes import client, config
 from tesk_core.job import Job
 from tesk_core.pvc import PVC
 from tesk_core.filer_class import Filer
+from tesk_core.callback_sender import CallbackSender
 
 created_jobs = []
 poll_interval = 5
 task_volume_basename = 'task-volume'
 args = None
 logger = None
+callback = CallbackSender()
 
 def run_executor(executor, namespace, pvc=None):
+    # notify the callback receiver that an executor is queued
+    callback.send('QUEUED')
     jobname = executor['metadata']['name']
     spec = executor['spec']['template']['spec']
 
@@ -31,7 +36,7 @@ def run_executor(executor, namespace, pvc=None):
         volumes.extend([{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}])
     logger.debug('Created job: ' + jobname)
-    job = Job(executor, jobname, namespace)
+    job = Job(executor, jobname, namespace, callback.url)
     logger.debug('Job spec: ' + str(job.body))
 
     global created_jobs
@@ -39,6 +44,9 @@ def run_executor(executor, namespace, pvc=None):
 
     status = job.run_to_completion(poll_interval, check_cancelled,args.pod_timeout)
     if status != 'Complete':
+        # notify the callback receiver about the error
+        if status in ('Failed', 'Error'):
+            callback.send('EXECUTOR_ERROR')
         if status == 'Error':
             job.delete()
         exit_cancelled('Got status ' + status)
@@ -98,6 +106,8 @@ def generate_mounts(data, pvc):
 
 
 def init_pvc(data, filer):
+    # notify the callback receiver that pvc initialization is queued
+    callback.send('QUEUED')
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
     pvc_name = task_name + '-pvc'
     pvc_size = data['resources']['disk_gb']
@@ -127,6 +137,9 @@ def init_pvc(data, filer):
     # filerjob.run_to_completion(poll_interval)
     status = filerjob.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
     if status != 'Complete':
+        # notify the callback receiver about the error
+        if status in ('Failed', 'Error'):
+            callback.send('SYSTEM_ERROR')
         exit_cancelled('Got status ' + status)
 
     return pvc
@@ -150,10 +163,10 @@ def run_task(data, filer_name, filer_version):
 
         pvc = init_pvc(data, filer)
 
+    # run executors
     for executor in data['executors']:
         run_executor(executor, args.namespace, pvc)
 
-    # run executors
     logging.debug("Finished running executors")
 
     # upload files and delete pvc
@@ -167,11 +180,17 @@ def run_task(data, filer_name, filer_version):
         created_jobs.append(filerjob)
 
         # filerjob.run_to_completion(poll_interval)
-        status = filerjob.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
-        if status != 'Complete':
-            exit_cancelled('Got status ' + status)
+        filer_status = filerjob.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
+        if filer_status != 'Complete':
+            # send "SYSTEM_ERROR" to callback receiver if taskmaster completes
+            # but the output filer fails
+            callback.send('SYSTEM_ERROR')
+            exit_cancelled('Got status ' + filer_status)
         else:
             pvc.delete()
+
+    # notify the callback receiver upon task completion 
+    callback.send('COMPLETE')
 
 
 def newParser():
@@ -283,10 +302,17 @@ def main():
     global created_pvc
     created_pvc = None
 
+    # Fill information for callback object
+    callback.url = os.getenv('CALLBACK_URL', '')
+    callback.task_id = data['executors'][0]['metadata']['labels']['taskmaster-name']
+
     # Check if we're cancelled during init
     if check_cancelled():
+        callback.send('CANCELED')
         exit_cancelled('Cancelled during init')
 
+    # notify the callback receiver upon its initialization
+    callback.send('INITIALIZING')
     run_task(data, args.filer_name, args.filer_version)
 
 
@@ -295,7 +321,6 @@ def clean_on_interrupt():
 
     for job in created_jobs:
         job.delete()
-
 
 
 def exit_cancelled(reason='Unknown reason'):
