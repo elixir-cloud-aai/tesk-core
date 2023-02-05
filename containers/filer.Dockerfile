@@ -20,6 +20,8 @@ RUN apk add --no-cache python3
 COPY --from=builder /app/dist/tesk*.whl /root/
 RUN python3 -m pip install --disable-pip-version-check --no-cache-dir /root/tesk*.whl
 
+RUN adduser --uid 100 -S taskmaster
+
 USER 100
 
 ENTRYPOINT ["filer"]
