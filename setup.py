@@ -17,7 +17,7 @@ TEST_DEPS = [ 'pytest',
             'pyfakefs',
             'pytest-mock'
             , 'fs',
-            'moto',
+            'moto<5',
             'pytest-localftpserver'
             ]
 
