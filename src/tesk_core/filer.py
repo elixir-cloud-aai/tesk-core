@@ -240,6 +240,7 @@ class FTPTransput(Transput):
 
 def ftp_login(ftp_connection, netloc, netrc_file):
     user = None
+    password=None
     if netrc_file is not None:
         creds = netrc_file.authenticators(netloc)
         if creds:
