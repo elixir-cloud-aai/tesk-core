@@ -28,8 +28,12 @@ def run_executor(executor, namespace, pvc=None):
     if pvc is not None:
         mounts = spec['containers'][0].setdefault('volumeMounts', [])
         mounts.extend(pvc.volume_mounts)
-        volumes = spec.setdefault('volumes', [])
-        volumes.extend([{'name': task_volume_basename, 'persistentVolumeClaim': {
+        spec.setdefault('volumes', [])
+        if spec['volumes'] is None:
+            spec['volumes'] = []
+            # volumes is a refence to spec['volumes']
+            # This makes sure the next line does not fail if volumes was originaly "null"
+        spec['volumes'].extend([{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}])
     logger.debug('Created job: ' + jobname)
     job = Job(executor, jobname, namespace)
