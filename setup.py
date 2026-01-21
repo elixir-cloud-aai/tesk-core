@@ -10,8 +10,14 @@ with codecs.open(path.join(HERE, 'README.md'), encoding='utf-8') as f:
 
 INSTALL_DEPS = ['kubernetes==9.0.0',
                 'requests>=2.20.0',
-                'urllib3==2.6.3',
-                'boto3==1.42.30',
+
+                # urllib3 constraint
+                'urllib3>=1.26,<2.0 ; python_version < "3.10"',
+                'urllib3>=2.0,<3.0 ; python_version >= "3.10"',
+
+                # boto3 constraint
+                'boto3<=1.28 ; python_version == "3.8"',
+                'boto3>=1.28 ; python_version >= "3.9"',
                 ]
 TEST_DEPS = [ 'pytest',
             'pyfakefs',
