@@ -8,15 +8,11 @@ HERE = path.abspath(path.dirname(__file__))
 with codecs.open(path.join(HERE, 'README.md'), encoding='utf-8') as f:
     LONG_DESC = f.read()
 
-INSTALL_DEPS = ['kubernetes==9.0.0',
+INSTALL_DEPS = ['kubernetes==35.0.0',
                 'requests>=2.20.0',
 
-                # urllib3 constraint
-                'urllib3>=1.26,<2.0 ; python_version < "3.10"',
-                'urllib3>=2.0,<3.0 ; python_version >= "3.10"',
+                'urllib3>=2.6.0,<3.0 ; python_version >= "3.10"',
 
-                # boto3 constraint
-                'boto3<=1.28 ; python_version == "3.8"',
                 'boto3>=1.28,<2.0 ; python_version >= "3.9"',
                 ]
 TEST_DEPS = [ 'pytest',
@@ -56,8 +52,6 @@ setup(
 
         'Intended Audience :: System Administrators',
 
-        'License :: OSI Approved :: Apache Software License',
-
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.7'
     ],
@@ -74,7 +68,6 @@ setup(
             'taskmaster = tesk_core.taskmaster:main'
         ]
     },
-    test_suite='tests',
 
     # List run-time dependencies here.  These will be installed by pip when
     # your project is installed. For an analysis of "install_requires" vs pip's
@@ -83,8 +76,6 @@ setup(
     install_requires=INSTALL_DEPS,
 
     setup_requires=['setuptools_scm'],
-
-    tests_require=TEST_DEPS,
 
     python_requires='>=3.5, <4.0',
 

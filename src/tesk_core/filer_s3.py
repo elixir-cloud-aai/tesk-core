@@ -100,7 +100,7 @@ class S3Transput(Transput):
         for obj in objects["Contents"]:
             file_name = os.path.basename(obj["Key"])
             dir_name = os.path.dirname(obj["Key"])
-            path_to_create = re.sub(r'^' + self.file_path.strip('/').replace('/', '\/') + '', "", dir_name).strip('/')
+            path_to_create = re.sub(r'^' + self.file_path.strip('/').replace('/', r'\/') + '', "", dir_name).strip('/')
             path_to_create = os.path.join(self.path, path_to_create)
             os.makedirs(path_to_create, exist_ok=True)
             if self.get_s3_file(os.path.join(path_to_create, file_name), obj["Key"]):
