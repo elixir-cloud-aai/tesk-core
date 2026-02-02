@@ -10,13 +10,15 @@ except:
 
 
 
-def pvcCreateMock(self):    print '[mock] Creating PVC...'
-def pvcDeleteMock(self):    print '[mock] Deleting PVC...'
+def pvcCreateMock(self):
+    print('[mock] Creating PVC...')
+
+def pvcDeleteMock(self):
+    print('[mock] Deleting PVC...')
+
 
 def jobRunToCompletionMock(job, b, c):
-    
-    print "[mock] Creating job '{}'...".format(job.name)
-    
+    print('[mock] Creating job "{}"...'.format(job.name))
     return 'Complete'
 
 
@@ -31,7 +33,7 @@ class ParserTest(unittest.TestCase):
         
         print(args)
         
-        self.assertEquals( args 
+        self.assertEqual( args 
                          , Namespace( debug=False, file=None, filer_version='v0.1.9', json='json', namespace='default', poll_interval=5, state_file='/tmp/.teskstate'
                                     , localKubeConfig=False
                                     , pull_policy_always=False
@@ -47,7 +49,7 @@ class ParserTest(unittest.TestCase):
         
         print(args)
         
-        self.assertEquals( args 
+        self.assertEqual( args 
                          , Namespace( debug=False, file=None, filer_version='v0.1.9', json='json', namespace='default', poll_interval=5, state_file='/tmp/.teskstate'
                                     , localKubeConfig=True 
                                     , pull_policy_always=False
@@ -59,8 +61,8 @@ class ParserTest(unittest.TestCase):
         
         parser = newParser()
         
-        self.assertEquals( parser.parse_args(['json'                        ]).pull_policy_always,       False )
-        self.assertEquals( parser.parse_args(['json', '--pull-policy-always']).pull_policy_always,       True  )
+        self.assertEqual( parser.parse_args(['json'                        ]).pull_policy_always,       False )
+        self.assertEqual( parser.parse_args(['json', '--pull-policy-always']).pull_policy_always,       True  )
 
 
         
