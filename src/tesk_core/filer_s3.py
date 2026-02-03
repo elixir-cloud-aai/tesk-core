@@ -4,6 +4,7 @@ import logging
 import re
 import botocore
 import boto3
+import mimetypes
 from tesk_core.transput import Transput, Type
 
 class S3Transput(Transput):
@@ -50,10 +51,24 @@ class S3Transput(Transput):
         os.makedirs(basedir, exist_ok=True)
         return self.get_s3_file(self.path, self.file_path)
 
+    def get_content_type(self):
+        # Guess content type based on filename; fallback to binary stream
+        mime, encoding = mimetypes.guess_type(self.path)
+        if mime is None:
+            return 'application/octet-stream'
+        elif mime.startswith('text/') or mime in ('application/json', 'application/xml', 'application/javascript'):
+            mime = f'{mime}; charset=utf-8'
+        return mime
+
+
     def upload_file(self):
         logging.debug('Uploading s3 object: "%s" Target: %s', self.path,  self.bucket + "/" + self.file_path)
+        content_type = self.get_content_type()
+        logging.debug('Guessed Content-Type: %s for file: %s', content_type, self.path)
         try:
-            self.bucket_obj.upload_file(Filename=self.path, Key=self.file_path)
+            # Pass ContentType via ExtraArgs so the object is uploaded with the right MIME type
+            self.bucket_obj.upload_file(Filename=self.path, Key=self.file_path,
+                                       ExtraArgs={'ContentType': content_type})
         except (botocore.exceptions.ClientError,  OSError) as err:
             logging.error("File upload failed for '%s'", self.bucket + "/" + self.file_path)
             logging.error(err)
