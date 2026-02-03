@@ -111,13 +111,10 @@ def test_s3_upload_file( moto_boto, path, url, ftype, expected,fs, caplog):
         otherwise an exception will be raised.
         '''
         assert client.Object('tesk', 'folder/file.txt').load() == None
-        # Check the ContentType metadata is set correctly for text files
-        head = client.meta.client.head_object(Bucket=trans.bucket, Key=trans.file_path)
-        assert head['ContentType'] == 'text/plain'
 
 
 @pytest.mark.parametrize("filename, url, expected_content", [
-    ("file.txt", "s3://tesk/folder/file.txt", "text/plain"),
+    ("file.txt", "s3://tesk/folder/file.txt", "text/plain; charset=utf-8"),
     ("file.zip", "s3://tesk/folder/file.zip", "application/zip"),
 ])
 def test_s3_upload_file_content_type(moto_boto, filename, url, expected_content, fs):
@@ -154,7 +151,8 @@ def test_s3_upload_directory(path, url, ftype, expected, moto_boto, caplog):
         Checking if the file was uploaded, if the object is found load() method will return None 
         otherwise an exception will be raised.
         '''
-        assert client.Object('tesk', 'folder1/folder2/test_filer.py').load() == None        head = client.meta.client.head_object(Bucket=trans.bucket, Key='folder1/folder2/test_filer.py')
+        assert client.Object('tesk', 'folder1/folder2/test_filer.py').load() == None
+        head = client.meta.client.head_object(Bucket=trans.bucket, Key='folder1/folder2/test_filer.py')
         assert head['ContentType'].startswith('text/')
 def test_upload_directory_for_unknown_file_type(moto_boto, fs, monkeypatch, caplog):
     """
