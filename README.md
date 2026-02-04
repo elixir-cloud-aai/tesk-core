@@ -17,13 +17,13 @@ The root folder assumed to build the containers is the root of this package.
 To build the taskmaster container, run:
 
 ```
-docker build . -f containers/taskmaster -t taskmaster:latest
+docker build . -f containers/taskmaster.Dockerfile -t taskmaster:latest
 ```
 
 The command is similar for the filer container:
 
 ```
-docker build . -f containers/filer -t filer:latest
+docker build . -f containers/filer.Dockerfile -t filer:latest
 ```
 
 ## Unit testing
