@@ -1,6 +1,6 @@
 # Builder: produce wheels
 
-FROM alpine:3.23 as builder
+FROM alpine:3.23 AS builder
 
 RUN apk add --no-cache python3 py3-pip
 RUN apk add --no-cache git
