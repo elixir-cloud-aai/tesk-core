@@ -45,5 +45,5 @@ uv python install 3.10 3.11 3.12
 This software will take care of creating virtual environments and installing dependencies in them before running the actual tests and generating the coverage reports.
 
 ```
-$ tox
+$ uv run tox
 ```
