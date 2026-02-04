@@ -36,7 +36,7 @@ You can install the package using `uv`:
 uv install tox
 ```
 
-To install different versions using `uv`, you can use:
+To install different python versions using `uv`, you can type:
 
 ```
 uv python install 3.10 3.11 3.12
