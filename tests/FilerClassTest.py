@@ -31,7 +31,7 @@ class FilerClassTest_env(unittest.TestCase):
 
         pprint(f.spec)
 
-        self.assertEquals(f.getEnv(), [
+        self.assertEqual(f.getEnv(), [
 
             { 'name': 'JSON_INPUT'           , 'value': '{"a": 1}'                      }
            ,{ 'name': 'HOST_BASE_PATH'       , 'value': '/home/tfga/workspace/cwl-tes'  }
@@ -39,7 +39,7 @@ class FilerClassTest_env(unittest.TestCase):
             ,{"name": "AWS_CONFIG_FILE", "value": "/aws/config"}
             ,{"name": "AWS_SHARED_CREDENTIALS_FILE", "value": "/aws/credentials"},
         ])
-        self.assertEquals(f.spec['spec']['backoffLimit'], 10)
+        self.assertEqual(f.spec['spec']['backoffLimit'], 10)
 
 
     def test_mounts(self):
@@ -69,7 +69,7 @@ class FilerClassTest_env(unittest.TestCase):
 
         pprint(f.getVolumeMounts())
 
-        self.assertEquals(f.getVolumeMounts(), [
+        self.assertEqual(f.getVolumeMounts(), [
 
             { "name"        : 'transfer-volume'
             , 'mountPath'   : path.CONTAINER_BASE_PATH,
@@ -77,7 +77,7 @@ class FilerClassTest_env(unittest.TestCase):
             {'mountPath': '/aws', 'name': 's3-conf', 'readOnly': True}
         ])
 
-        self.assertEquals(f.getVolumes(), [
+        self.assertEqual(f.getVolumes(), [
 
             { "name"                  : 'transfer-volume'
             , 'persistentVolumeClaim' : { 'claimName' : 'transfer-pvc' }
@@ -112,10 +112,10 @@ class FilerClassTest_no_env(unittest.TestCase):
 
         pprint(f.getVolumeMounts())
 
-        self.assertEquals(f.getVolumeMounts()   , [
+        self.assertEqual(f.getVolumeMounts()   , [
             {'mountPath': '/aws', 'name': 's3-conf', 'readOnly': True}
         ])
-        self.assertEquals(f.getVolumes()        , [
+        self.assertEqual(f.getVolumes()        , [
             {
                 "name": "s3-conf",
                 "secret": {
@@ -139,11 +139,10 @@ class FilerClassTest_no_env(unittest.TestCase):
     def test_image_pull_policy(self):
 
         f = Filer('name', {'a': 1})
-        self.assertEquals(f.getImagePullPolicy()   , 'IfNotPresent')
+        self.assertEqual(f.getImagePullPolicy()   , 'IfNotPresent')
 
         f = Filer('name', {'a': 1}, pullPolicyAlways = True)
-        self.assertEquals(f.getImagePullPolicy()   , 'Always')
-
+        self.assertEqual(f.getImagePullPolicy()   , 'Always')
 
 
 

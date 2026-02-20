@@ -113,6 +113,24 @@ def test_s3_upload_file( moto_boto, path, url, ftype, expected,fs, caplog):
         assert client.Object('tesk', 'folder/file.txt').load() == None
 
 
+@pytest.mark.parametrize("filename, url, expected_content", [
+    ("file.txt", "s3://tesk/folder/file.txt", "text/plain; charset=utf-8"),
+    ("file.zip", "s3://tesk/folder/file.zip", "application/zip"),
+])
+def test_s3_upload_file_content_type(moto_boto, filename, url, expected_content, fs):
+    """
+    Ensure uploaded objects have correct Content-Type metadata based on file extension
+    """
+    fs.create_file(f"/home/user/filer_test/{filename}")
+    client = boto3.resource('s3', endpoint_url="http://s3.amazonaws.com")
+    trans = S3Transput(f"/home/user/filer_test/{filename}", url, "FILE")
+    trans.bucket_obj = client.Bucket(trans.bucket)
+    assert trans.upload_file() == 0
+    head = client.meta.client.head_object(Bucket=trans.bucket, Key=trans.file_path)
+    assert head['ContentType'] == expected_content
+
+
+
 
 @pytest.mark.parametrize("path, url, ftype,expected", [
         ("tests", "s3://tesk/folder1/folder2","DIRECTORY",0),
@@ -134,7 +152,8 @@ def test_s3_upload_directory(path, url, ftype, expected, moto_boto, caplog):
         otherwise an exception will be raised.
         '''
         assert client.Object('tesk', 'folder1/folder2/test_filer.py').load() == None
-
+        head = client.meta.client.head_object(Bucket=trans.bucket, Key='folder1/folder2/test_filer.py')
+        assert head['ContentType'].startswith('text/')
 def test_upload_directory_for_unknown_file_type(moto_boto, fs, monkeypatch, caplog):
     """
         Checking whether an exception is raised when the object type is neither file or directory

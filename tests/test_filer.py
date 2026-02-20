@@ -190,7 +190,7 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
     def test_getPathNoScheme(self):
 
-        self.assertEquals( getPath('/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5')
+        self.assertEqual( getPath('/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5')
                          ,         '/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5')
 
         self.assertEqual( containerPath('/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5')

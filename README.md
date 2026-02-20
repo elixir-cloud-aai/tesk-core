@@ -14,11 +14,36 @@ Since the code is meant to be in kubernetes pods, the code needs to be packaged 
 Their descriptions can be found in `containers/`.
 The root folder assumed to build the containers is the root of this package.
 
+To build the taskmaster container, run:
+
+```
+docker build . -f containers/taskmaster.Dockerfile -t taskmaster:latest
+```
+
+The command is similar for the filer container:
+
+```
+docker build . -f containers/filer.Dockerfile -t filer:latest
+```
+
 ## Unit testing
 
 Unit testing needs the `tox` package.
+
+You can install the package using `uv`:
+
+```
+uv install tox
+```
+
+To install different python versions using `uv`, you can type:
+
+```
+uv python install 3.10 3.11 3.12
+```
+
 This software will take care of creating virtual environments and installing dependencies in them before running the actual tests and generating the coverage reports.
 
 ```
-$ tox
+$ uv run tox
 ```

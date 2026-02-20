@@ -7,7 +7,6 @@ import sys
 import json
 import re
 import os
-import distutils.dir_util
 import logging
 import netrc
 import requests
@@ -112,7 +111,7 @@ def copyFile(src, dst):
     '''
 
     # If there is any * in 'dst', use only the dirname (base path)
-    p = re.compile('.*\*.*')
+    p = re.compile(r'.*\*.*')
     if p.match(dst):
         dst=os.path.dirname(dst)
 
@@ -229,7 +228,8 @@ class FTPTransput(Transput):
         logging.debug('Downloading ftp file: "%s" Target: %s', self.url,
                       self.path)
         basedir = os.path.dirname(self.path)
-        distutils.dir_util.mkpath(basedir)
+        if basedir and not os.path.exists(basedir):
+            os.makedirs(basedir, exist_ok=True)
 
         return ftp_download_file(self.ftp_connection, self.url_path, self.path)
 
