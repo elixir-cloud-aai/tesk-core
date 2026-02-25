@@ -17,8 +17,8 @@ INSTALL_DEPS = ['kubernetes==35.0.0',
                 ]
 TEST_DEPS = [ 'pytest',
             'pyfakefs',
-            'pytest-mock'
-            , 'fs',
+            'pytest-mock',
+            'fsspec',
             'moto<5',
             'pytest-localftpserver'
             ]

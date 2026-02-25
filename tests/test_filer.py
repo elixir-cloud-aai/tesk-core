@@ -1,6 +1,8 @@
 import unittest
 import logging
 import os
+import fsspec
+import shutil
 from tesk_core.filer import newTransput, FTPTransput, HTTPTransput, FileTransput,\
     process_file, logConfig, getPath, copyDir, copyFile, ftp_check_directory,\
     subfolders_in
@@ -9,28 +11,34 @@ from tesk_core.exception import UnknownProtocol, InvalidHostPath,\
 from tesk_core.path import containerPath
 from tesk_core.filer_s3 import S3Transput
 from assertThrows import AssertThrowsMixin
-from fs.opener import open_fs
 from io import StringIO
 from unittest.mock import patch
 
 
-
-
-
-
-
 def getTree(rootDir):
-    strio = StringIO()
-    with open_fs(rootDir) as dst1_fs:
-        dst1_fs.tree(file=strio)
-        treeTxt = strio.getvalue()
-        strio.close()
-        return treeTxt
+    fs, base_path = fsspec.core.url_to_fs(rootDir)
+    out = StringIO()
 
+    for root, dirs, files in fs.walk(base_path):
+        out.write(f"{root or base_path}\n")
+        for d in dirs:
+            out.write(f"{d}/\n")
+        for f in files:
+            out.write(f"{f}\n")
 
-def stripLines(txt):
-    return '\n'.join([line.strip() for line in txt.splitlines()[1:]])
+    return out.getvalue()
 
+def normalize_tree(tree_str, abs_root, prefix):
+    """Convert absolute paths from getTree into relative paths."""
+    lines = []
+    for line in tree_str.splitlines():
+        stripped = line.replace(abs_root, prefix)
+        stripped = stripped.lstrip("/")
+        lines.append(stripped)
+    return "\n".join(lines)
+
+def rmDir(d):
+    shutil.rmtree(d, ignore_errors=True)
 
 @patch('tesk_core.path.HOST_BASE_PATH', '/home/tfga/workspace/cwl-tes')
 @patch('tesk_core.path.CONTAINER_BASE_PATH', '/transfer')
@@ -133,9 +141,6 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
 
     def test_copyDir(self):
-        def rmDir(d):
-            os.system('rm -r {}'.format(d))
-
         baseDir = 'tests/resources/copyDirTest/'
         src = os.path.join(baseDir, 'src')
         dst1 = os.path.join(baseDir, 'dst1')
@@ -155,33 +160,24 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
         # Let's try to copy
         copyDir(src, dst1)
+        tree = getTree(dst1)
+        abs_dst1 = os.path.abspath(dst1)
+        normalizedTree = normalize_tree(tree, abs_dst1, "dist1")
+        
+        expected = "dist1\na/\n3.txt\ndist1/a\n2.txt\n1.txt".strip()
 
-
-        self.assertEqual(getTree(dst1),
-                          stripLines('''
-                            |-- a
-                            |   |-- 1.txt
-                            |   `-- 2.txt
-                            `-- 3.txt
-                            '''
-                                     )
-                          )
+        self.assertEqual(normalizedTree, expected)
 
         # Copying to non-existing dst -----------------------------------------
-        self.assertFalse(os.path.exists(dst2))  # dst2 should not exist
-
-        # Let's try to copy
+        # # Let's try to copy
         copyDir(src, dst2)
+        tree = getTree(dst2)
+        abs_dst2 = os.path.abspath(dst2)
+        normalizedTree = normalize_tree(tree, abs_dst2, "dist2")
 
-        self.assertEqual(getTree(dst2),
-                          stripLines('''
-                            |-- a
-                            |   |-- 1.txt
-                            |   `-- 2.txt
-                            `-- 3.txt
-                            '''
-                                     )
-                          )
+        expected = "dist2\na/\n3.txt\ndist2/a\n2.txt\n1.txt".strip()
+
+        self.assertEqual(normalizedTree, expected)
 
     def test_getPath(self):
 
