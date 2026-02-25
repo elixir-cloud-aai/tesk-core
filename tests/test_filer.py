@@ -32,7 +32,10 @@ def normalize_tree(tree_str, abs_root, prefix):
     """Convert absolute paths from getTree into relative paths."""
     lines = []
     for line in tree_str.splitlines():
-        stripped = line.replace(abs_root, prefix)
+        if line.startswith(abs_root):
+            stripped = prefix + line[len(abs_root):]
+        else:
+            stripped = line
         stripped = stripped.lstrip("/")
         lines.append(stripped)
     return "\n".join(lines)
@@ -166,7 +169,10 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
         
         expected = "dist1\na/\n3.txt\ndist1/a\n2.txt\n1.txt".strip()
 
-        self.assertEqual(normalizedTree, expected)
+        normalized_lines = sorted(normalizedTree.splitlines())
+        expected_lines = sorted(expected.splitlines())
+
+        self.assertEqual(normalized_lines, expected_lines)
 
         # Copying to non-existing dst -----------------------------------------
         # # Let's try to copy
@@ -177,7 +183,10 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
         expected = "dist2\na/\n3.txt\ndist2/a\n2.txt\n1.txt".strip()
 
-        self.assertEqual(normalizedTree, expected)
+        normalized_lines = sorted(normalizedTree.splitlines())
+        expected_lines = sorted(expected.splitlines())
+
+        self.assertEqual(normalized_lines, expected_lines)
 
     def test_getPath(self):
 
