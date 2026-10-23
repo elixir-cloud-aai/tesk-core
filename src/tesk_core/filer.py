@@ -14,11 +14,23 @@ import gzip
 from tesk_core.exception import UnknownProtocol, FileProtocolDisabled
 import shutil
 from glob import glob
+from urllib.parse import quote, urlsplit, urlunsplit
 from tesk_core.path import containerPath, getPath, fileEnabled
 from tesk_core.transput import Type, Transput, urlparse
 from tesk_core.filer_s3 import S3Transput
 
 
+
+
+def http_join(url, name):
+    '''Appends a file name to the path of an HTTP(S) URL. The name is escaped,
+    so characters such as # and ? stay part of it, and the URL's query, which
+    may carry a token, is kept.'''
+    parts = urlsplit(url)
+    # Quote the name's bytes on disk: os.listdir returns a name that isn't
+    # valid UTF-8 with surrogate escapes, which quote can't encode as text.
+    path = parts.path.rstrip('/') + '/' + quote(os.fsencode(name), safe='')
+    return urlunsplit(parts._replace(path=path))
 
 
 class HTTPTransput(Transput):
@@ -39,9 +51,13 @@ class HTTPTransput(Transput):
         return 0
 
     def upload_file(self):
-        with open(self.path, 'r') as file:
-            file_contents = file.read()
-        req = requests.put(self.url, data=file_contents)
+        # Send the file as bytes, streamed from disk: decoding it as text fails
+        # for binary files and changes some text. An empty file is sent as b''
+        # because requests sends an empty file object with chunked encoding,
+        # which presigned upload URLs such as S3's reject.
+        with open(self.path, 'rb') as file:
+            data = file if os.fstat(file.fileno()).st_size > 0 else b''
+            req = requests.put(self.url, data=data)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)
@@ -62,7 +78,7 @@ class HTTPTransput(Transput):
             else:
                 return 1
             to_upload.append(
-                HTTPTransput(file_path, self.url + '/' + listing, ftype))
+                HTTPTransput(file_path, http_join(self.url, listing), ftype))
 
         # return 1 if any upload failed
         return min(sum([transput.upload() for transput in to_upload]), 1)
