@@ -5,12 +5,14 @@ from requests import Response, put
 import os
 import threading
 from unittest import mock
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
 from tesk_core.filer import (
     HTTPTransput,
-    Type
+    Type,
+    http_join
 )
 
 PATH_DOWN = 'test_download_file.txt'
@@ -184,3 +186,48 @@ def test_upload_dir(mocker, fs):
 
         assert http_obj1.upload_dir() == 1
         assert http_obj2.upload_dir() == 1
+
+
+@pytest.mark.parametrize('url, name, expected', [
+    ('http://foo.bar/dir', 'file.txt', 'http://foo.bar/dir/file.txt'),
+    ('http://foo.bar/dir/', 'file.txt', 'http://foo.bar/dir/file.txt'),
+    ('http://foo.bar/dir', 'result#1.txt', 'http://foo.bar/dir/result%231.txt'),
+    ('http://foo.bar/dir', 'a?b.txt', 'http://foo.bar/dir/a%3Fb.txt'),
+    ('http://foo.bar/dir', '50%25.txt', 'http://foo.bar/dir/50%2525.txt'),
+    ('http://foo.bar/dir?token=a%2Bb', 'file.txt',
+     'http://foo.bar/dir/file.txt?token=a%2Bb'),
+])
+def test_http_join(url, name, expected):
+    """ Ensure a file name is escaped and the URL's query is kept."""
+
+    assert http_join(url, name) == expected
+
+
+def test_upload_dir_keeps_file_names(put_server, tmp_path):
+    """ Ensure each file of a directory reaches the server under its own
+    name, whatever characters the name contains, and that the query of the
+    directory's URL, which may carry a token, is kept."""
+
+    url, received = put_server
+    names = ['result#1.txt', 'a?b.txt', '50%25.txt', '100%.txt', 'a b.txt']
+    for name in names:
+        (tmp_path / name).write_bytes(b'data')
+    (tmp_path / 'sub').mkdir()
+    (tmp_path / 'sub' / 'y.txt').write_bytes(b'data')
+
+    http_obj = HTTPTransput(
+        str(tmp_path),
+        url + '/upload/dir?token=abc',
+        Type.Directory
+    )
+
+    assert http_obj.upload_dir() == 0
+
+    requested = sorted(
+        (unquote(urlsplit(path).path), urlsplit(path).query)
+        for path, _, _ in received
+    )
+    assert requested == sorted(
+        [('/upload/dir/' + name, 'token=abc') for name in names] +
+        [('/upload/dir/sub/y.txt', 'token=abc')]
+    )

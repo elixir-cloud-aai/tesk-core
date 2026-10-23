@@ -14,11 +14,21 @@ import gzip
 from tesk_core.exception import UnknownProtocol, FileProtocolDisabled
 import shutil
 from glob import glob
+from urllib.parse import quote, urlsplit, urlunsplit
 from tesk_core.path import containerPath, getPath, fileEnabled
 from tesk_core.transput import Type, Transput, urlparse
 from tesk_core.filer_s3 import S3Transput
 
 
+
+
+def http_join(url, name):
+    '''Appends a file name to the path of an HTTP(S) URL. The name is escaped,
+    so characters such as # and ? stay part of it, and the URL's query, which
+    may carry a token, is kept.'''
+    parts = urlsplit(url)
+    path = parts.path.rstrip('/') + '/' + quote(name, safe='')
+    return urlunsplit(parts._replace(path=path))
 
 
 class HTTPTransput(Transput):
@@ -66,7 +76,7 @@ class HTTPTransput(Transput):
             else:
                 return 1
             to_upload.append(
-                HTTPTransput(file_path, self.url + '/' + listing, ftype))
+                HTTPTransput(file_path, http_join(self.url, listing), ftype))
 
         # return 1 if any upload failed
         return min(sum([transput.upload() for transput in to_upload]), 1)
