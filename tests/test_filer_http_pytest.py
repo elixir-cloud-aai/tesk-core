@@ -1,8 +1,12 @@
 """Tests for 'filer.py' HTTP functionalities using 'pytest'."""
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from requests import Response, put
 import os
+import threading
 from unittest import mock
+
+import pytest
 
 from tesk_core.filer import (
     HTTPTransput,
@@ -18,6 +22,29 @@ FTYPE = 'FILE'
 
 resp = Response()
 resp._content = b'{ "foo" : "bar" }'
+
+
+@pytest.fixture
+def put_server():
+    """A local HTTP server that records each PUT request it receives."""
+
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_PUT(self):
+            length = int(self.headers.get('Content-Length', 0))
+            received.append((self.path, self.headers, self.rfile.read(length)))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield 'http://127.0.0.1:{}'.format(server.server_port), received
+    server.shutdown()
+    server.server_close()
 
 
 def test_download_file(mocker):
@@ -57,6 +84,30 @@ def test_upload_file(mocker):
     assert 0 == http_obj.upload_file()
 
 
+@pytest.mark.parametrize('content', [
+    b'plain text\n',
+    b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\xff',  # start of a gzip file
+    'caf\u00e9\n'.encode('utf-8'),
+    'x \u2265 1\n'.encode('utf-8'),
+    b'first line\r\nsecond line\r\n',
+    b'',
+], ids=['ascii', 'gzip', 'utf8-accent', 'utf8-symbol', 'crlf', 'empty'])
+def test_upload_file_sends_exact_bytes(put_server, tmp_path, content):
+    """ Ensure a file is uploaded byte for byte, with a Content-Length and
+    without chunked encoding, as presigned upload URLs require."""
+
+    url, received = put_server
+    path = tmp_path / 'output'
+    path.write_bytes(content)
+
+    assert HTTPTransput(str(path), url + '/output', Type.File).upload_file() == 0
+
+    [(_, headers, body)] = received
+    assert body == content
+    assert headers['Content-Length'] == str(len(content))
+    assert 'Transfer-Encoding' not in headers
+
+
 def test_upload_file_error(mocker, caplog):
     """ Ensure upload error returns the correct value and log message."""
 
@@ -83,7 +134,15 @@ def test_upload_dir(mocker, fs):
     fs.create_file('dir1/dir2/file4.txt', contents="took me a while")
 
 
-    mock_put = mocker.patch('requests.put', return_value=resp)
+    # Each file is sent as an open file object, so its content is read
+    # during the call.
+    uploads = {}
+
+    def mock_put(url, data):
+        uploads[url] = data if isinstance(data, bytes) else data.read()
+        return resp
+
+    mocker.patch('requests.put', side_effect=mock_put)
 
     http_obj = HTTPTransput(
         "dir1",
@@ -93,13 +152,11 @@ def test_upload_dir(mocker, fs):
 
     assert http_obj.upload_dir() == 0
 
-    # We emply the 'list.sorted' trick to ignore calls order because the
-    # 'assert_has_calls' method would not work in this setting
-    assert sorted(mock_put.mock_calls) == sorted([
-        mock.call(endpoint + '/dir1/dir2/file2', data="not really"),
-        mock.call(endpoint + '/dir1/dir2/file4.txt', data="took me a while"),
-        mock.call(endpoint + '/dir1/file1', data="this is random"),
-    ])
+    assert uploads == {
+        endpoint + '/dir1/dir2/file2': b"not really",
+        endpoint + '/dir1/dir2/file4.txt': b"took me a while",
+        endpoint + '/dir1/file1': b"this is random",
+    }
 
 
     def test_upload_dir_error(mocker, fs):

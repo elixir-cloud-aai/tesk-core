@@ -39,9 +39,13 @@ class HTTPTransput(Transput):
         return 0
 
     def upload_file(self):
-        with open(self.path, 'r') as file:
-            file_contents = file.read()
-        req = requests.put(self.url, data=file_contents)
+        # Send the file as bytes, streamed from disk: decoding it as text fails
+        # for binary files and changes some text. An empty file is sent as b''
+        # because requests sends an empty file object with chunked encoding,
+        # which presigned upload URLs such as S3's reject.
+        with open(self.path, 'rb') as file:
+            data = file if os.fstat(file.fileno()).st_size > 0 else b''
+            req = requests.put(self.url, data=data)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)
