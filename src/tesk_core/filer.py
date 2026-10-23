@@ -27,7 +27,9 @@ def http_join(url, name):
     so characters such as # and ? stay part of it, and the URL's query, which
     may carry a token, is kept.'''
     parts = urlsplit(url)
-    path = parts.path.rstrip('/') + '/' + quote(name, safe='')
+    # Quote the name's bytes on disk: os.listdir returns a name that isn't
+    # valid UTF-8 with surrogate escapes, which quote can't encode as text.
+    path = parts.path.rstrip('/') + '/' + quote(os.fsencode(name), safe='')
     return urlunsplit(parts._replace(path=path))
 
 

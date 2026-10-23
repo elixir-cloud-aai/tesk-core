@@ -5,7 +5,7 @@ from requests import Response, put
 import os
 import threading
 from unittest import mock
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, unquote_to_bytes, urlsplit
 
 import pytest
 
@@ -194,6 +194,10 @@ def test_upload_dir(mocker, fs):
     ('http://foo.bar/dir', 'result#1.txt', 'http://foo.bar/dir/result%231.txt'),
     ('http://foo.bar/dir', 'a?b.txt', 'http://foo.bar/dir/a%3Fb.txt'),
     ('http://foo.bar/dir', '50%25.txt', 'http://foo.bar/dir/50%2525.txt'),
+    ('http://foo.bar/dir', 'caf\u00e9.txt', 'http://foo.bar/dir/caf%C3%A9.txt'),
+    # A name that isn't valid UTF-8, as os.listdir returns it
+    ('http://foo.bar/dir', os.fsdecode(b'caf\xe9.txt'),
+     'http://foo.bar/dir/caf%E9.txt'),
     ('http://foo.bar/dir?token=a%2Bb', 'file.txt',
      'http://foo.bar/dir/file.txt?token=a%2Bb'),
 ])
@@ -231,3 +235,25 @@ def test_upload_dir_keeps_file_names(put_server, tmp_path):
         [('/upload/dir/' + name, 'token=abc') for name in names] +
         [('/upload/dir/sub/y.txt', 'token=abc')]
     )
+
+
+def test_upload_dir_keeps_non_utf8_file_names(put_server, tmp_path):
+    """ Ensure a file whose name isn't valid UTF-8, which file systems such
+    as ext4 allow, is uploaded under the bytes of its name rather than
+    stopping the directory upload."""
+
+    url, received = put_server
+    try:
+        with open(os.path.join(os.fsencode(tmp_path), b'caf\xe9.txt'), 'wb') as f:
+            f.write(b'data')
+    except OSError:
+        pytest.skip('the file system rejects names that are not valid UTF-8')
+    (tmp_path / 'ok.txt').write_bytes(b'data')
+
+    http_obj = HTTPTransput(str(tmp_path), url + '/upload/dir', Type.Directory)
+
+    assert http_obj.upload_dir() == 0
+    assert sorted(unquote_to_bytes(path) for path, _, _ in received) == [
+        b'/upload/dir/caf\xe9.txt',
+        b'/upload/dir/ok.txt',
+    ]
