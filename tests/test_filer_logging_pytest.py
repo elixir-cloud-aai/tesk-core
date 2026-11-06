@@ -88,7 +88,8 @@ def test_http_download_dir_logs_no_query(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
     assert HTTPTransput(str(tmp_path), URL, Type.Directory).download() == 1
 
-    assert 'https://example.org/bucket/a.txt' in caplog.text
+    assert ('unable to download url: https://example.org/bucket/a.txt'
+            in caplog.text)
     assert QUERY not in caplog.text
 
 
@@ -105,7 +106,9 @@ def test_ftp_logs_no_query(mocker, tmp_path, caplog):
     with FTPTransput(str(tmp_path / 'a'), url, Type.File, conn) as transput:
         transput.upload()
 
-    assert 'ftp://example.org/dir' in caplog.text
+    assert 'Downloading ftp file: "ftp://example.org/dir" ' in caplog.text
+    assert ('Unable to create remote directories needed for '
+            'ftp://example.org/dir' in caplog.text)
     assert QUERY not in caplog.text
 
 
@@ -131,7 +134,8 @@ def test_ftp_dir_logs_no_query(mocker, tmp_path, caplog):
         assert transput.upload() == 1
 
     assert 'Processing ftp dir: ftp://example.org/dir ' in caplog.text
-    assert 'neither file nor directory' in caplog.text
+    assert ('neither file nor directory: "ftp://example.org/dir"'
+            in caplog.text)
     assert QUERY not in caplog.text
 
 
@@ -144,5 +148,5 @@ def test_process_file_no_scheme_logs_no_query(mocker, caplog):
     process_file('inputs', {
         'path': '/data/a', 'url': '/tmp/a?' + QUERY, 'type': 'FILE'})
 
-    assert '/tmp/a' in caplog.text
+    assert 'Could not determine protocol for url: "/tmp/a"' in caplog.text
     assert QUERY not in caplog.text
