@@ -1,0 +1,44 @@
+version: 2
+# Every entry targets `dev` (`target-branch`), which takes all pull requests
+# whatever the default branch is (`main` only moves forward to releases);
+# security updates always target the default branch, though
+updates:
+  # Dependencies of the package (`setup.py`)
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    target-branch: dev
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+  # Dependencies of the docs (`docs/requirements.txt`)
+  - package-ecosystem: pip
+    directory: /docs
+    schedule:
+      interval: monthly
+    target-branch: dev
+    groups:
+      docs-dependencies:
+        patterns: ["*"]
+  # Actions in the workflows, including the pins of the shared actions of
+  # `elixir-cloud-aai/.github` (to the commits of its releases,
+  # `@<commit> # vX.Y.Z`)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    target-branch: dev
+    groups:
+      github-actions:
+        patterns: ["*"]
+  # Base images of the taskmaster and filer images
+  # (`containers/*.Dockerfile`)
+  - package-ecosystem: docker
+    directory: /containers
+    schedule:
+      interval: monthly
+    target-branch: dev
+    groups:
+      docker:
+        patterns: ["*"]
