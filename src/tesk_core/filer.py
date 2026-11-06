@@ -1,88 +1,129 @@
 #!/usr/bin/env python3
+"""The filer: stages the inputs and outputs of a task.
 
-from ftplib import FTP
-import ftplib
+Run as `filer {inputs|outputs} DATA`, with the task as JSON, or a gzipped
+JSON file (`*.gz`).
+"""
+
 import argparse
-import sys
+from collections.abc import Callable
+import ftplib
+from ftplib import FTP
+from glob import glob
+import gzip
 import json
-import re
-import os
 import logging
 import netrc
-import requests
-import gzip
-from tesk_core.exception import UnknownProtocol, FileProtocolDisabled
+import os
+import re
 import shutil
-from glob import glob
-from urllib.parse import quote, urlsplit, urlunsplit
-from tesk_core.path import containerPath, getPath, fileEnabled
-from tesk_core.transput import Type, Transput, urlparse, url_for_log
+import sys
+from typing import Any
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
+
+import requests
+
+from tesk_core.exception import FileProtocolDisabled, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
+from tesk_core.path import containerPath, fileEnabled, getPath
+from tesk_core.transput import Transput, Type, url_for_log
 
 
+def http_join(url: str, name: str) -> str:
+    """Append a file name to the path of an HTTP(S) URL.
 
+    The name is escaped, so characters such as `#` and `?` stay part of it,
+    and the URL's query, which may carry a token, is kept.
 
-def http_join(url, name):
-    '''Appends a file name to the path of an HTTP(S) URL. The name is escaped,
-    so characters such as # and ? stay part of it, and the URL's query, which
-    may carry a token, is kept.'''
+    Args:
+        url: The URL of a directory.
+        name: The file name, as on disk.
+
+    Returns:
+        The URL of the file.
+    """
     parts = urlsplit(url)
     # Quote the name's bytes on disk: os.listdir returns a name that isn't
     # valid UTF-8 with surrogate escapes, which quote can't encode as text.
-    path = parts.path.rstrip('/') + '/' + quote(os.fsencode(name), safe='')
+    path = parts.path.rstrip("/") + "/" + quote(os.fsencode(name), safe="")
     return urlunsplit(parts._replace(path=path))
 
 
 class HTTPTransput(Transput):
-    def __init__(self, path, url, ftype):
-        Transput.__init__(self, path, url, ftype)
+    """Transfer of an input or output over HTTP(S)."""
 
-    def _request_failed(self, err):
-        # The message of a requests exception contains the full URL, so log
-        # only its type and the URL as in other log messages
-        logging.error('%s for %s', type(err).__name__, url_for_log(self.url))
+    def _request_failed(self, err: Exception) -> int:
+        """Log a failed request.
+
+        The message of a requests exception contains the full URL, so only
+        its type is logged, with the URL as in other log messages.
+
+        Args:
+            err: The exception of the request.
+
+        Returns:
+            1, as the transfer failed.
+        """
+        logging.error("%s for %s", type(err).__name__, url_for_log(self.url))
         return 1
 
-    def download_file(self):
+    def download_file(self) -> int:
+        """Download the file with `GET`.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
         try:
-            req = requests.get(self.url)
+            # No timeout, as before; transfers of large files can take long
+            req = requests.get(self.url)  # noqa: S113
         except requests.exceptions.RequestException as err:
             return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
-            logging.error('Got status code: %d', req.status_code)
+            logging.error("Got status code: %d", req.status_code)
             logging.error(req.text)
             return 1
-        logging.debug('OK, got status code: %d', req.status_code)
+        logging.debug("OK, got status code: %d", req.status_code)
 
-        with open(self.path, 'wb') as file:
+        with open(self.path, "wb") as file:
             file.write(req.content)
         return 0
 
-    def upload_file(self):
+    def upload_file(self) -> int:
+        """Upload the file with `PUT`, as bytes.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
         # Send the file as bytes, streamed from disk: decoding it as text fails
         # for binary files and changes some text. An empty file is sent as b''
         # because requests sends an empty file object with chunked encoding,
         # which presigned upload URLs such as S3's reject.
-        with open(self.path, 'rb') as file:
-            data = file if os.fstat(file.fileno()).st_size > 0 else b''
+        with open(self.path, "rb") as file:
+            data = file if os.fstat(file.fileno()).st_size > 0 else b""
             try:
-                req = requests.put(self.url, data=data)
+                # No timeout, as before; uploads of large files can take long
+                req = requests.put(self.url, data=data)  # noqa: S113
             except requests.exceptions.RequestException as err:
                 return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
-            logging.error('Got status code: %d', req.status_code)
+            logging.error("Got status code: %d", req.status_code)
             logging.error(req.text)
             return 1
-        logging.debug('OK, got status code: %d', req.status_code)
+        logging.debug("OK, got status code: %d", req.status_code)
 
         return 0
 
-    def upload_dir(self):
+    def upload_dir(self) -> int:
+        """Upload the files below the directory, recursively.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
         to_upload = []
         for listing in os.listdir(self.path):
-            file_path = self.path + '/' + listing
+            file_path = self.path + "/" + listing
             if os.path.isdir(file_path):
                 ftype = Type.Directory
             elif os.path.isfile(file_path):
@@ -90,7 +131,8 @@ class HTTPTransput(Transput):
             else:
                 return 1
             to_upload.append(
-                HTTPTransput(file_path, http_join(self.url, listing), ftype))
+                HTTPTransput(file_path, http_join(self.url, listing), ftype)
+            )
 
         # Stop at the first upload that fails, as for the entries of a task
         for transput in to_upload:
@@ -98,18 +140,35 @@ class HTTPTransput(Transput):
                 return 1
         return 0
 
-    def download_dir(self):
+    def download_dir(self) -> int:
+        """Refuse to download a directory, which HTTP can't list.
+
+        Returns:
+            1, as the transfer failed.
+        """
         logging.error(
-            'Won\'t crawl http directory, so unable to download url: %s',
-            url_for_log(self.url))
+            "Won't crawl http directory, so unable to download url: %s",
+            url_for_log(self.url),
+        )
         return 1
 
 
-def copyContent(src, dst, symlinks=False, ignore=None):
-    '''
-    https://stackoverflow.com/a/12514470/1553043
-    '''
+def copyContent(
+    src: str,
+    dst: str,
+    symlinks: bool = False,
+    ignore: Callable[[str, list[str]], list[str]] | None = None,
+) -> None:
+    """Copy the content of a directory into an existing directory.
 
+    See https://stackoverflow.com/a/12514470/1553043.
+
+    Args:
+        src: The source directory.
+        dst: The destination directory.
+        symlinks: Whether to copy symbolic links as links.
+        ignore: Selects the names to leave out (as for `shutil.copytree`).
+    """
     for item in os.listdir(src):
         s = os.path.join(src, item)
         d = os.path.join(dst, item)
@@ -119,71 +178,158 @@ def copyContent(src, dst, symlinks=False, ignore=None):
             shutil.copy2(s, d)
 
 
-def copyDir(src, dst):
-    '''
-    Limitation of shutil.copytree:
+def copyDir(src: str, dst: str) -> None:
+    """Copy a directory, also into an existing one.
 
-    > The destination directory, named by dst, must not already exist; it will be created as well as missing parent directories.
-    '''
+    `shutil.copytree` needs a destination that doesn't exist yet.
 
+    Args:
+        src: The source directory.
+        dst: The destination directory.
+    """
     if os.path.exists(dst):
-
         copyContent(src, dst)
 
     else:
-
         shutil.copytree(src, dst)
 
-def copyFile(src, dst):
-    '''
-    Limitations of shutil.copy:
 
-    It does not interpret * as a glob, but as a character.
-    '''
+def copyFile(src: str, dst: str) -> None:
+    """Copy the files that match a glob pattern.
 
+    `shutil.copy` takes `*` as a character, not as a glob. If `dst` has a
+    `*`, the files are copied into its directory.
+
+    Args:
+        src: The source, a glob pattern.
+        dst: The destination.
+    """
     # If there is any * in 'dst', use only the dirname (base path)
-    p = re.compile(r'.*\*.*')
+    p = re.compile(r".*\*.*")
     if p.match(dst):
-        dst=os.path.dirname(dst)
+        dst = os.path.dirname(dst)
 
     for file in glob(src):
         shutil.copy(file, dst)
 
 
 class FileTransput(Transput):
-    def __init__(self, path, url, ftype):
+    """Transfer of an input or output from or to the shared volume (`file:`).
+
+    Attributes:
+        urlContainerPath: The URL's path in the filer's container.
+    """
+
+    def __init__(self, path: str, url: str, ftype: Type) -> None:
+        """Describe the transfer.
+
+        Args:
+            path: Path in the filer's container.
+            url: URL of the input or output.
+            ftype: Whether it is a file or a directory.
+
+        Raises:
+            InvalidHostPath: The URL's path is not on the shared volume.
+        """
         Transput.__init__(self, path, url, ftype)
 
         self.urlContainerPath = containerPath(getPath(self.url))
 
-    def transfer(self, copyFn, src, dst):
-        logging.debug("Copying {src} to {dst}".format(**locals()))
-        copyFn(src, dst)
+    def transfer(self, copyFn: Callable[[str, str], object], src: str, dst: str) -> int:
+        """Copy with a function.
 
-    def download_file(self): self.transfer(shutil.copy  , self.urlContainerPath , self.path)
-    def download_dir(self):  self.transfer(copyDir      , self.urlContainerPath , self.path)
-    def upload_file(self):   self.transfer(copyFile  , self.path             , self.urlContainerPath)
-    def upload_dir(self):    self.transfer(copyDir      , self.path             , self.urlContainerPath)
+        Args:
+            copyFn: The function, called with `src` and `dst`.
+            src: The source.
+            dst: The destination.
+
+        Returns:
+            0: errors are raised by `copyFn`.
+        """
+        logging.debug("Copying %s to %s", src, dst)
+        copyFn(src, dst)
+        return 0
+
+    def download_file(self) -> int:
+        """Copy the file from the shared volume.
+
+        Returns:
+            0: errors are raised.
+        """
+        return self.transfer(shutil.copy, self.urlContainerPath, self.path)
+
+    def download_dir(self) -> int:
+        """Copy the directory from the shared volume.
+
+        Returns:
+            0: errors are raised.
+        """
+        return self.transfer(copyDir, self.urlContainerPath, self.path)
+
+    def upload_file(self) -> int:
+        """Copy the files that match the path to the shared volume.
+
+        Returns:
+            0: errors are raised.
+        """
+        return self.transfer(copyFile, self.path, self.urlContainerPath)
+
+    def upload_dir(self) -> int:
+        """Copy the directory to the shared volume.
+
+        Returns:
+            0: errors are raised.
+        """
+        return self.transfer(copyDir, self.path, self.urlContainerPath)
 
 
 class FTPTransput(Transput):
-    def __init__(self, path, url, ftype, ftp_conn=None):
+    """Transfer of an input or output over FTP.
+
+    Attributes:
+        connection_owner: Whether the transfer opened the connection (and
+            closes it on exit), or got it from the transfer of a parent
+            directory.
+        ftp_connection: The FTP connection.
+    """
+
+    def __init__(
+        self, path: str, url: str, ftype: Type, ftp_conn: FTP | None = None
+    ) -> None:
+        """Describe the transfer; entering it as a context connects.
+
+        Args:
+            path: Path in the filer's container.
+            url: URL of the input or output.
+            ftype: Whether it is a file or a directory.
+            ftp_conn: A connection to reuse, if any.
+        """
         Transput.__init__(self, path, url, ftype)
 
         self.connection_owner = ftp_conn is None
-        self.ftp_connection = FTP() if ftp_conn is None else ftp_conn
+        # FTP is a protocol of TES tasks' URLs, insecure or not
+        self.ftp_connection = FTP() if ftp_conn is None else ftp_conn  # noqa: S321
 
-    # entice users to use contexts when using this class
-    def __enter__(self):
+    def __enter__(self) -> "FTPTransput":
+        """Connect and log in, unless the connection is reused.
+
+        Returns:
+            The transfer itself.
+        """
         if self.connection_owner:
             self.ftp_connection.connect(self.netloc)
             ftp_login(self.ftp_connection, self.netloc, self.netrc_file)
         return self
 
-    def upload_dir(self):
+    def upload_dir(self) -> int:
+        """Upload the files below the directory, recursively.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
         for file in os.listdir(self.path):
-            file_path = self.path + '/' + file
-            file_url = self.url + '/' + file
+            file_path = self.path + "/" + file
+            file_url = self.url + "/" + file
 
             if os.path.isdir(file_path):
                 ftype = Type.Directory
@@ -192,7 +338,7 @@ class FTPTransput(Transput):
             else:
                 logging.error(
                     'Directory listing in is neither file nor directory: "%s"',
-                    url_for_log(file_url)
+                    url_for_log(file_url),
                 )
                 return 1
 
@@ -205,13 +351,17 @@ class FTPTransput(Transput):
                     return 1
         return 0
 
-    def upload_file(self):
-        error = ftp_make_dirs(self.ftp_connection,
-                              os.path.dirname(self.url_path))
+    def upload_file(self) -> int:
+        """Upload the file, creating the remote directories.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
+        error = ftp_make_dirs(self.ftp_connection, os.path.dirname(self.url_path))
         if error:
             logging.error(
-                'Unable to create remote directories needed for %s',
-                url_for_log(self.url)
+                "Unable to create remote directories needed for %s",
+                url_for_log(self.url),
             )
             return 1
 
@@ -220,9 +370,15 @@ class FTPTransput(Transput):
 
         return ftp_upload_file(self.ftp_connection, self.path, self.url_path)
 
-    def download_dir(self):
-        logging.debug('Processing ftp dir: %s target: %s',
-                      url_for_log(self.url), self.path)
+    def download_dir(self) -> int:
+        """Download the files below the directory, recursively.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
+        logging.debug(
+            "Processing ftp dir: %s target: %s", url_for_log(self.url), self.path
+        )
         self.ftp_connection.cwd(self.url_path)
 
         # This is horrible and I'm sorry but it works flawlessly.
@@ -230,73 +386,101 @@ class FTPTransput(Transput):
         # See https://stackoverflow.com/questions/966578/parse-response-from-ftp-list-command-syntax-variations
         # for attribution
         ftp_command = re.compile(
-            r'^(?P<dir>[\-ld])(?P<permission>([\-r][\-w][\-xs]){3})\s+(?P<filecode>\d+)\s+(?P<owner>\w+)\s+(?P<group>\w+)\s+(?P<size>\d+)\s+(?P<timestamp>((\w{3})\s+(\d{2})\s+(\d{1,2}):(\d{2}))|((\w{3})\s+(\d{1,2})\s+(\d{4})))\s+(?P<name>.+)$')
+            r"^(?P<dir>[\-ld])(?P<permission>([\-r][\-w][\-xs]){3})\s+"
+            r"(?P<filecode>\d+)\s+(?P<owner>\w+)\s+(?P<group>\w+)\s+"
+            r"(?P<size>\d+)\s+(?P<timestamp>((\w{3})\s+(\d{2})\s+(\d{1,2}):(\d{2}))"
+            r"|((\w{3})\s+(\d{1,2})\s+(\d{4})))\s+(?P<name>.+)$"
+        )
 
-        lines = []
-        self.ftp_connection.retrlines('LIST', lines.append)
+        lines: list[str] = []
+        self.ftp_connection.retrlines("LIST", lines.append)
 
         for line in lines:
             matches = ftp_command.match(line)
-            dirbit = matches.group('dir')
-            name = matches.group('name')
+            # Lines that don't match raise `AttributeError`, as before
+            dirbit = matches.group("dir")  # type: ignore[union-attr]
+            name = matches.group("name")  # type: ignore[union-attr]
 
-            file_path = self.path + '/' + name
-            file_url = self.url + '/' + name
+            file_path = self.path + "/" + name
+            file_url = self.url + "/" + name
 
-            if dirbit == 'd':
-                ftype = Type.Directory
-            else:
-                ftype = Type.File
+            ftype = Type.Directory if dirbit == "d" else Type.File
 
             # We recurse into new transputs, ending with files which are downloaded
             # Downside is nothing happens with empty dirs.
-            with FTPTransput(file_path, file_url, ftype,
-                             self.ftp_connection) as transfer:
+            with FTPTransput(
+                file_path, file_url, ftype, self.ftp_connection
+            ) as transfer:
                 if transfer.download():
                     return 1
         return 0
 
-    def download_file(self):
-        logging.debug('Downloading ftp file: "%s" Target: %s',
-                      url_for_log(self.url), self.path)
+    def download_file(self) -> int:
+        """Download the file, creating its local directory.
+
+        Returns:
+            0 on success, otherwise 1.
+        """
+        logging.debug(
+            'Downloading ftp file: "%s" Target: %s', url_for_log(self.url), self.path
+        )
         basedir = os.path.dirname(self.path)
         if basedir and not os.path.exists(basedir):
             os.makedirs(basedir, exist_ok=True)
 
         return ftp_download_file(self.ftp_connection, self.url_path, self.path)
 
-    def delete(self):
+    def delete(self) -> None:
+        """Close the connection, if the transfer opened it."""
         if self.connection_owner:
             self.ftp_connection.close()
 
 
-def ftp_login(ftp_connection, netloc, netrc_file):
+def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
+    """Log in to an FTP server.
+
+    With the credentials for the host in `.netrc`, if it was read;
+    otherwise with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are
+    set. Without credentials, or if they are refused, anonymously.
+
+    Args:
+        ftp_connection: The connection.
+        netloc: The host (and port) of the server.
+        netrc_file: The `.netrc` file, if it was read.
+    """
     user = None
-    password=None
+    password: str | None = None
     if netrc_file is not None:
         creds = netrc_file.authenticators(netloc)
         if creds:
             user, _, password = creds
-    elif 'TESK_FTP_USERNAME' in os.environ and 'TESK_FTP_PASSWORD' in os.environ:
-        user = os.environ['TESK_FTP_USERNAME']
-        password = os.environ['TESK_FTP_PASSWORD']
+    elif "TESK_FTP_USERNAME" in os.environ and "TESK_FTP_PASSWORD" in os.environ:
+        user = os.environ["TESK_FTP_USERNAME"]
+        password = os.environ["TESK_FTP_PASSWORD"]
 
     if user:
         try:
-            ftp_connection.login(user, password)
+            ftp_connection.login(user, password or "")
         except ftplib.error_perm:
             ftp_connection.login()
     else:
         ftp_connection.login()
 
 
-def ftp_check_directory(ftp_connection, path):
-    """
-    Following convention with the rest of the code,
-    return 0 if it is a directory, 1 if it is not or failed to do the check
+def ftp_check_directory(ftp_connection: FTP, path: str) -> int:
+    """Check whether a remote path is a directory.
+
+    Following the convention of the rest of the code, an error code.
+
+    Args:
+        ftp_connection: The connection.
+        path: The remote path.
+
+    Returns:
+        0 if it is a directory, 1 if it is not or the check failed.
     """
     response = ftp_connection.pwd()
-    if response == '':
+    if response == "":
         return 1
     original_directory = response
 
@@ -307,59 +491,88 @@ def ftp_check_directory(ftp_connection, path):
         logging.error(
             'Path "%s" at "%s" already exists and is a folder. \
             Please specify a target filename and retry',
-            path, ftp_connection.host)
+            path,
+            ftp_connection.host,
+        )
         is_directory = True
     except ftplib.error_perm:
         is_directory = False
     except (ftplib.error_reply, ftplib.error_temp):
-        logging.exception('Could not check if path "%s" in "%s" is directory',
-                          path, ftp_connection.host)
+        logging.exception(
+            'Could not check if path "%s" in "%s" is directory',
+            path,
+            ftp_connection.host,
+        )
         return 1
     try:
         ftp_connection.cwd(original_directory)
     except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
         logging.exception(
             'Error when checking if "%s" in "%s" was a directory',
-            path, ftp_connection.host)
+            path,
+            ftp_connection.host,
+        )
         return 1
 
     return 0 if is_directory else 1
 
 
-def ftp_upload_file(ftp_connection, local_source_path,
-                    remote_destination_path):
+def ftp_upload_file(
+    ftp_connection: FTP, local_source_path: str, remote_destination_path: str
+) -> int:
+    """Upload a file.
+
+    Args:
+        ftp_connection: The connection.
+        local_source_path: The local file.
+        remote_destination_path: The remote path.
+
+    Returns:
+        0 on success, otherwise 1.
+    """
     try:
-        with open(local_source_path, 'r+b') as file:
+        with open(local_source_path, "r+b") as file:
             ftp_connection.storbinary("STOR /" + remote_destination_path, file)
     except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
         logging.exception(
             'Unable to upload file "%s" to "%s" as "%s"',
             local_source_path,
             ftp_connection.host,
-            remote_destination_path)
+            remote_destination_path,
+        )
         return 1
     return 0
 
 
-def ftp_download_file(ftp_connection, remote_source_path,
-                      local_destination_path):
+def ftp_download_file(
+    ftp_connection: FTP, remote_source_path: str, local_destination_path: str
+) -> int:
+    """Download a file.
+
+    Args:
+        ftp_connection: The connection.
+        remote_source_path: The remote path.
+        local_destination_path: The local file.
+
+    Returns:
+        0 on success, otherwise 1.
+    """
     try:
-        with open(local_destination_path, 'w+b') as file:
+        with open(local_destination_path, "w+b") as file:
             ftp_connection.retrbinary("RETR " + remote_source_path, file.write)
     except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
         logging.exception(
             'Unable to download file "%s" from "%s" as "%s"',
             remote_source_path,
             ftp_connection.host,
-            local_destination_path
+            local_destination_path,
         )
         return 1
     return 0
 
 
-def subfolders_in(whole_path):
-    """
-    Returns all subfolders in a path, in order
+def subfolders_in(whole_path: str) -> list[str]:
+    """Get all directories of a path, in order.
 
     >>> subfolders_in('/')
     ['/']
@@ -369,21 +582,36 @@ def subfolders_in(whole_path):
 
     >>> subfolders_in('this/is/a/path')
     ['this', 'this/is', 'this/is/a', 'this/is/a/path']
+
+    Args:
+        whole_path: The path.
+
+    Returns:
+        The path and each of its parents, shortest first.
     """
-    path_fragments = whole_path.lstrip('/').split('/')
-    if whole_path.startswith('/'):
-        path_fragments[0] = '/' + path_fragments[0]
+    path_fragments = whole_path.lstrip("/").split("/")
+    if whole_path.startswith("/"):
+        path_fragments[0] = "/" + path_fragments[0]
     path = path_fragments[0]
     subfolders = [path]
     for fragment in path_fragments[1:]:
-        path += '/' + fragment
+        path += "/" + fragment
         subfolders.append(path)
     return subfolders
 
 
-def ftp_make_dirs(ftp_connection, path):
+def ftp_make_dirs(ftp_connection: FTP, path: str) -> int:  # noqa: PLR0911
+    """Create a remote directory and its parents, unless it exists.
+
+    Args:
+        ftp_connection: The connection.
+        path: The remote directory.
+
+    Returns:
+        0 on success, otherwise 1.
+    """
     response = ftp_connection.pwd()
-    if response == '':
+    if response == "":
         return 1
     original_directory = response
 
@@ -394,8 +622,9 @@ def ftp_make_dirs(ftp_connection, path):
     except (ftplib.error_perm, ftplib.error_temp):
         pass
     except ftplib.error_reply:
-        logging.exception('Unable to create directory "%s" at "%s"',
-                          path, ftp_connection.host)
+        logging.exception(
+            'Unable to create directory "%s" at "%s"', path, ftp_connection.host
+        )
         return 1
 
     for subfolder in subfolders_in(path):
@@ -405,127 +634,160 @@ def ftp_make_dirs(ftp_connection, path):
             try:
                 ftp_connection.mkd(subfolder)
             except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
-                logging.exception('Unable to create directory "%s" at "%s"',
-                                  subfolder, ftp_connection.host)
+                logging.exception(
+                    'Unable to create directory "%s" at "%s"',
+                    subfolder,
+                    ftp_connection.host,
+                )
                 return 1
         except ftplib.error_reply:
-            logging.exception('Unable to create directory "%s" at "%s"',
-                              path, ftp_connection.host)
+            logging.exception(
+                'Unable to create directory "%s" at "%s"', path, ftp_connection.host
+            )
             return 1
 
     try:
         ftp_connection.cwd(original_directory)
     except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
-        logging.exception('Unable to create directory "%s" at "%s"',
-                          path, ftp_connection.host)
+        logging.exception(
+            'Unable to create directory "%s" at "%s"', path, ftp_connection.host
+        )
         return 1
     return 0
 
 
-def file_from_content(filedata):
-    with open(filedata['path'], 'w') as file:
-        file.write(str(filedata['content']))
+def file_from_content(filedata: dict[str, Any]) -> int:
+    """Write the `content` of an input to its `path`.
+
+    Args:
+        filedata: The input.
+
+    Returns:
+        0: errors are raised.
+    """
+    with open(filedata["path"], "w") as file:
+        file.write(str(filedata["content"]))
     return 0
 
 
+def newTransput(scheme: str, netloc: str) -> type[Transput]:
+    """Select the transfer class for a URL scheme.
 
-def newTransput(scheme, netloc):
-    def fileTransputIfEnabled():
+    Args:
+        scheme: The scheme of the URL.
+        netloc: The network location of the URL (unused).
 
+    Returns:
+        The transfer class.
+
+    Raises:
+        FileProtocolDisabled: `file:` URLs are used, but no shared volume is
+            configured.
+        UnknownProtocol: The scheme is not supported.
+    """
+
+    def fileTransputIfEnabled() -> type[Transput]:
         if fileEnabled():
             return FileTransput
-        else:
-            raise FileProtocolDisabled("'file:' protocol disabled\n"
-                                       "To enable it, both '{}' and '{}' environment variables must be defined."
-                                       .format('HOST_BASE_PATH',
-                                               'CONTAINER_BASE_PATH')
-                                       )
+        raise FileProtocolDisabled(
+            "'file:' protocol disabled\n"
+            "To enable it, both 'HOST_BASE_PATH' and 'CONTAINER_BASE_PATH' "
+            "environment variables must be defined."
+        )
 
-    if scheme == 'ftp':
+    if scheme == "ftp":
         return FTPTransput
-    elif scheme == 'file':
+    if scheme == "file":
         return fileTransputIfEnabled()
-    elif scheme in ['http', 'https']:
+    if scheme in ["http", "https"]:
         return HTTPTransput
-    elif scheme == 's3':
+    if scheme == "s3":
         return S3Transput
-    else:
-        raise UnknownProtocol("Unknown protocol: '{scheme}'".format(**locals()))
+    raise UnknownProtocol(f"Unknown protocol: '{scheme}'")
 
 
-def process_file(ttype, filedata):
-    '''
-    @param ttype: str
-           Can be 'inputs' or 'outputs'
-    '''
+def process_file(ttype: str, filedata: dict[str, Any]) -> int:
+    """Stage an input or output.
 
-    if 'content' in filedata:
+    Args:
+        ttype: `inputs` or `outputs`.
+        filedata: The input or output.
+
+    Returns:
+        0 on success, otherwise 1.
+    """
+    if "content" in filedata:
         return file_from_content(filedata)
-    parsed_url = urlparse(filedata['url'])
+    parsed_url = urlparse(filedata["url"])
     scheme = parsed_url.scheme
     netloc = parsed_url.netloc
-    if scheme == '':
-        logging.info('Could not determine protocol for url: "%s", assuming "file"',
-                     url_for_log(filedata['url']))
-        scheme='file'
+    if scheme == "":
+        logging.info(
+            'Could not determine protocol for url: "%s", assuming "file"',
+            url_for_log(filedata["url"]),
+        )
+        scheme = "file"
 
     trans = newTransput(scheme, netloc)
 
-    with trans(filedata['path'], filedata['url'],
-               Type(filedata['type'])) as transfer:
-        if ttype == 'inputs':
+    with trans(filedata["path"], filedata["url"], Type(filedata["type"])) as transfer:
+        if ttype == "inputs":
             return transfer.download()
-        if ttype == 'outputs':
+        if ttype == "outputs":
             return transfer.upload()
 
-    logging.info('There was no action to do with %s', filedata['path'])
+    logging.info("There was no action to do with %s", filedata["path"])
     return 0
 
 
-def logConfig(loglevel):
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s',
-                        datefmt='%m/%d/%Y %I:%M:%S',
-                        level=loglevel,
-                        stream=sys.stdout)
+def logConfig(loglevel: int) -> None:
+    """Configure logging to standard output.
+
+    Args:
+        loglevel: The log level.
+    """
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s: %(message)s",
+        datefmt="%m/%d/%Y %I:%M:%S",
+        level=loglevel,
+        stream=sys.stdout,
+    )
 
 
-def main():
+def main() -> int:
+    """Run the filer on the command line.
+
+    Returns:
+        The exit code: 0 on success, 1 if an input or output failed.
+    """
     parser = argparse.ArgumentParser(
-        description='Filer script for down- and uploading files')
+        description="Filer script for down- and uploading files"
+    )
     parser.add_argument(
-        'transputtype',
-        help='transput to handle, either \'inputs\' or \'outputs\' ')
-    parser.add_argument(
-        'data',
-        help='file description data, see docs for structure')
-    parser.add_argument(
-        '--debug',
-        '-d',
-        help='debug logging',
-        action='store_true')
+        "transputtype", help="transput to handle, either 'inputs' or 'outputs' "
+    )
+    parser.add_argument("data", help="file description data, see docs for structure")
+    parser.add_argument("--debug", "-d", help="debug logging", action="store_true")
     args = parser.parse_args()
 
-    if args.debug:
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.ERROR
+    loglevel = logging.DEBUG if args.debug else logging.ERROR
 
     logConfig(loglevel)
 
-    logging.info('Starting %s filer...', args.transputtype)
+    logging.info("Starting %s filer...", args.transputtype)
 
-    if args.data.endswith('.gz'):
-        with gzip.open(args.data, 'rb') as fh:
+    if args.data.endswith(".gz"):
+        with gzip.open(args.data, "rb") as fh:
             data = json.loads(fh.read())
     else:
         data = json.loads(args.data)
 
     for afile in data[args.transputtype]:
-        logging.debug('Processing file: %s', afile['path'])
+        logging.debug("Processing file: %s", afile["path"])
         if process_file(args.transputtype, afile):
-            logging.error('Unable to process file, aborting')
+            logging.error("Unable to process file, aborting")
             return 1
-        logging.debug('Processed file: %s', afile['path'])
+        logging.debug("Processed file: %s", afile["path"])
 
     return 0
 

@@ -1,24 +1,49 @@
-# Builder: produce wheels
+# The filer image. Build from the root of the repository, with its Git
+# history (for the version), e.g.:
+#   docker build --file containers/filer.Dockerfile --tag tesk-core-filer:local .
+# `taskmaster.Dockerfile` is the same but for the user and the entrypoint.
 
-FROM alpine:3.23 AS builder
+# uv, to export the locked requirements (`uv.lock`), build the wheel and
+# install both; mounted into the steps that use it only. Pinned by digest, as
+# the base image; Dependabot updates the tags and digests together
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
-RUN apk add --no-cache python3 py3-pip
-RUN apk add --no-cache git
-RUN python3 -m pip install --upgrade setuptools pip wheel build --break-system-packages
+# Builder: the wheel of the package, and the locked runtime requirements
+FROM alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad AS builder
+
+RUN apk add --no-cache python3 git
 
 WORKDIR /app/
 COPY . .
 
-RUN python3 -m build --wheel && rm -rf dist/*.tar.gz
+# The package version; by default derived from Git (`setuptools_scm`), set
+# by the release workflow to the release tag's
+ARG SETUPTOOLS_SCM_PRETEND_VERSION
+# The runtime dependencies (`project.dependencies`) at the versions of
+# `uv.lock`, with their hashes (`--frozen`: CI checks that the lock matches
+# `pyproject.toml`)
+RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
+  export UV_NO_CACHE=1 UV_PYTHON_DOWNLOADS=never \
+  && uv export --frozen --no-dev --no-emit-project \
+    --output-file /tmp/requirements.txt \
+  && uv build --wheel --python /usr/bin/python3 --out-dir /tmp/dist
 
-# Install: copy tesk-core*.whl and install it with dependencies
+# Install: the locked requirements, checked against their hashes, as wheels
+# only and without resolving anything else, then the package without its
+# dependencies, offline; then check that they meet each other's requirements
+FROM alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad
 
-FROM alpine:3.23
+RUN apk add --no-cache python3
 
-RUN apk add --no-cache python3 py3-pip
-
-COPY --from=builder /app/dist/tesk*.whl /root/
-RUN python3 -m pip install --disable-pip-version-check --no-cache-dir /root/tesk*.whl --break-system-packages
+RUN --mount=from=builder,source=/tmp,target=/tmp/build \
+  --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
+  export UV_NO_CACHE=1 UV_PYTHON_DOWNLOADS=never \
+  && uv pip install --system --break-system-packages --require-hashes \
+    --only-binary :all: --no-deps --compile-bytecode \
+    -r /tmp/build/requirements.txt \
+  && uv pip install --system --break-system-packages --offline --no-index \
+    --no-deps --compile-bytecode /tmp/build/dist/*.whl \
+  && uv pip check --system
 
 USER 100
 
