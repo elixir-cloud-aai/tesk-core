@@ -24,7 +24,7 @@ writes to `path`. The scheme of the URL selects the protocol.
 | Scheme | Inputs | Outputs |
 |---|---|---|
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
-| `ftp` | Files and directories | Files and directories (creating the remote directories) |
+| `ftp` | Files and directories (not empty ones) | Files and directories (not empty ones; creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
 | `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
 
@@ -40,10 +40,11 @@ reads for the URL's host.
 
 ### FTP
 
-The filer logs in with the credentials for the URL's host from the `.netrc`
-file, if one is mounted; otherwise with `TESK_FTP_USERNAME` and
-`TESK_FTP_PASSWORD`, if both are set; otherwise, or if the server refuses the
-credentials, anonymously. TESK's Helm chart sets the two variables from a
+If a `.netrc` file is mounted, the filer logs in with its credentials for
+the URL's host, or anonymously if it has none for that host. Without a
+`.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`,
+if both are set, and otherwise anonymously. If the server refuses the
+credentials, the filer logs in anonymously. TESK's Helm chart sets the two variables from a
 Kubernetes secret (`ftp.classic_ftp_secret`; see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
@@ -86,8 +87,9 @@ environment variables, which it passes on to the filer:
 | `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume. |
 | `TRANSFER_PVC_NAME` | Name of the PVC of the shared volume. |
 
-A URL `file:///<HOST_BASE_PATH>/a/b` refers to `<CONTAINER_BASE_PATH>/a/b`
-in the filer. TESK's Helm chart sets these with `transfer.active` (see
+A URL `file://<HOST_BASE_PATH>/a/b` refers to `<CONTAINER_BASE_PATH>/a/b`
+in the filer: with `HOST_BASE_PATH=/tmp` and `CONTAINER_BASE_PATH=/transfer`,
+`file:///tmp/a/b` is `/transfer/a/b`. TESK's Helm chart sets these with `transfer.active` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 

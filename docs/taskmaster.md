@@ -19,10 +19,12 @@ outputs, volumes and resources.
 3. If the task has inputs, outputs or volumes, it runs the filer again
    (`<task>-outputs-filer`) to upload the outputs, then deletes the PVC.
 
-The taskmaster polls each job until it completes. If a job fails, or a pod
-of it can't pull its image for longer than `--pod-timeout`, the taskmaster
-stops, and the task fails; it deletes an executor's job that ended in an
-error, but not the PVC. To cancel a task, the TESK API labels the
+The taskmaster polls each job until it completes. If a job doesn't complete,
+or a pod of it can't pull its image (`ImagePullBackOff`) for longer than
+`--pod-timeout`, the taskmaster stops without running the remaining jobs. It
+deletes an executor's job with the status `Error` (not one that `Failed`),
+but not the PVC, and exits with code 0 in either case. Pods that stay
+pending for other reasons don't time out. To cancel a task, the TESK API labels the
 taskmaster's pod: the taskmaster reads its labels from `/podinfo/labels` (a
 Kubernetes downward API volume) while it polls, and when it finds the value
 `Cancelled`, it deletes the running job and stops.
