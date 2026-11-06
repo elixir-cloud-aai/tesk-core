@@ -83,7 +83,7 @@ environment variables, which it passes on to the filer:
 
 | Variable | Description |
 |---|---|
-| `HOST_BASE_PATH` | Base path of the shared volume in the URLs. Every `file:` URL must be below it. |
+| `HOST_BASE_PATH` | Base path of the shared volume in the URLs. The path of every `file:` URL must be absolute and, after resolving `..` segments, be this path or below it, e.g. `/tmp/a` for `/tmp`, but not `/tmp2/a` or `/tmp/../a`. |
 | `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume. |
 | `TRANSFER_PVC_NAME` | Name of the PVC of the shared volume. |
 

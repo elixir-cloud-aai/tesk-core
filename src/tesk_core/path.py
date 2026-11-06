@@ -46,10 +46,18 @@ def getPath(url):
     
 def isDescendant(base, path):
     '''
-    Is 'path' is a descendant of 'base'?
+    Is 'path' 'base' or a path below it?
+
+    'path' is normalised first (e.g. '..' segments are resolved), and the
+    paths are compared by components, so that '/tmp2' is not below '/tmp'.
+    Relative paths are never below 'base'. 'base' is assumed to be
+    normalised (see 'getPathEnv').
     '''
-    
-    return os.path.commonprefix([base, path]) == base
+
+    if not os.path.isabs(path):
+        return False
+
+    return os.path.commonpath([base, os.path.normpath(path)]) == base
 
 
 def validatePath(path):
@@ -67,7 +75,7 @@ def containerPath(path):
     
     relPath = relpath(path, HOST_BASE_PATH)
     
-    return os.path.join(CONTAINER_BASE_PATH, relPath)
+    return os.path.normpath(os.path.join(CONTAINER_BASE_PATH, relPath))
     
     
 
