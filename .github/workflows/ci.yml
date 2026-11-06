@@ -13,6 +13,7 @@
 # Runs also when a pull request is edited, so that the title check follows
 # the title; all jobs run then, as a run that skipped the tests would report
 # "CI passed" for the commit
+
 name: CI
 on:
   push:
