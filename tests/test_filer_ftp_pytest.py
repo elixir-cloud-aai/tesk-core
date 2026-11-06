@@ -81,16 +81,18 @@ def test_ftp_download_file_success(mocker, caplog):
         # assert os.path.exists('test_copy.py')
 
 
-def test_ftp_upload_dir(mocker, fs, ftpserver):
+def test_ftp_upload_dir(mocker, tmp_path, ftpserver):
     """ Check whether the upload of a directory through FTP completes
         successfully. """
 
-    # Fake local nested directories with files
-    fs.create_dir('dir1')
-    fs.create_dir('dir1/dir2')
-    fs.create_file('dir1/file1', contents="this is random")
-    fs.create_file('dir1/dir2/file2', contents="not really")
-    fs.create_file('dir1/dir2/file4.txt', contents="took me a while")
+    # Local nested directories with files, on the real file system and with
+    # an absolute path: the FTP server runs in a thread of this process, so a
+    # fake file system (pyfakefs) would hide its home directory from it, and
+    # it changes the working directory of the process
+    (tmp_path / 'dir1' / 'dir2').mkdir(parents=True)
+    (tmp_path / 'dir1' / 'file1').write_text("this is random")
+    (tmp_path / 'dir1' / 'dir2' / 'file2').write_text("not really")
+    (tmp_path / 'dir1' / 'dir2' / 'file4.txt').write_text("took me a while")
 
     login_dict = ftpserver.get_login_data()
 
@@ -112,7 +114,7 @@ def test_ftp_upload_dir(mocker, fs, ftpserver):
     mock_storbinary = mocker.patch('ftplib.FTP.storbinary')
 
     ftp_obj = FTPTransput(
-        "dir1",
+        str(tmp_path / 'dir1'),
         "ftp://" + login_dict['host'] + "/dir1",
         Type.Directory,
         ftp_conn=conn
