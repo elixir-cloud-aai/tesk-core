@@ -3,23 +3,21 @@ version: 2
 # whatever the default branch is (`main` only moves forward to releases);
 # security updates always target the default branch, though
 updates:
-  # Dependencies of the package (`setup.py`)
-  - package-ecosystem: pip
+  # Dependencies in `pyproject.toml` and the lock (`uv.lock`), updated
+  # together; the images install the locked runtime dependencies
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: monthly
     target-branch: dev
+    versioning-strategy: increase-if-necessary
     groups:
-      python-dependencies:
-        patterns: ["*"]
-  # Dependencies of the docs (`docs/requirements.txt`)
-  - package-ecosystem: pip
-    directory: /docs
-    schedule:
-      interval: monthly
-    target-branch: dev
-    groups:
+      # Dependencies of the documentation (the `docs` extra), in pull
+      # requests of their own
       docs-dependencies:
+        patterns: ["mkdocs", "mkdocs-*", "pymdown-extensions"]
+      # Dependencies match the first group listed
+      python-dependencies:
         patterns: ["*"]
   # Actions in the workflows, including the pins of the shared actions of
   # `elixir-cloud-aai/.github` (to the commits of its releases,
@@ -32,8 +30,8 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
-  # Base images of the taskmaster and filer images
-  # (`containers/*.Dockerfile`)
+  # Images in `containers/*.Dockerfile`, the base image and uv (tag and
+  # digest)
   - package-ecosystem: docker
     directory: /containers
     schedule:
@@ -41,4 +39,13 @@ updates:
     target-branch: dev
     groups:
       docker:
+        patterns: ["*"]
+  # Hook revisions in `.pre-commit-config.yaml`
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: monthly
+    target-branch: dev
+    groups:
+      pre-commit:
         patterns: ["*"]
