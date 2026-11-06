@@ -9,6 +9,10 @@ RUN python3 -m pip install --upgrade setuptools pip wheel build --break-system-p
 WORKDIR /app/
 COPY . .
 
+# The package version; by default derived from Git (`setuptools_scm`), set
+# by the release workflow to the release tag's
+ARG SETUPTOOLS_SCM_PRETEND_VERSION
+
 RUN python3 -m build --wheel && rm -rf dist/*.tar.gz
 
 # Install: copy tesk-core*.whl and install it with dependencies

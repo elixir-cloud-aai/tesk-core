@@ -82,8 +82,9 @@ as `<org>/tesk-core-taskmaster` and `<org>/tesk-core-filer`:
 
 The image tags have no `v`, as those of tesk-api; the old tag workflows
 published `vX.Y.Z` (up to `v0.10.6`), so set the new form in TESK's Helm
-chart when moving to a new release. The package version is derived from the
-tag (`setuptools_scm`). Before tagging, set the release in a pull request:
+chart when moving to a new release. The package version in the images is
+the tag's (without `v`; checked in the images). Before tagging, set the
+release in a pull request:
 
 - `CITATION.cff`: `version`, the tag without `v` (e.g., `0.11.0rc1` for
   `v0.11.0rc1`), and `date-released`.
@@ -103,6 +104,9 @@ digest: if a release fails after publishing, follow it with a higher version
 (`latest` goes by tags). Only admins can create release tags, and nobody can
 move or delete them (tag rulesets). The workflow doesn't create a GitHub
 release; write its notes in the format of the organisation's other repos.
+
+After the first release of this workflow, drop `fail: "false"` in
+`.github/workflows/scan.yml`, and the note on it above.
 
 ## Docs
 

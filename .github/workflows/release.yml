@@ -1,13 +1,14 @@
 # Release when a version tag (`vX.Y.Z`, or `vX.Y.ZaN`, `vX.Y.ZbN`, `vX.Y.ZrcN`
-# for pre-releases) is pushed, as tesk-api does: check the tag (signed,
-# annotated, on `main`), the version in `CITATION.cff`, and that CI passed for
+# for pre-releases) is pushed: check the tag (signed, annotated, on
+# `main`), the version in `CITATION.cff`, and that CI passed for
 # its commit (`prepare`); build the taskmaster and filer images and push each by
 # digest, untagged (`push`); scan exactly those digests in a job of their own,
 # without the release credentials and signing identity (`scan`); and only then
 # attest their build provenance, sign them (Sigstore keyless signing) and tag
 # them `X.Y.Z` (and `latest`, for the highest stable release; `publish`). Tags
-# of other releases are never touched. The package version is derived from the
-# tag (`setuptools_scm`), so no file but `CITATION.cff` has to be set. See
+# of other releases are never touched. The package version is the tag's,
+# passed to the image builds (`SETUPTOOLS_SCM_PRETEND_VERSION`) and checked in
+# the images by `scan`, so no file but `CITATION.cff` has to be set. See
 # "Versioning and releases" in `docs/development.md`.
 #
 # `push` and `publish` each need approval in the `release` environment
@@ -155,9 +156,6 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.prepare.outputs.sha }}
-          # Full history and tags: the image build derives the package version
-          # from the release tag (`setuptools_scm`)
-          fetch-depth: 0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # OCI labels with the version, commit and source; `tags` only sets the
@@ -185,6 +183,9 @@ jobs:
           sbom: true
           provenance: mode=max
           labels: ${{ steps.meta.outputs.labels }}
+          # The package version is the tag's, whatever `git describe` would
+          # find (e.g., another tag on the same commit)
+          build-args: SETUPTOOLS_SCM_PRETEND_VERSION=${{ needs.prepare.outputs.version }}
       - name: Save image digest
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
@@ -245,6 +246,19 @@ jobs:
           image: ${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}
           category: release-${{ matrix.image }}
           upload: "false"
+      # The package in the image has the release version (PEP 440, as the
+      # tag without `v`)
+      - name: Check package version
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          actual="$(docker run --rm --entrypoint python3 "${IMAGE}" \
+              -c 'import importlib.metadata as m; print(m.version("teskcore"))')"
+          if [[ "${actual}" != "${VERSION}" ]]; then
+              echo "::error::Package version in the image is '${actual}', expected '${VERSION}'"
+              exit 1
+          fi
 
   publish:
     name: Publish release image (${{ matrix.image }})
@@ -257,10 +271,10 @@ jobs:
       id-token: write # Sigstore signing certificates
       attestations: write # GitHub artifact attestations
     strategy:
-      # A failed image cancels the other one where it can, so that both
-      # images of a release are published together where possible; re-run
-      # the failed jobs to publish the rest (published versions never change)
-      fail-fast: true
+      # A failed image doesn't cancel the other one, which could only be cut
+      # off between its tags (e.g., `X.Y.Z` without `latest`); re-run the
+      # failed jobs to publish the rest (published versions never change)
+      fail-fast: false
       matrix:
         image: [taskmaster, filer]
     # One release at a time per image, so that `latest` is decided and written
