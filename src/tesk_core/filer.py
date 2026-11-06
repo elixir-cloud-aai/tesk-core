@@ -16,7 +16,7 @@ import shutil
 from glob import glob
 from urllib.parse import quote, urlsplit, urlunsplit
 from tesk_core.path import containerPath, getPath, fileEnabled
-from tesk_core.transput import Type, Transput, urlparse
+from tesk_core.transput import Type, Transput, urlparse, url_for_log
 from tesk_core.filer_s3 import S3Transput
 
 
@@ -86,7 +86,7 @@ class HTTPTransput(Transput):
     def download_dir(self):
         logging.error(
             'Won\'t crawl http directory, so unable to download url: %s',
-            self.url)
+            url_for_log(self.url))
         return 1
 
 
@@ -177,7 +177,7 @@ class FTPTransput(Transput):
             else:
                 logging.error(
                     'Directory listing in is neither file nor directory: "%s"',
-                    file_url
+                    url_for_log(file_url)
                 )
                 return 1
 
@@ -196,7 +196,7 @@ class FTPTransput(Transput):
         if error:
             logging.error(
                 'Unable to create remote directories needed for %s',
-                self.url
+                url_for_log(self.url)
             )
             return 1
 
@@ -206,7 +206,8 @@ class FTPTransput(Transput):
         return ftp_upload_file(self.ftp_connection, self.path, self.url_path)
 
     def download_dir(self):
-        logging.debug('Processing ftp dir: %s target: %s', self.url, self.path)
+        logging.debug('Processing ftp dir: %s target: %s',
+                      url_for_log(self.url), self.path)
         self.ftp_connection.cwd(self.url_path)
 
         # This is horrible and I'm sorry but it works flawlessly.
@@ -241,8 +242,8 @@ class FTPTransput(Transput):
         return 0
 
     def download_file(self):
-        logging.debug('Downloading ftp file: "%s" Target: %s', self.url,
-                      self.path)
+        logging.debug('Downloading ftp file: "%s" Target: %s',
+                      url_for_log(self.url), self.path)
         basedir = os.path.dirname(self.path)
         if basedir and not os.path.exists(basedir):
             os.makedirs(basedir, exist_ok=True)
@@ -449,7 +450,8 @@ def process_file(ttype, filedata):
     scheme = parsed_url.scheme
     netloc = parsed_url.netloc
     if scheme == '':
-        logging.info('Could not determine protocol for url: "%s", assuming "file"', filedata['url'])
+        logging.info('Could not determine protocol for url: "%s", assuming "file"',
+                     url_for_log(filedata['url']))
         scheme='file'
 
     trans = newTransput(scheme, netloc)

@@ -13,7 +13,8 @@ filer [-d] {inputs|outputs} DATA
 taskmaster passes `/jsoninput/JSON_INPUT.gz`, from a ConfigMap, or the JSON
 in the environment variable `JSON_INPUT`). The filer processes the entries of
 `inputs` or `outputs` one after another, and stops with exit code 1 at the
-first that fails. `-d` turns on debug logging.
+first that fails. `-d` turns on debug logging. Log messages show URLs
+without their query strings (e.g. the parameters of a presigned URL).
 
 Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
