@@ -34,9 +34,9 @@ writes to `path`. The scheme of the URL selects the protocol.
 ### HTTP(S)
 
 Inputs are downloaded with `GET`. Outputs are uploaded with `PUT`, as bytes,
-streamed from disk: a directory is uploaded file by file, each to the
-directory's URL plus the escaped file name (the query of the URL, e.g. a
-token of a presigned URL, is kept). Any status other than 2xx fails the
+streamed from disk: a directory is uploaded file by file (stopping at the
+first that fails), each to the directory's URL plus the escaped file name
+(the query of the URL, e.g. a token of a presigned URL, is kept). Any status other than 2xx fails the
 transfer, as does a request error (e.g. a failed connection), which is logged
 with its type. Credentials can come from a `.netrc` file (see
 [Credentials from `.netrc`](#credentials-from-netrc)), which `requests`

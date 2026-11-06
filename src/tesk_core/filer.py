@@ -92,8 +92,11 @@ class HTTPTransput(Transput):
             to_upload.append(
                 HTTPTransput(file_path, http_join(self.url, listing), ftype))
 
-        # return 1 if any upload failed
-        return min(sum([transput.upload() for transput in to_upload]), 1)
+        # Stop at the first upload that fails, as for the entries of a task
+        for transput in to_upload:
+            if transput.upload():
+                return 1
+        return 0
 
     def download_dir(self):
         logging.error(
