@@ -8,7 +8,7 @@ HERE = path.abspath(path.dirname(__file__))
 with codecs.open(path.join(HERE, 'README.md'), encoding='utf-8') as f:
     LONG_DESC = f.read()
 
-INSTALL_DEPS = ['kubernetes==35.0.0',
+INSTALL_DEPS = ['kubernetes==37.0.1',
                 'requests>=2.20.0',
 
                 'urllib3>=2.6.0,<3.0 ; python_version >= "3.10"',
@@ -19,7 +19,7 @@ TEST_DEPS = [ 'pytest',
             'pyfakefs',
             'pytest-mock',
             'fsspec',
-            'moto<5',
+            'moto<6',
             'pytest-localftpserver'
             ]
 
