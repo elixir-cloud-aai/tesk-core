@@ -374,16 +374,21 @@ jobs:
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
         run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
-      # Tags `dev` and `sha-<commit>` (never `latest`, which is for releases)
-      # point to the scanned and signed digest: a single source is copied as
-      # is
+      # Tags `sha-<commit>` and then `dev` (never `latest`, which is for
+      # releases) point to the scanned and signed digest: a single source is
+      # copied as is. `dev` comes last, so that a failure leaves it at the
+      # previous image, and only if the commit is still the branch head (it
+      # may have moved on while signing)
       - name: Tag image
         if: steps.head.outputs.current == 'true'
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
         run: |
-          for tag in "${IMAGE_NAME}:dev" "${IMAGE_NAME}:sha-${SHA}"; do
+          tag_image() {
+            local tag="$1" actual
             docker buildx imagetools create --tag "${tag}" "${IMAGE_NAME}@${DIGEST}"
             actual="$(docker buildx imagetools inspect "${tag}" \
               --format '{{ json .Manifest }}' | jq -r .digest)"
@@ -391,7 +396,15 @@ jobs:
               echo "::error::${tag} points to ${actual}, expected ${DIGEST}"
               exit 1
             fi
-          done
+          }
+          tag_image "${IMAGE_NAME}:sha-${SHA}"
+          head=$(git ls-remote "https://github.com/${REPOSITORY}.git" "${REF}" | cut -f1)
+          [ -n "${head}" ] || { echo "::error::Could not look up ${REF}"; exit 1; }
+          if [ "${head}" != "${SHA}" ]; then
+            echo "::notice::Not tagging dev: ${REF} has moved on to ${head}"
+            exit 0
+          fi
+          tag_image "${IMAGE_NAME}:dev"
 
   # The only required check: passes if every other job passed, or was skipped
   # where that is intended: `title` (pushes, Dependabot), `push` and `publish`

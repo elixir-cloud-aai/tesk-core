@@ -39,7 +39,7 @@ uv install tox
 To install different python versions using `uv`, you can type:
 
 ```
-uv python install 3.10 3.11 3.12
+uv python install 3.10 3.11 3.12 3.13
 ```
 
 This software will take care of creating virtual environments and installing dependencies in them before running the actual tests and generating the coverage reports.
