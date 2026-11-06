@@ -59,6 +59,51 @@ both images by digest, scan exactly those digests, then attest, sign
 upload coverage with `CODECOV_TOKEN`). A fork publishes to its own Docker
 Hub organization if it sets the variable `DOCKERHUB_ORG`.
 
+The workflow `Scan` (`.github/workflows/scan.yml`) scans the `latest` images
+weekly, so that vulnerabilities found after a release are reported to code
+scanning, with a full report as a workflow artifact. Until the first release
+of the release workflow below, `latest` is still the image of v0.10.6 from
+the old tag workflows, and the scan only reports; after that release, it
+fails on critical and high vulnerabilities that have a fix.
+
+## Versioning and releases
+
+Pull requests go to `dev` (squash merges; titles in the [Conventional
+Commits](https://www.conventionalcommits.org/) format, at most 50
+characters). For a release, `main` is moved forward to a commit of `dev`.
+Pushing a signed, annotated version tag runs the workflow `Release`
+(`.github/workflows/release.yml`), which publishes both images to Docker Hub,
+as `<org>/tesk-core-taskmaster` and `<org>/tesk-core-filer`:
+
+| Tag | Image tags | Example |
+|---|---|---|
+| `vX.Y.Z` | `X.Y.Z`, and `latest` if it is the highest release on `main` | `v0.11.0` publishes `0.11.0` |
+| `vX.Y.ZrcN` (also `aN`, `bN`) | `X.Y.ZrcN` only | `v0.11.0rc1` publishes `0.11.0rc1` |
+
+The image tags have no `v`, as those of tesk-api; the old tag workflows
+published `vX.Y.Z` (up to `v0.10.6`), so set the new form in TESK's Helm
+chart when moving to a new release. The package version is derived from the
+tag (`setuptools_scm`). Before tagging, set the release in a pull request:
+
+- `CITATION.cff`: `version`, the tag without `v` (e.g., `0.11.0rc1` for
+  `v0.11.0rc1`), and `date-released`.
+
+The release workflow first checks, without running any code of the tagged
+commit, that the tag is a release version, annotated and signed (with a
+signature that GitHub verified), and on `main`; then that `CITATION.cff` has
+the version and that CI passed for the commit's push to `dev`. It then builds
+both images and pushes them by digest, untagged; scans exactly those digests
+(failing on critical and high vulnerabilities that have a fix, except those
+accepted in `.trivyignore.yaml`), in a job without credentials; and only then
+attests their build provenance, signs them (Sigstore) and tags them. Pushing
+and publishing each wait for an approval in the environment `release`, which
+only allows `v*` tags and has the secrets `DOCKERHUB_LOGIN` and
+`DOCKERHUB_TOKEN`. A version that is published never moves to another
+digest: if a release fails after publishing, follow it with a higher version
+(`latest` goes by tags). Only admins can create release tags, and nobody can
+move or delete them (tag rulesets). The workflow doesn't create a GitHub
+release; write its notes in the format of the organisation's other repos.
+
 ## Docs
 
 These docs are Markdown pages in `docs/`, built with MkDocs and the Material
