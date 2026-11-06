@@ -1,5 +1,5 @@
-[![Build Status](https://travis-ci.org/EMBL-EBI-TSI/tesk-core.svg?branch=master)](https://travis-ci.org/EMBL-EBI-TSI/tesk-core)
-[![codecov](https://codecov.io/gh/EMBL-EBI-TSI/tesk-core/branch/master/graph/badge.svg)](https://codecov.io/gh/EMBL-EBI-TSI/tesk-core)
+[![CI](https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/elixir-cloud-aai/tesk-core/branch/dev/graph/badge.svg)](https://codecov.io/gh/elixir-cloud-aai/tesk-core)
 
 ## Introduction
 
@@ -47,3 +47,15 @@ This software will take care of creating virtual environments and installing dep
 ```
 $ uv run tox
 ```
+
+## Continuous integration
+
+The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
+`dev` and every push to it: the pull request title, lint (the workflows, and
+pylint for errors), the tests on Python 3.10 to 3.13 (coverage to Codecov),
+and a vulnerability scan (Trivy) of the taskmaster and filer images. Its job
+`CI passed` is the only required check. On pushes to `dev`, the images are
+pushed, scanned, signed and tagged `dev` and `sha-<commit>`:
+`docker.io/elixircloud/tesk-core-taskmaster` and
+`docker.io/elixircloud/tesk-core-filer`. Accepted vulnerabilities are listed
+in `.trivyignore.yaml`, with a reason and an expiry date.

@@ -3,3 +3,7 @@
 .tox/
 .eggs/
 tesk-core/containers/
+# Secrets never go into the images
+.env
+.env.*
+!.env.example
