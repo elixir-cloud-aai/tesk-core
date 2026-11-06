@@ -67,7 +67,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          if [[ ! "${TAG}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)((a|b|rc)[0-9]+)?$ ]]; then
+          # Canonical numbers only (no leading zeros), which PEP 440 keeps
+          # as they are, so that the package version equals the tag's
+          n='(0|[1-9][0-9]*)'
+          if [[ ! "${TAG}" =~ ^v${n}\.${n}\.${n}((a|b|rc)${n})?$ ]]; then
               echo "::error::Tag '${TAG}' is not a release version (vX.Y.Z, or vX.Y.ZaN, vX.Y.ZbN, vX.Y.ZrcN for pre-releases)"
               exit 1
           fi

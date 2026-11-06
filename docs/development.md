@@ -19,6 +19,9 @@ docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:
 docker build --file containers/filer.Dockerfile --tag tesk-core-filer:local .
 ```
 
+Without the Git history, set the version with `--build-arg
+SETUPTOOLS_SCM_PRETEND_VERSION=<version>`, as the release workflow does.
+
 To try them in a TESK deployment, push them to a registry that the cluster
 can pull from, and set the image names and tags in TESK's Helm chart (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
