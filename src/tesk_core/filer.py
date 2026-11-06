@@ -37,8 +37,17 @@ class HTTPTransput(Transput):
     def __init__(self, path, url, ftype):
         Transput.__init__(self, path, url, ftype)
 
+    def _request_failed(self, err):
+        # The message of a requests exception contains the full URL, so log
+        # only its type and the URL as in other log messages
+        logging.error('%s for %s', type(err).__name__, url_for_log(self.url))
+        return 1
+
     def download_file(self):
-        req = requests.get(self.url)
+        try:
+            req = requests.get(self.url)
+        except requests.exceptions.RequestException as err:
+            return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)
@@ -57,7 +66,10 @@ class HTTPTransput(Transput):
         # which presigned upload URLs such as S3's reject.
         with open(self.path, 'rb') as file:
             data = file if os.fstat(file.fileno()).st_size > 0 else b''
-            req = requests.put(self.url, data=data)
+            try:
+                req = requests.put(self.url, data=data)
+            except requests.exceptions.RequestException as err:
+                return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)

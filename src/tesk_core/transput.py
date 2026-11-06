@@ -2,19 +2,22 @@ import enum
 import os
 import netrc
 import logging
+from urllib.parse import urlsplit, urlunsplit
 try:
-    from urllib.parse import urlparse, urlsplit, urlunsplit
+    from urllib.parse import urlparse
 except ImportError:
-    from urlparse import urlparse, urlsplit, urlunsplit
+    from urlparse import urlparse
 
 
 def url_for_log(url):
     '''
-    Returns 'url' without its query string, for log messages (e.g. the
-    parameters of a presigned URL are left out).
+    Returns 'url' without its query string and user info, for log messages
+    (e.g. the parameters of a presigned URL are left out).
     '''
 
-    return urlunsplit(urlsplit(url)._replace(query=''))
+    parts = urlsplit(url)
+    netloc = parts.netloc.rpartition('@')[2]
+    return urlunsplit(parts._replace(netloc=netloc, query=''))
 
 
 @enum.unique

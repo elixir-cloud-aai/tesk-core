@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from requests import Response
+from requests.exceptions import ConnectionError  # pylint: disable=redefined-builtin
 
 from tesk_core.filer import FTPTransput, HTTPTransput, Type, process_file
 from tesk_core.transput import url_for_log
@@ -17,11 +18,14 @@ URL = 'https://example.org/bucket/a.txt?' + QUERY
     ('https://example.org/a?b=c#d', 'https://example.org/a#d'),
     ('https://example.org/a', 'https://example.org/a'),
     ('ftp://example.org/dir/', 'ftp://example.org/dir/'),
+    ('ftp://user:pw@example.org:21/d?x', 'ftp://example.org:21/d'),
+    ('https://user@example.org/a', 'https://example.org/a'),
     ('/tmp/a?b', '/tmp/a'),
     ('', ''),
 ])
 def test_url_for_log(url, expected):
-    """The query string is removed, everything else is kept."""
+    """The query string and user info are removed, everything else is
+    kept."""
 
     assert url_for_log(url) == expected
 
@@ -59,6 +63,24 @@ def test_http_upload_dir_logs_no_query(mocker, tmp_path, caplog):
     assert QUERY not in caplog.text
 
 
+@pytest.mark.parametrize('method', ['get', 'put'])
+def test_http_request_error_logs_no_query(mocker, tmp_path, caplog, method):
+    """Request errors, whose messages contain the full URL, fail the transfer
+    and log the URL without its query string."""
+
+    path = tmp_path / 'a.txt'
+    path.write_text('x')
+    mocker.patch('requests.' + method, side_effect=ConnectionError(
+        'Max retries exceeded with url: /bucket/a.txt?' + QUERY))
+    caplog.set_level(logging.DEBUG)
+    transput = HTTPTransput(str(path), URL, Type.File)
+    result = transput.download() if method == 'get' else transput.upload()
+
+    assert result == 1
+    assert 'ConnectionError for https://example.org/bucket/a.txt' in caplog.text
+    assert QUERY not in caplog.text
+
+
 def test_http_download_dir_logs_no_query(tmp_path, caplog):
     """The error for HTTP directory inputs logs the URL without its query
     string."""
@@ -84,6 +106,32 @@ def test_ftp_logs_no_query(mocker, tmp_path, caplog):
         transput.upload()
 
     assert 'ftp://example.org/dir' in caplog.text
+    assert QUERY not in caplog.text
+
+
+def test_ftp_dir_logs_no_query(mocker, tmp_path, caplog):
+    """FTP directory transfers, also of the entries of a directory, log URLs
+    without their query strings."""
+
+    conn = mocker.MagicMock()
+    conn.retrlines.side_effect = lambda cmd, callback: callback(
+        '-rw-r--r--    1 ftp      ftp            1 Jan 01  2024 f.txt')
+    mocker.patch('tesk_core.filer.ftp_download_file', return_value=0)
+    caplog.set_level(logging.DEBUG)
+    url = 'ftp://example.org/dir?' + QUERY
+    with FTPTransput(str(tmp_path / 'd'), url, Type.Directory,
+                     conn) as transput:
+        assert transput.download() == 0
+
+    (tmp_path / 'up').mkdir()
+    (tmp_path / 'up' / 'other').touch()
+    mocker.patch('os.path.isfile', return_value=False)
+    with FTPTransput(str(tmp_path / 'up'), url, Type.Directory,
+                     conn) as transput:
+        assert transput.upload() == 1
+
+    assert 'Processing ftp dir: ftp://example.org/dir ' in caplog.text
+    assert 'neither file nor directory' in caplog.text
     assert QUERY not in caplog.text
 
 

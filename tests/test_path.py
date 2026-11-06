@@ -47,6 +47,21 @@ def test_isDescendant_outside(path):
     assert not isDescendant(BASE, path)
 
 
+def test_isDescendant_double_slash_base():
+    """A base path with a leading `//` matches the same paths as with `/`."""
+
+    assert isDescendant('//tmp', '/tmp/a')
+    assert isDescendant('//tmp', '//tmp/a')
+    assert not isDescendant('//tmp', '/tmp2/a')
+
+
+def test_isDescendant_relative_base():
+    """Nothing is below a relative base path."""
+
+    assert not isDescendant('tmp', '/tmp/a')
+    assert not isDescendant('tmp', 'tmp/a')
+
+
 def test_isDescendant_root_base():
     """With `/` as the base path, every absolute path is a descendant."""
 

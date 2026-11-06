@@ -50,14 +50,17 @@ def isDescendant(base, path):
 
     'path' is normalised first (e.g. '..' segments are resolved), and the
     paths are compared by components, so that '/tmp2' is not below '/tmp'.
-    Relative paths are never below 'base'. 'base' is assumed to be
-    normalised (see 'getPathEnv').
+    'base' must be absolute: relative paths are never below it, and nothing
+    is below a relative 'base'.
     '''
 
-    if not os.path.isabs(path):
+    if not (os.path.isabs(base) and os.path.isabs(path)):
         return False
 
-    return os.path.commonpath([base, os.path.normpath(path)]) == base
+    # 'commonpath' of 'base' alone normalises it the same way (e.g. a
+    # leading '//', which 'normpath' keeps)
+    return (os.path.commonpath([base, os.path.normpath(path)])
+            == os.path.commonpath([base]))
 
 
 def validatePath(path):
