@@ -8,6 +8,12 @@ It contains the code needed to generate 2 types of agents that reside in kuberne
 * The taskmaster, which spins up the containers needed to complete tasks as defined by TESK
 * The filer, which populates volumes and input files and uploads output files
 
+## Documentation
+
+The docs in `docs/` cover the taskmaster, the filer and development. They
+are published as the section "tesk-core" of the
+[TESK documentation](https://tesk.readthedocs.io/).
+
 ## How to use
 
 Since the code is meant to be in kubernetes pods, the code needs to be packaged into containers.
