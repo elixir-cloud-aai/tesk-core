@@ -1,9 +1,9 @@
 # Everything that must pass on pull requests and pushes to `dev`: the pull
-# request title, lint, the tests, scan the taskmaster and filer images for
-# known vulnerabilities, and, on pushes, push each image by digest (with SBOM
-# and provenance attestations), scan exactly that digest, then attest, sign
-# (Sigstore) and tag it `dev` and `sha-<commit>`. Forks, which have none of
-# the secrets, run the same checks without these side effects and without
+# request title, lint, the tests, a scan of the taskmaster and filer images
+# for known vulnerabilities, and, on pushes, push each image by digest (with
+# SBOM and provenance attestations), scan exactly that digest, then attest,
+# sign (Sigstore) and tag it `dev` and `sha-<commit>`. Forks, which have none
+# of the secrets, run the same checks without these side effects and without
 # uploads to code scanning (as for pull requests from forks), unless they set
 # the repository variable `DOCKERHUB_ORG` to publish to their own
 # organization. `github.repository_owner == 'elixir-cloud-aai'` marks runs of
@@ -13,7 +13,6 @@
 # pull request is edited, so that the title check follows the title; all jobs
 # run then, as a run that skipped the tests would report "CI passed" for the
 # commit
-
 name: CI
 on:
   push:
@@ -126,7 +125,7 @@ jobs:
       - name: Calculate test coverage
         run: |
           coverage run --source=tesk_core -m pytest tests
-          coverage report
+          coverage report -m
           coverage xml
       # Upload errors fail pushes to this repository only, because forks,
       # pull requests from forks and Dependabot get no access to the Codecov
@@ -300,11 +299,17 @@ jobs:
       id-token: write # Sigstore signing certificates
       attestations: write # GitHub artifact attestations
     strategy:
-      fail-fast: false
+      # A failed image cancels the other one where it can, so that the `dev`
+      # tags of both images move together where possible. They can still
+      # point to different commits for a while, e.g. if the branch moves on
+      # between the two head checks, until the next push publishes both
+      fail-fast: true
       matrix:
         image: [taskmaster, filer]
     # Publish one image of a kind at a time, and only for the newest commit on
-    # the branch, so that an older run cannot overwrite `dev` with older code
+    # the branch, so that an older run cannot overwrite `dev` with older code.
+    # GitHub keeps one pending job per group: a newer one cancels it, so that
+    # rapid pushes to `dev` can fail the gate of a skipped intermediate commit
     concurrency:
       group: ${{ github.workflow }}-publish-${{ matrix.image }}-${{ github.ref }}
       cancel-in-progress: false

@@ -58,4 +58,12 @@ and a vulnerability scan (Trivy) of the taskmaster and filer images. Its job
 pushed, scanned, signed and tagged `dev` and `sha-<commit>`:
 `docker.io/elixircloud/tesk-core-taskmaster` and
 `docker.io/elixircloud/tesk-core-filer`. Accepted vulnerabilities are listed
-in `.trivyignore.yaml`, with a reason and an expiry date.
+in `.trivyignore.yaml`, with a reason and an expiry date. Tags no longer
+publish images, until the release workflow is added (#64); the Travis and
+Cloud Build (`eu.gcr.io`) setups were removed. `tox` runs the same tests and
+lint locally.
+
+Publishing needs the environment `dev-images` (branch `dev` only) with the
+secrets `DOCKERHUB_LOGIN` and `DOCKERHUB_TOKEN`; the tests upload coverage
+with `CODECOV_TOKEN`. A fork publishes to its own Docker Hub organization if
+it sets the variable `DOCKERHUB_ORG`.
