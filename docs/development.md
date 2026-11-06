@@ -49,7 +49,7 @@ The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
 | Job | Checks |
 |---|---|
 | `PR title` | The title follows Conventional Commits, at most 50 characters (squash merges use it as the commit message). |
-| `Lint` | The workflows (actionlint), and the package with pylint (errors only). |
+| `Lint` | The workflows (actionlint), the citation metadata (`CITATION.cff`, cffconvert), and the package with pylint (errors only). |
 | `Test (Python …)` | The tests on Python 3.10 to 3.13, with coverage to Codecov. |
 | `Docs` | These docs, built strictly. |
 | `Scan image (…)` | Trivy scan of the taskmaster and filer images: fails on critical and high vulnerabilities that have a fix. Accepted findings are listed in `.trivyignore.yaml`, with a reason and an expiry date. |
@@ -110,6 +110,16 @@ release; write its notes in the format of the organisation's other repos.
 
 After the first release of this workflow, drop `fail: "false"` in
 `.github/workflows/scan.yml`, and the note on it above.
+
+## Dependencies and metadata
+
+Dependabot (`.github/dependabot.yml`) opens grouped pull requests to `dev`
+once a month for the package's dependencies (`setup.py`), the docs'
+dependencies (`docs/requirements.txt`), the actions in the workflows and the
+base images in `containers/`. `.github/CODEOWNERS` names the code owners,
+who are requested for review on every pull request. `CITATION.cff` holds the
+citation metadata, with the version and date of the latest release; CI
+validates it.
 
 ## Docs
 

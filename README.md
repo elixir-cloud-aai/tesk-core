@@ -1,75 +1,93 @@
-[![CI](https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/elixir-cloud-aai/tesk-core/branch/dev/graph/badge.svg)](https://codecov.io/gh/elixir-cloud-aai/tesk-core)
+<!-- markdownlint-disable MD033 MD041 -- logo first; <picture> for dark mode -->
+<a href="https://elixir-on.cloud/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo_elixir_on_cloud_night.png">
+    <img src="docs/images/logo_elixir_on_cloud.png" alt="ELIXIR On-Cloud">
+  </picture>
+</a>
+<!-- markdownlint-enable MD033 MD041 -->
 
-## Introduction
+# tesk-core
 
-This project is part of the [TESK](https://github.com/EMBL-EBI-TSI/TESK) initiative.
-It contains the code needed to generate 2 types of agents that reside in kubernetes:
-* The taskmaster, which spins up the containers needed to complete tasks as defined by TESK
-* The filer, which populates volumes and input files and uploads output files
+[![License][badge-license]][badge-url-license]
+[![Build_status][badge-build-status]][badge-url-build-status]
+[![Docs][badge-docs]][badge-url-docs]
+[![Coverage][badge-coverage]][badge-url-coverage]
+[![GitHub_tag][badge-github-tag]][badge-url-github-tag]
+[![Taskmaster_image][badge-docker-taskmaster]][badge-url-docker-taskmaster]
+[![Filer_image][badge-docker-filer]][badge-url-docker-filer]
 
-## Documentation
+The taskmaster and the filer of [TESK][tesk], an implementation of the
+[GA4GH Task Execution Service (TES) API][tes] for
+[Kubernetes](https://kubernetes.io), brought to you by
+[ELIXIR On-Cloud](https://elixir-on.cloud/). For each task that the TESK
+API accepts, the **taskmaster** runs as a Kubernetes job of its own: it
+creates the task's volume, has the filer stage the inputs, runs the
+executors one after another, has the filer stage the outputs, and cleans
+up. The **filer** downloads the inputs onto the task's volume and uploads
+the outputs, over HTTP(S), FTP, S3 or a shared volume. Both are commands of
+the Python package `teskcore`, published as the images
+`elixircloud/tesk-core-taskmaster` and `elixircloud/tesk-core-filer`, and
+deployed with the Helm chart of [TESK][tesk].
 
-The docs in `docs/` cover the taskmaster, the filer and development. They
-are published as the section "tesk-core" of the
-[TESK documentation](https://tesk.readthedocs.io/).
+**Read the [documentation][docs]** (the "tesk-core" section of the TESK
+documentation) for the taskmaster, the filer and development. Its sources
+are in [`docs/`](docs/).
 
-## How to use
+## Quick start
 
-Since the code is meant to be in kubernetes pods, the code needs to be packaged into containers.
-Their descriptions can be found in `containers/`.
-The root folder assumed to build the containers is the root of this package.
+The taskmaster needs a Kubernetes cluster and the TESK API: deploy TESK
+with its Helm chart, which sets both images. The filer also runs on its
+own. With [Docker](https://docs.docker.com/get-docker/) installed, download
+a file into the current directory, as the filer does for a task's input:
 
-To build the taskmaster container, run:
-
-```
-docker build . -f containers/taskmaster.Dockerfile -t taskmaster:latest
-```
-
-The command is similar for the filer container:
-
-```
-docker build . -f containers/filer.Dockerfile -t filer:latest
-```
-
-## Unit testing
-
-Unit testing needs the `tox` package.
-
-You can install the package using `uv`:
-
-```
-uv install tox
-```
-
-To install different python versions using `uv`, you can type:
-
-```
-uv python install 3.10 3.11 3.12 3.13
-```
-
-This software will take care of creating virtual environments and installing dependencies in them before running the actual tests and generating the coverage reports.
-
-```
-$ uv run tox
+```bash
+docker run --rm --user "$(id -u)" --volume "${PWD}:/data" \
+  elixircloud/tesk-core-filer:dev inputs \
+  '{"inputs": [{"url": "https://raw.githubusercontent.com/elixir-cloud-aai/tesk-core/dev/LICENSE", "path": "/data/LICENSE", "type": "FILE"}]}'
 ```
 
-## Continuous integration
+## Development
 
-The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
-`dev` and every push to it: the pull request title, lint (the workflows, and
-pylint for errors), the tests on Python 3.10 to 3.13 (coverage to Codecov),
-and a vulnerability scan (Trivy) of the taskmaster and filer images. Its job
-`CI passed` is the only required check. On pushes to `dev`, the images are
-pushed, scanned, signed and tagged `dev` and `sha-<commit>`:
-`docker.io/elixircloud/tesk-core-taskmaster` and
-`docker.io/elixircloud/tesk-core-filer`. Accepted vulnerabilities are listed
-in `.trivyignore.yaml`, with a reason and an expiry date. Tags no longer
-publish images, until the release workflow is added (#64); the Travis and
-Cloud Build (`eu.gcr.io`) setups were removed. `tox` runs the same tests and
-lint locally.
+The package needs Python 3.10 or later. To install it with the test
+dependencies and run the tests:
 
-Publishing needs the environment `dev-images` (branch `dev` only) with the
-secrets `DOCKERHUB_LOGIN` and `DOCKERHUB_TOKEN`; the tests upload coverage
-with `CODECOV_TOKEN`. A fork publishes to its own Docker Hub organization if
-it sets the variable `DOCKERHUB_ORG`.
+```bash
+python -m pip install --editable ".[test]"
+python -m pytest tests
+```
+
+See [Development][docs-development] in the documentation for the images,
+lint, CI and the docs build.
+
+## Citation
+
+If you use tesk-core, please cite it with the metadata in
+[`CITATION.cff`](CITATION.cff): on GitHub, "Cite this repository" in the
+sidebar of the repository formats it as APA or BibTeX.
+
+## Contributing
+
+Contributions are welcome! See the organisation's [contributing
+guide][contributing], and mind our [code of conduct][code-of-conduct].
+
+[badge-build-status]: <https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml/badge.svg?branch=dev>
+[badge-coverage]: <https://codecov.io/gh/elixir-cloud-aai/tesk-core/branch/dev/graph/badge.svg?branch=dev>
+[badge-docker-filer]: <https://img.shields.io/docker/v/elixircloud/tesk-core-filer?sort=semver&label=filer&color=C39BD3>
+[badge-docker-taskmaster]: <https://img.shields.io/docker/v/elixircloud/tesk-core-taskmaster?sort=semver&label=taskmaster&color=C39BD3>
+[badge-docs]: <https://img.shields.io/readthedocs/tesk>
+[badge-github-tag]: <https://img.shields.io/github/v/tag/elixir-cloud-aai/tesk-core?color=C39BD3>
+[badge-license]: <https://img.shields.io/badge/license-Apache%202.0-blue.svg>
+[badge-url-build-status]: <https://github.com/elixir-cloud-aai/tesk-core/actions/workflows/ci.yml?query=branch%3Adev>
+[badge-url-coverage]: <https://codecov.io/gh/elixir-cloud-aai/tesk-core?branch=dev>
+[badge-url-docker-filer]: <https://hub.docker.com/r/elixircloud/tesk-core-filer/tags>
+[badge-url-docker-taskmaster]: <https://hub.docker.com/r/elixircloud/tesk-core-taskmaster/tags>
+[badge-url-docs]: <https://tesk.readthedocs.io/en/latest/tesk-core/>
+[badge-url-github-tag]: <https://github.com/elixir-cloud-aai/tesk-core/tags>
+[badge-url-license]: <https://www.apache.org/licenses/LICENSE-2.0>
+[code-of-conduct]: <https://github.com/elixir-cloud-aai/.github/blob/main/CODE_OF_CONDUCT.md>
+[contributing]: <https://github.com/elixir-cloud-aai/.github/blob/main/CONTRIBUTING.md>
+[docs]: <https://tesk.readthedocs.io/en/latest/tesk-core/>
+[docs-development]: <https://tesk.readthedocs.io/en/latest/tesk-core/development/>
+[tes]: <https://github.com/ga4gh/task-execution-schemas>
+[tesk]: <https://github.com/elixir-cloud-aai/TESK>
