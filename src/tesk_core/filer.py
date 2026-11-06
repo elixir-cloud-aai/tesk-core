@@ -16,7 +16,7 @@ import shutil
 from glob import glob
 from urllib.parse import quote, urlsplit, urlunsplit
 from tesk_core.path import containerPath, getPath, fileEnabled
-from tesk_core.transput import Type, Transput, urlparse
+from tesk_core.transput import Type, Transput, urlparse, url_for_log
 from tesk_core.filer_s3 import S3Transput
 
 
@@ -37,8 +37,17 @@ class HTTPTransput(Transput):
     def __init__(self, path, url, ftype):
         Transput.__init__(self, path, url, ftype)
 
+    def _request_failed(self, err):
+        # The message of a requests exception contains the full URL, so log
+        # only its type and the URL as in other log messages
+        logging.error('%s for %s', type(err).__name__, url_for_log(self.url))
+        return 1
+
     def download_file(self):
-        req = requests.get(self.url)
+        try:
+            req = requests.get(self.url)
+        except requests.exceptions.RequestException as err:
+            return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)
@@ -57,7 +66,10 @@ class HTTPTransput(Transput):
         # which presigned upload URLs such as S3's reject.
         with open(self.path, 'rb') as file:
             data = file if os.fstat(file.fileno()).st_size > 0 else b''
-            req = requests.put(self.url, data=data)
+            try:
+                req = requests.put(self.url, data=data)
+            except requests.exceptions.RequestException as err:
+                return self._request_failed(err)
 
         if req.status_code < 200 or req.status_code >= 300:
             logging.error('Got status code: %d', req.status_code)
@@ -80,13 +92,16 @@ class HTTPTransput(Transput):
             to_upload.append(
                 HTTPTransput(file_path, http_join(self.url, listing), ftype))
 
-        # return 1 if any upload failed
-        return min(sum([transput.upload() for transput in to_upload]), 1)
+        # Stop at the first upload that fails, as for the entries of a task
+        for transput in to_upload:
+            if transput.upload():
+                return 1
+        return 0
 
     def download_dir(self):
         logging.error(
             'Won\'t crawl http directory, so unable to download url: %s',
-            self.url)
+            url_for_log(self.url))
         return 1
 
 
@@ -177,7 +192,7 @@ class FTPTransput(Transput):
             else:
                 logging.error(
                     'Directory listing in is neither file nor directory: "%s"',
-                    file_url
+                    url_for_log(file_url)
                 )
                 return 1
 
@@ -196,7 +211,7 @@ class FTPTransput(Transput):
         if error:
             logging.error(
                 'Unable to create remote directories needed for %s',
-                self.url
+                url_for_log(self.url)
             )
             return 1
 
@@ -206,7 +221,8 @@ class FTPTransput(Transput):
         return ftp_upload_file(self.ftp_connection, self.path, self.url_path)
 
     def download_dir(self):
-        logging.debug('Processing ftp dir: %s target: %s', self.url, self.path)
+        logging.debug('Processing ftp dir: %s target: %s',
+                      url_for_log(self.url), self.path)
         self.ftp_connection.cwd(self.url_path)
 
         # This is horrible and I'm sorry but it works flawlessly.
@@ -241,8 +257,8 @@ class FTPTransput(Transput):
         return 0
 
     def download_file(self):
-        logging.debug('Downloading ftp file: "%s" Target: %s', self.url,
-                      self.path)
+        logging.debug('Downloading ftp file: "%s" Target: %s',
+                      url_for_log(self.url), self.path)
         basedir = os.path.dirname(self.path)
         if basedir and not os.path.exists(basedir):
             os.makedirs(basedir, exist_ok=True)
@@ -449,7 +465,8 @@ def process_file(ttype, filedata):
     scheme = parsed_url.scheme
     netloc = parsed_url.netloc
     if scheme == '':
-        logging.info('Could not determine protocol for url: "%s", assuming "file"', filedata['url'])
+        logging.info('Could not determine protocol for url: "%s", assuming "file"',
+                     url_for_log(filedata['url']))
         scheme='file'
 
     trans = newTransput(scheme, netloc)

@@ -257,3 +257,18 @@ def test_upload_dir_keeps_non_utf8_file_names(put_server, tmp_path):
         b'/upload/dir/caf\xe9.txt',
         b'/upload/dir/ok.txt',
     ]
+
+
+def test_upload_dir_stops_at_first_failure(mocker, tmp_path):
+    """ Ensure a directory upload stops at the first file that fails."""
+
+    (tmp_path / 'a.txt').write_bytes(b'a')
+    (tmp_path / 'b.txt').write_bytes(b'b')
+    resp_fail = Response()
+    resp_fail.status_code = 500
+    put_mock = mocker.patch('requests.put', return_value=resp_fail)
+
+    http_obj = HTTPTransput(str(tmp_path), URL, Type.Directory)
+
+    assert http_obj.upload_dir() == 1
+    assert put_mock.call_count == 1

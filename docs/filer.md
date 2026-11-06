@@ -13,7 +13,10 @@ filer [-d] {inputs|outputs} DATA
 taskmaster passes `/jsoninput/JSON_INPUT.gz`, from a ConfigMap, or the JSON
 in the environment variable `JSON_INPUT`). The filer processes the entries of
 `inputs` or `outputs` one after another, and stops with exit code 1 at the
-first that fails. `-d` turns on debug logging.
+first that fails. `-d` turns on debug logging. The filer's own log messages
+show URLs without their query strings (e.g. the parameters of a presigned
+URL) and user info (`user:password@`); response bodies logged on errors are
+shown as received.
 
 Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
@@ -31,10 +34,11 @@ writes to `path`. The scheme of the URL selects the protocol.
 ### HTTP(S)
 
 Inputs are downloaded with `GET`. Outputs are uploaded with `PUT`, as bytes,
-streamed from disk: a directory is uploaded file by file, each to the
-directory's URL plus the escaped file name (the query of the URL, e.g. a
-token of a presigned URL, is kept). Any status other than 2xx fails the
-transfer. Credentials can come from a `.netrc` file (see
+streamed from disk: a directory is uploaded file by file (stopping at the
+first that fails), each to the directory's URL plus the escaped file name
+(the query of the URL, e.g. a token of a presigned URL, is kept). Any status other than 2xx fails the
+transfer, as does a request error (e.g. a failed connection), which is logged
+with its type. Credentials can come from a `.netrc` file (see
 [Credentials from `.netrc`](#credentials-from-netrc)), which `requests`
 reads for the URL's host.
 
@@ -83,7 +87,7 @@ environment variables, which it passes on to the filer:
 
 | Variable | Description |
 |---|---|
-| `HOST_BASE_PATH` | Base path of the shared volume in the URLs. Every `file:` URL must be below it. |
+| `HOST_BASE_PATH` | Absolute base path of the shared volume in the URLs. The path of every `file:` URL must be absolute and, after resolving `..` segments, be this path or below it, e.g. `/tmp/a` for `/tmp`, but not `/tmp2/a` or `/tmp/../a`. |
 | `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume. |
 | `TRANSFER_PVC_NAME` | Name of the PVC of the shared volume. |
 

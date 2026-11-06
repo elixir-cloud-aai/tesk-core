@@ -2,10 +2,22 @@ import enum
 import os
 import netrc
 import logging
+from urllib.parse import urlsplit, urlunsplit
 try:
     from urllib.parse import urlparse
 except ImportError:
     from urlparse import urlparse
+
+
+def url_for_log(url):
+    '''
+    Returns 'url' without its query string and user info, for log messages
+    (e.g. the parameters of a presigned URL are left out).
+    '''
+
+    parts = urlsplit(url)
+    netloc = parts.netloc.rpartition('@')[2]
+    return urlunsplit(parts._replace(netloc=netloc, query=''))
 
 
 @enum.unique
@@ -40,7 +52,7 @@ class Transput:
 
     def upload(self):
         logging.debug('%s uploading %s %s', self.__class__.__name__,
-                      self.ftype, self.url)
+                      self.ftype, url_for_log(self.url))
         if self.ftype == Type.File:
             return self.upload_file()
         if self.ftype == Type.Directory:
@@ -49,7 +61,7 @@ class Transput:
 
     def download(self):
         logging.debug('%s downloading %s %s', self.__class__.__name__,
-                      self.ftype, self.url)
+                      self.ftype, url_for_log(self.url))
         if self.ftype == Type.File:
             return self.download_file()
         if self.ftype == Type.Directory:
