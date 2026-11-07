@@ -27,7 +27,7 @@ writes to `path`. The scheme of the URL selects the protocol.
 | Scheme | Inputs | Outputs |
 |---|---|---|
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
-| `ftp` | Files and directories (not empty ones) | Files and directories (not empty ones; creating the remote directories) |
+| `ftp` | Files and directories, including empty ones | Files and directories, including empty ones (creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
 | `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
 
@@ -43,6 +43,9 @@ with its type. Credentials can come from a `.netrc` file (see
 reads for the URL's host.
 
 ### FTP
+
+Directory downloads skip, with a warning, listing entries whose names aren't
+a single path component (empty, `.`, `..`, or with `/` or `\`).
 
 If a `.netrc` file is mounted, the filer logs in with its credentials for
 the URL's host, or anonymously if it has none for that host. Without a
@@ -77,6 +80,12 @@ from the file name. Checksums are calculated and validated only where the
 S3 API requires them (`AWS_REQUEST_CHECKSUM_CALCULATION` and
 `AWS_RESPONSE_CHECKSUM_VALIDATION` set to `WHEN_REQUIRED`), for stores that
 don't support the newer checksums.
+
+Only `s3://` URLs use S3. The bucket is the URL's host part, taken as
+written, so bucket names may contain `s3` (e.g. `s3://mys3data/out.txt`).
+`http(s)://` URLs are transferred over HTTP, even if they point to an S3
+endpoint (e.g. `https://mybucket.s3.amazonaws.com/file.txt`); to use S3 for
+them, rewrite them as `s3://mybucket/file.txt`.
 
 ### Shared volume (`file:`)
 

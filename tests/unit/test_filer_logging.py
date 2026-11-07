@@ -1,8 +1,10 @@
 """Tests that the filer's log messages leave out the query strings of URLs."""
 
 import logging
+from pathlib import Path
 
 import pytest
+from pytest_mock import MockerFixture
 from requests import Response
 from requests.exceptions import ConnectionError
 
@@ -26,25 +28,30 @@ URL = "https://example.org/bucket/a.txt?" + QUERY
         ("", ""),
     ],
 )
-def test_url_for_log(url, expected):
-    """The query string and user info are removed, everything else is
-    kept."""
-
+def test_url_for_log(url: str, expected: str) -> None:
+    """Test that the query string and user info are removed, the rest kept."""
     assert url_for_log(url) == expected
 
 
-def _response(status):
-    """A `requests` response with the given status and no content."""
+def _response(status: int) -> Response:
+    """Get a `requests` response with the given status and no content.
 
+    Args:
+        status: The status code.
+
+    Returns:
+        The response.
+    """
     resp = Response()
     resp.status_code = status
     resp._content = b""
     return resp
 
 
-def test_http_download_logs_no_query(mocker, tmp_path, caplog):
-    """Downloads log the URL without its query string."""
-
+def test_http_download_logs_no_query(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that downloads log the URL without its query string."""
     mocker.patch("requests.get", return_value=_response(200))
     caplog.set_level(logging.DEBUG)
     HTTPTransput(str(tmp_path / "a.txt"), URL, Type.File).download()
@@ -53,10 +60,10 @@ def test_http_download_logs_no_query(mocker, tmp_path, caplog):
     assert QUERY not in caplog.text
 
 
-def test_http_upload_dir_logs_no_query(mocker, tmp_path, caplog):
-    """Uploads, also of the files of a directory, log URLs without their
-    query strings."""
-
+def test_http_upload_dir_logs_no_query(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that uploads, also of directory files, log URLs without queries."""
     (tmp_path / "f.txt").write_text("x")
     mocker.patch("requests.put", return_value=_response(200))
     caplog.set_level(logging.DEBUG)
@@ -67,10 +74,13 @@ def test_http_upload_dir_logs_no_query(mocker, tmp_path, caplog):
 
 
 @pytest.mark.parametrize("method", ["get", "put"])
-def test_http_request_error_logs_no_query(mocker, tmp_path, caplog, method):
-    """Request errors, whose messages contain the full URL, fail the transfer
-    and log the URL without its query string."""
+def test_http_request_error_logs_no_query(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture, method: str
+) -> None:
+    """Test that request errors fail the transfer and log no query string.
 
+    The messages of such errors contain the full URL.
+    """
     path = tmp_path / "a.txt"
     path.write_text("x")
     mocker.patch(
@@ -88,10 +98,10 @@ def test_http_request_error_logs_no_query(mocker, tmp_path, caplog, method):
     assert QUERY not in caplog.text
 
 
-def test_http_download_dir_logs_no_query(tmp_path, caplog):
-    """The error for HTTP directory inputs logs the URL without its query
-    string."""
-
+def test_http_download_dir_logs_no_query(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the error for HTTP directory inputs logs no query string."""
     caplog.set_level(logging.DEBUG)
     assert HTTPTransput(str(tmp_path), URL, Type.Directory).download() == 1
 
@@ -99,9 +109,10 @@ def test_http_download_dir_logs_no_query(tmp_path, caplog):
     assert QUERY not in caplog.text
 
 
-def test_ftp_logs_no_query(mocker, tmp_path, caplog):
-    """FTP transfers log URLs without their query strings."""
-
+def test_ftp_logs_no_query(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that FTP transfers log URLs without their query strings."""
     conn = mocker.MagicMock()
     conn.pwd.return_value = "/"
     caplog.set_level(logging.DEBUG)
@@ -120,10 +131,10 @@ def test_ftp_logs_no_query(mocker, tmp_path, caplog):
     assert QUERY not in caplog.text
 
 
-def test_ftp_dir_logs_no_query(mocker, tmp_path, caplog):
-    """FTP directory transfers, also of the entries of a directory, log URLs
-    without their query strings."""
-
+def test_ftp_dir_logs_no_query(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that FTP directory transfers log URLs without query strings."""
     conn = mocker.MagicMock()
     conn.retrlines.side_effect = lambda cmd, callback: callback(
         "-rw-r--r--    1 ftp      ftp            1 Jan 01  2024 f.txt"
@@ -145,9 +156,10 @@ def test_ftp_dir_logs_no_query(mocker, tmp_path, caplog):
     assert QUERY not in caplog.text
 
 
-def test_process_file_no_scheme_logs_no_query(mocker, caplog):
-    """The message for URLs without a scheme leaves out the query string."""
-
+def test_process_file_no_scheme_logs_no_query(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the message for URLs without a scheme has no query string."""
     transput = mocker.MagicMock()
     mocker.patch("tesk_core.filer.newTransput", return_value=transput)
     caplog.set_level(logging.DEBUG)
