@@ -479,9 +479,10 @@ def test_ftp_upload_dir_stops_at_failed_entry(
         ftp_redirect: The server's login data, with the filer's connections
             sent to it.
     """
-    (tmp_path / "dir1" / "dir2").mkdir(parents=True)
-    (tmp_path / "dir1" / "dir2" / "b").write_text("b")
-    mocker.patch("tesk_core.filer.ftp_upload_file", return_value=1)
+    (tmp_path / "dir1").mkdir()
+    for name in "abc":
+        (tmp_path / "dir1" / name).write_text(name)
+    upload = mocker.patch("tesk_core.filer.ftp_upload_file", return_value=1)
     close = mocker.spy(ftplib.FTP, "close")
 
     with FTPTransput(
@@ -491,4 +492,6 @@ def test_ftp_upload_dir_stops_at_failed_entry(
     ) as transfer:
         assert transfer.upload_dir() == 1
 
+    # The entries after the failed one aren't uploaded
+    assert upload.call_count == 1
     assert close.call_count == 1
