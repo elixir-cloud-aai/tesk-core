@@ -48,7 +48,9 @@ The filer connects to the URL's host and port (21 if the URL has none);
 user information in the URL is ignored.
 
 If a `.netrc` file is mounted, the filer logs in with its credentials for
-the URL's host, or anonymously if it has none for that host. Without a
+the URL's network location as written (e.g. `machine ftp.example.org:2121`
+for `ftp://ftp.example.org:2121/data`), or anonymously if it has none for
+it. Without a
 `.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`,
 if both are set, and otherwise anonymously. If the server refuses the
 credentials, the filer logs in anonymously. TESK's Helm chart sets the two variables from a

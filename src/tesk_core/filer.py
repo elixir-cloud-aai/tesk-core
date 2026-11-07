@@ -323,6 +323,7 @@ class FTPTransput(Transput):
         """
         if self.connection_owner:
             url = urlparse(self.url)
+            # Port 0 makes `ftplib` use the default port
             self.ftp_connection.connect(url.hostname or "", url.port or 0)
             ftp_login(self.ftp_connection, self.netloc, self.netrc_file)
         return self
