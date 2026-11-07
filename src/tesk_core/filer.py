@@ -459,10 +459,10 @@ def netloc_host(netloc: str) -> str:
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
     """Log in to an FTP server.
 
-    With the credentials for the host in `.netrc`, if it was read and has
-    an entry for the host (without the port); otherwise with
-    `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set. Without
-    credentials, or if they are refused, anonymously.
+    With the first credentials found: the `.netrc` entry for the host and
+    port, the one for the host, or the `default` entry, if `.netrc` was
+    read; otherwise `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both
+    are set. Without credentials, or if they are refused, anonymously.
 
     Args:
         ftp_connection: The connection.
