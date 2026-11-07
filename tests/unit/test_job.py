@@ -391,53 +391,6 @@ def test_run_to_completion_check_other_K8_exception(
 @patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
 @patch(
     "kubernetes.client.BatchV1Api.read_namespaced_job",
-    side_effect=read_namespaced_job_error,
-)
-@patch("tesk_core.job.Job.delete")
-@patch("tesk_core.taskmaster.check_cancelled", return_value=False)
-@patch("kubernetes.client.BatchV1Api.create_namespaced_job")
-def test_run_to_completion_error(
-    mock_create_namespaced_job: MagicMock,
-    mock_check_cancelled: MagicMock,
-    mock_job_delete: MagicMock,
-    mock_read_namespaced_job: MagicMock,
-    mock_list_namespaced_pod: MagicMock,
-    data: dict[str, Any],
-) -> None:
-    """Test that the job state is 'error' for a pending pod with ImagePullBackOff."""
-    mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff(
-        10
-    )
-    for executor in data["executors"]:
-        jobname = executor["metadata"]["name"]
-        job = Job(executor, jobname, taskmaster.args.namespace)
-        status = job.run_to_completion(1, taskmaster.check_cancelled, 120)
-        assert status == "Error"
-
-
-@patch(
-    "kubernetes.client.BatchV1Api.read_namespaced_job",
-    side_effect=read_namespaced_job_error,
-)
-@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
-def test_get_job_status_ImagaPullBackoff_error(
-    mock_list_namespaced_pod: MagicMock,
-    mock_read_namespaced_job: MagicMock,
-    data: dict[str, Any],
-) -> None:
-    """Test that the state is 'error' for a pod that failed with ImagePullBackOff."""
-    mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
-    executor = data["executors"][0]
-    jobname = executor["metadata"]["name"]
-    job = Job(executor, jobname, taskmaster.args.namespace)
-    job.timeout = 50
-    status, _ = job.get_status(False)
-    assert status == "Error"
-
-
-@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
-@patch(
-    "kubernetes.client.BatchV1Api.read_namespaced_job",
     side_effect=read_namespaced_job_success,
 )
 def test_get_status_success(
@@ -512,3 +465,166 @@ def test_get_job_status_for_wrong_image(
     job = Job(executor, jobname, taskmaster.args.namespace)
     status, _ = job.get_status(False)
     assert status == "Running"
+
+
+def job_with_conditions(conditions: list[tuple[str, str]] | None) -> MockObject:
+    """Mock reading a job with the given conditions.
+
+    Args:
+        conditions: The type and status of each condition, or `None` for a
+            job without conditions.
+
+    Returns:
+        The job, started ten minutes ago, with an active pod.
+    """
+    return MockObject(
+        {
+            "status": {
+                "active": 1,
+                "conditions": (
+                    None
+                    if conditions is None
+                    else [
+                        MockObject({"type": type_, "status": status})
+                        for type_, status in conditions
+                    ]
+                ),
+                "failed": None,
+                "start_time": START_TIME - datetime.timedelta(minutes=10),
+                "succeeded": None,
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("conditions", "expected"),
+    [
+        (None, "Running"),
+        ([], "Running"),
+        ([("Complete", "True")], "Complete"),
+        ([("SuccessCriteriaMet", "True")], "Complete"),
+        ([("SuccessCriteriaMet", "True"), ("Complete", "True")], "Complete"),
+        ([("Failed", "True")], "Failed"),
+        ([("FailureTarget", "True")], "Failed"),
+        ([("FailureTarget", "True"), ("Failed", "True")], "Failed"),
+        ([("Suspended", "True")], "Running"),
+        ([("Suspended", "False")], "Running"),
+        ([("Complete", "False")], "Running"),
+        ([("Failed", "False")], "Running"),
+        ([("FailureTarget", "False")], "Running"),
+        ([("Suspended", "False"), ("FailureTarget", "True")], "Failed"),
+        ([("Suspended", "False"), ("Complete", "True")], "Complete"),
+    ],
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_get_status_conditions(
+    mock_read_namespaced_job: MagicMock,
+    mock_list_namespaced_pod: MagicMock,
+    conditions: list[tuple[str, str]] | None,
+    expected: str,
+    data: dict[str, Any],
+) -> None:
+    """Test the status of a job for each combination of its conditions.
+
+    Only conditions with the status `"True"` count; `FailureTarget`, which
+    Kubernetes 1.31+ sets before `Failed`, counts as `Failed`, and other
+    conditions leave the job running.
+    """
+    mock_read_namespaced_job.return_value = job_with_conditions(conditions)
+    mock_list_namespaced_pod.return_value = MockObject({"items": []})
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    status, _ = job.get_status(False)
+    assert status == expected
+
+
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_pod_timeout_fails_job(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a pod that times out fails its job, once, and keeps it.
+
+    The job gets an active deadline that has passed, so that Kubernetes
+    marks it `Failed` (`DeadlineExceeded`); it runs until then.
+    """
+    mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    status, _ = job.get_status(False)
+    assert status == "Running"
+    status, _ = job.get_status(False)
+    assert status == "Running"
+    mock_patch_namespaced_job.assert_called_once_with(
+        "task-ex-00",
+        taskmaster.args.namespace,
+        {"spec": {"activeDeadlineSeconds": 1}},
+    )
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("kubernetes.client.BatchV1Api.create_namespaced_job")
+def test_run_to_completion_pod_timeout(
+    mock_create_namespaced_job: MagicMock,
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a job whose pod times out ends `Failed` and is kept."""
+    mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
+    mock_read_namespaced_job.side_effect = [
+        job_with_conditions(None),
+        job_with_conditions([("FailureTarget", "True")]),
+    ]
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    status = job.run_to_completion(0, lambda: False, 50)
+    assert status == "Failed"
+    mock_patch_namespaced_job.assert_called_once()
+    mock_job_delete.assert_not_called()
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("kubernetes.client.BatchV1Api.create_namespaced_job")
+def test_run_to_completion_pod_timeout_cancelled(
+    mock_create_namespaced_job: MagicMock,
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a job that is failing still is deleted on cancellation."""
+    mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
+    mock_read_namespaced_job.return_value = job_with_conditions(None)
+    cancelled = iter([False, True])
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    status = job.run_to_completion(0, lambda: next(cancelled), 50)
+    assert status == "Cancelled"
+    mock_job_delete.assert_called_once()
+
+
+@patch("kubernetes.client.BatchV1Api.delete_namespaced_job")
+def test_delete(mock_delete_namespaced_job: MagicMock, data: dict[str, Any]) -> None:
+    """Test that deleting a job deletes its pods in the background."""
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.delete()
+    mock_delete_namespaced_job.assert_called_once()
+    args, kwargs = mock_delete_namespaced_job.call_args
+    assert args == ("task-ex-00", taskmaster.args.namespace)
+    assert kwargs["body"].propagation_policy == "Background"

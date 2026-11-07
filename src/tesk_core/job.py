@@ -13,6 +13,10 @@ from tesk_core.Util import pprint
 
 logging.basicConfig(format="%(message)s", level=logging.INFO)
 
+# Job conditions that end a job, when their status is "True"
+JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
+JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
+
 
 class Job:
     """A Kubernetes job, run to completion.
@@ -20,12 +24,14 @@ class Job:
     Attributes:
         name: Name of the job.
         namespace: Namespace of the job.
-        status: Last known status: `Initialized`, `Running`, `Complete`,
-            `Failed` or `Error`.
+        status: Last known status: `Initialized`, `Running`, `Complete` or
+            `Failed`.
         bv1: Client of the Kubernetes batch API.
         cv1: Client of the Kubernetes core API.
         timeout: Seconds after which pods that can't pull their image fail
             the job.
+        failing: Whether the job was failed (`fail`) and waits for
+            Kubernetes to mark it `Failed`.
         body: The manifest of the job.
     """
 
@@ -45,6 +51,7 @@ class Job:
         self.bv1 = client.BatchV1Api()
         self.cv1 = client.CoreV1Api()
         self.timeout = 240
+        self.failing = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -64,7 +71,8 @@ class Job:
                 image fail the job.
 
         Returns:
-            The final status: `Complete`, `Failed`, `Error` or `Cancelled`.
+            The final status: `Complete`, `Failed` or `Cancelled`. Only a
+            cancelled job is deleted.
 
         Raises:
             ApiException: The Kubernetes API returned an error other than a
@@ -95,65 +103,80 @@ class Job:
     def get_status(self, is_all_pods_runnning: bool) -> tuple[str, bool]:
         """Get the status of the job.
 
+        A pod that can't pull its image (`ImagePullBackOff`) for longer than
+        `timeout` fails the job (`fail`); the job runs until Kubernetes marks
+        it `Failed`.
+
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
                 running (no longer pending) by an earlier call.
 
         Returns:
-            The status (`Running`, `Complete`, `Failed` or `Error`) and
-            whether all pods of the job are running.
+            The status (`Running`, `Complete` or `Failed`) and whether all
+            pods of the job are running.
         """
         job = self.bv1.read_namespaced_job(self.name, self.namespace)
-        try:
-            # Loops around the status conditions array, and looks for
-            # 'Complete', 'Failed' or 'SuccessCriteriaMet'. If none of these
-            # are found, the Job is marked as 'Error'
-            for condition in job.status.conditions:
-                if condition.type == "Complete" and condition.status:
-                    self.status = "Complete"
-                    break
-                if condition.type == "Failed" and condition.status:
-                    self.status = "Failed"
-                    break
-                if condition.type == "SuccessCriteriaMet" and condition.status:
-                    self.status = "Complete"
-                    break
-                self.status = "Error"
-        except TypeError:
-            # The condition is not initialized, so it is not complete yet,
-            # wait for it
-            self.status = "Running"
-            job_duration = 0.0
-            if job.status.active and job.status.start_time:
-                job_duration = (
-                    datetime.now(timezone.utc) - job.status.start_time
-                ).total_seconds()
-            if job_duration > self.timeout and not is_all_pods_runnning:
-                pods = (
-                    self.cv1.list_namespaced_pod(
-                        self.namespace, label_selector=f"job-name={self.name}"
-                    )
-                ).items
-                is_all_pods_runnning = True
-                for pod in pods:
-                    if pod.status.phase == "Pending" and pod.status.start_time:
-                        is_all_pods_runnning = False
-                        delta = (
-                            datetime.now(timezone.utc) - pod.status.start_time
-                        ).total_seconds()
-                        if (
-                            delta > self.timeout
-                            and pod.status.container_statuses[0].state.waiting.reason
-                            == "ImagePullBackOff"
-                        ):
-                            logging.info(pod.status.container_statuses[0].state.waiting)
-                            return "Error", is_all_pods_runnning
+        self.status = "Running"
+        # Only conditions with the status "True" count. `FailureTarget`
+        # (Kubernetes 1.31+) comes before `Failed`, `SuccessCriteriaMet`
+        # before `Complete`; other conditions (e.g., `Suspended`) leave the
+        # job running
+        for condition in job.status.conditions or []:
+            if condition.status != "True":
+                continue
+            if condition.type in JOB_COMPLETE_CONDITIONS:
+                self.status = "Complete"
+                break
+            if condition.type in JOB_FAILED_CONDITIONS:
+                self.status = "Failed"
+                break
+        if self.status != "Running" or self.failing:
+            return self.status, is_all_pods_runnning
+
+        job_duration = 0.0
+        if job.status.active and job.status.start_time:
+            job_duration = (
+                datetime.now(timezone.utc) - job.status.start_time
+            ).total_seconds()
+        if job_duration > self.timeout and not is_all_pods_runnning:
+            pods = (
+                self.cv1.list_namespaced_pod(
+                    self.namespace, label_selector=f"job-name={self.name}"
+                )
+            ).items
+            is_all_pods_runnning = True
+            for pod in pods:
+                if pod.status.phase == "Pending" and pod.status.start_time:
+                    is_all_pods_runnning = False
+                    delta = (
+                        datetime.now(timezone.utc) - pod.status.start_time
+                    ).total_seconds()
+                    if (
+                        delta > self.timeout
+                        and pod.status.container_statuses[0].state.waiting.reason
+                        == "ImagePullBackOff"
+                    ):
+                        logging.info(pod.status.container_statuses[0].state.waiting)
+                        self.fail()
+                        break
 
         return self.status, is_all_pods_runnning
 
+    def fail(self) -> None:
+        """Fail the job, and keep it and its pods.
+
+        Sets an active deadline that has passed, so that Kubernetes stops the
+        job's pods and marks it `Failed` with the reason `DeadlineExceeded`.
+        """
+        logging.info("Failing job '%s': its pod can't start", self.name)
+        self.bv1.patch_namespaced_job(
+            self.name, self.namespace, {"spec": {"activeDeadlineSeconds": 1}}
+        )
+        self.failing = True
+
     def delete(self) -> None:
-        """Delete the job and, in the background, its pods."""
-        logging.info("Removing failed jobs")
+        """Delete the job and, in the background, its pods (on cancellation)."""
+        logging.info("Deleting job '%s'", self.name)
         self.bv1.delete_namespaced_job(
             self.name,
             self.namespace,
