@@ -730,20 +730,27 @@ def test_get_status_unscheduled_then_image_pull_back_off(
 
 
 @pytest.mark.parametrize(
-    ("cancelled", "expected"), [(True, "Cancelled"), (False, "PodTimeout")]
+    ("status", "cancelled", "expected"),
+    [
+        ("PodTimeout", True, "Cancelled"),
+        ("PodTimeout", False, "PodTimeout"),
+        ("Error", True, "Error"),
+    ],
 )
-@patch("tesk_core.job.Job.get_status", return_value=("PodTimeout", False))
 @patch("tesk_core.job.Job.delete")
 @patch("kubernetes.client.BatchV1Api.create_namespaced_job")
 def test_run_to_completion_pod_timeout_cancelled(
     mock_create_namespaced_job: MagicMock,
     mock_job_delete: MagicMock,
-    mock_get_status: MagicMock,
+    status: str,
     cancelled: bool,
     expected: str,
 ) -> None:
-    """Test that a pod timeout of a cancelled task deletes the job."""
+    """Test that a pod timeout of a cancelled task, and only that, deletes the job."""
     job = Job({"metadata": {}}, "job", "default")
-    status = job.run_to_completion(1, lambda: cancelled, 120)
-    assert status == expected
-    assert mock_job_delete.called is cancelled
+    check_cancelled = MagicMock(return_value=cancelled)
+    with patch.object(Job, "get_status", return_value=(status, False)):
+        result = job.run_to_completion(1, check_cancelled, 120)
+    assert result == expected
+    assert mock_job_delete.called is (expected == "Cancelled")
+    assert check_cancelled.call_count == (status == "PodTimeout")

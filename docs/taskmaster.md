@@ -37,9 +37,10 @@ none of them is pending. It deletes an executor's job only if the pod has
 started and its first container can't pull its image (`ImagePullBackOff`,
 status `Error`), and no earlier check found the job's pending pods all
 unstarted; in the other cases (status `PodTimeout`), and for filers, it
-keeps the job, unless the task was cancelled in the meantime. Pods that
-are pending for other reasons, e.g. waiting to be scheduled or pulling a
-large image, are queued and keep waiting.
+keeps the job. If the task was cancelled just before a `PodTimeout`, it
+deletes the job, as for any cancellation. Pods that are pending for other
+reasons, e.g. waiting to be scheduled or pulling a large image, are queued
+and keep waiting.
 
 To cancel a task, the TESK API labels the
 taskmaster's pod: the taskmaster reads its labels from `/podinfo/labels` (a
