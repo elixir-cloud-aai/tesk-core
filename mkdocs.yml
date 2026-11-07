@@ -14,10 +14,6 @@ repo_name: elixir-cloud-aai/tesk-core
 edit_uri: edit/dev/docs/
 copyright: Copyright &copy; ELIXIR On-Cloud
 
-# Not pages
-exclude_docs: |
-  requirements.txt
-
 theme:
   name: material
   features:

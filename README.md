@@ -49,12 +49,13 @@ docker run --rm --user "$(id -u)" --volume "${PWD}:/data" \
 
 ## Development
 
-The package needs Python 3.10 or later. To install it with the test
+The package needs Python 3.10 or later. With
+[uv](https://docs.astral.sh/uv/), install it with the locked development
 dependencies and run the tests:
 
 ```bash
-python -m pip install --editable ".[test]"
-python -m pytest tests
+uv sync --extra dev
+uv run pytest
 ```
 
 See [Development][docs-development] in the documentation for the images,

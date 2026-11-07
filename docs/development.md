@@ -11,15 +11,19 @@ of ELIXIR Cloud & AAI.
 ## Images
 
 Each command has a `Dockerfile` in `containers/`, which builds the package
-as a wheel and installs it on Alpine. Build them from the root of the
-repository, which needs the Git history for the version (`setuptools_scm`):
+as a wheel and installs it on Alpine, with the runtime dependencies at the
+versions of `uv.lock`, checked against their hashes. Build them from the
+root of the repository, which needs the Git history for the version
+(`setuptools_scm`):
 
 ```bash
 docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:local .
 docker build --file containers/filer.Dockerfile --tag tesk-core-filer:local .
 ```
 
-Without the Git history, set the version with `--build-arg
+Without the Git history (e.g., from a source archive or a Git worktree,
+whose `.git` points outside the build context), the images report version
+`0.0.0.dev0`; set the version with `--build-arg
 SETUPTOOLS_SCM_PRETEND_VERSION=<version>`, as the release workflow does.
 
 To try them in a TESK deployment, push them to a registry that the cluster
@@ -27,19 +31,33 @@ can pull from, and set the image names and tags in TESK's Helm chart (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 
+## Dependencies
+
+`pyproject.toml` holds the package's metadata and dependencies: the runtime
+dependencies, and the extras `dev` (tests, lint, type checks) and `docs`.
+[uv](https://docs.astral.sh/uv/) locks them all in `uv.lock`, which CI
+checks; after changing a dependency, update the lock with `uv lock`.
+
 ## Tests and lint
 
-The tests in `tests/` use pytest. With a virtual environment:
+The tests in `tests/` use pytest. With uv, which creates `.venv` with the
+locked versions:
 
 ```bash
-python -m pip install --editable ".[test]" coverage
-coverage run --source=tesk_core -m pytest tests
-coverage report -m
-python -m pip install pylint
-python -m pylint --errors-only tesk_core
+uv sync --extra dev
+uv run coverage run -m pytest
+uv run coverage report -m
 ```
 
-`tox` runs the same on every Python version that it finds (3.10 to 3.13).
+[ruff](https://docs.astral.sh/ruff/) lints and formats the code, and
+[mypy](https://mypy.readthedocs.io/) checks its type hints (complete type
+hints and Google-style docstrings in `src/`). Both run with the other
+checks of `.pre-commit-config.yaml` (file checks, actionlint, gitleaks); run
+them on every commit with `uv run pre-commit install`, or once:
+
+```bash
+uv run pre-commit run --all-files
+```
 
 ## Continuous integration
 
@@ -49,7 +67,7 @@ The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
 | Job | Checks |
 |---|---|
 | `PR title` | The title follows Conventional Commits, at most 50 characters (squash merges use it as the commit message). |
-| `Lint` | The workflows (actionlint), the citation metadata (`CITATION.cff`, cffconvert), and the package with pylint (errors only). |
+| `Lint` | The hooks of `.pre-commit-config.yaml` (ruff, mypy, actionlint, gitleaks, file checks), the lock file (`uv lock --check`), and the citation metadata (`CITATION.cff`, cffconvert). |
 | `Test (Python …)` | The tests on Python 3.10 to 3.13, with coverage to Codecov. |
 | `Docs` | These docs, built strictly. |
 | `Scan image (…)` | Trivy scan of the taskmaster and filer images: fails on critical and high vulnerabilities that have a fix. Accepted findings are listed in `.trivyignore.yaml`, with a reason and an expiry date. |
@@ -114,10 +132,11 @@ After the first release of this workflow, drop `fail: "false"` in
 ## Dependencies and metadata
 
 Dependabot (`.github/dependabot.yml`) opens grouped pull requests to `dev`
-once a month for the package's dependencies (`setup.py`), the docs'
-dependencies (`docs/requirements.txt`), the actions in the workflows and the
-base images in `containers/`. `.github/CODEOWNERS` names the code owners,
-who are requested for review on every pull request. `CITATION.cff` holds the
+once a month for the dependencies in `pyproject.toml` and `uv.lock` (the
+docs' dependencies in pull requests of their own), the actions in the
+workflows, the images in `containers/` and the pre-commit hooks.
+`.github/CODEOWNERS` names the code owners, who are requested for review on
+every pull request. `CITATION.cff` holds the
 citation metadata, with the version and date of the latest release; CI
 validates it.
 
@@ -139,8 +158,8 @@ is published from here. So:
 Build them strictly, as CI does:
 
 ```bash
-python -m pip install --requirement docs/requirements.txt
-mkdocs build --strict
+uv sync --extra docs
+uv run mkdocs build --strict
 ```
 
 To publish a change, update the `ref` of `tesk-core` in TESK's
