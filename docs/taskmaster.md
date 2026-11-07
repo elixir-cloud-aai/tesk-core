@@ -20,14 +20,33 @@ outputs, volumes and resources.
    (`<task>-outputs-filer`) to upload the outputs, then deletes the PVC.
 
 The taskmaster polls each job until it completes. If a job doesn't complete,
-or a pod of it can't pull its image (`ImagePullBackOff`) for longer than
-`--pod-timeout`, the taskmaster stops without running the remaining jobs. It
-deletes an executor's job with the status `Error` (not one that `Failed`),
-but not the PVC, and exits with code 0 in either case. Pods that stay
-pending for other reasons don't time out. To cancel a task, the TESK API labels the
-taskmaster's pod: the taskmaster reads its labels from `/podinfo/labels` (a
-Kubernetes downward API volume) while it polls, and when it finds the value
-`Cancelled`, it deletes the running job and stops.
+the taskmaster stops without running the remaining jobs, keeps the PVC, and
+exits with code 0. The TESK API derives the task's state from the jobs, not
+from the taskmaster's exit code: an executor job that failed gives
+`EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
+keeps every job that failed, with its pods and their logs.
+
+A job counts as failed when Kubernetes sets its condition `Failed`, or
+`FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
+complete with `Complete` or `SuccessCriteriaMet`. Other conditions, e.g.
+`Suspended`, leave the job running.
+
+If a pod of a job can't pull its image (`ImagePullBackOff`) for longer than
+`--pod-timeout`, the taskmaster fails the job: it sets the job's
+`activeDeadlineSeconds` to 1 second, so that Kubernetes stops the job's pods
+and marks the job `Failed` with the reason `DeadlineExceeded`, and then
+handles it like any job that failed. Pods that stay pending for other
+reasons don't time out.
+
+Executor jobs aren't retried (`backoffLimit: 0`), so that the state and logs
+are those of the executor's only run; `EXECUTOR_BACKOFF_LIMIT` sets another
+limit.
+
+To cancel a task, the TESK API labels the taskmaster's pod: the taskmaster
+reads its labels from `/podinfo/labels` (a Kubernetes downward API volume)
+while it polls, and when it finds the value `Cancelled`, it deletes the
+running job, also one that it is failing, and stops. Cancellation is the
+only case in which the taskmaster deletes a job.
 
 ## Options
 
@@ -41,7 +60,7 @@ development and debugging.
 | `-fn`, `--filer-name` | `eu.gcr.io/tes-wes/filer` | Image of the filer, without its tag. |
 | `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
 | `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
-| `-pt`, `--pod-timeout` | `240` | Seconds that a job's pod may take to start. |
+| `-pt`, `--pod-timeout` | `240` | Seconds after which a pod that can't pull its image fails its job (see above). |
 | `-d`, `--debug` | off | Debug logging, also of the filer. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
@@ -58,7 +77,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 
 | Variable | Description |
 |---|---|
-| `EXECUTOR_BACKOFF_LIMIT` | Retries of each executor's job (`backoffLimit`); Kubernetes' default if unset. |
+| `EXECUTOR_BACKOFF_LIMIT` | Retries of each executor's job (`backoffLimit`); 0 if unset, unless the TESK API sets a limit in the job. |
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
