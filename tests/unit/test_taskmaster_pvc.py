@@ -217,10 +217,16 @@ def test_cancelled_during_init_deletes_pvc(
         task = fh.read()
     monkeypatch.setattr("sys.argv", ["taskmaster", "-n", "tesk", task])
 
-    with patch.object(PVC, "delete") as mock_delete, pytest.raises(SystemExit):
+    with (
+        patch.object(PVC, "delete", autospec=True) as mock_delete,
+        pytest.raises(SystemExit),
+    ):
         taskmaster.main()
 
-    mock_delete.assert_called_once_with()
+    mock_delete.assert_called_once()
+    # The claim that `init_pvc` creates
+    deleted = mock_delete.call_args.args[0]
+    assert (deleted.name, deleted.namespace) == ("task-1000-pvc", "tesk")
     mock_run_task.assert_not_called()
 
 

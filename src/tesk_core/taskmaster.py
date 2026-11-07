@@ -202,20 +202,32 @@ def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
     return volume_mounts
 
 
-def task_pvc(data: dict[str, Any]) -> PVC | None:
-    """Describe the task's claim, without creating it.
+def new_pvc(data: dict[str, Any]) -> PVC:
+    """Describe the task's claim, `<task>-pvc` of the task's disk size.
 
     Args:
         data: The task.
 
     Returns:
-        The claim, as `init_pvc` creates it; none if the task has no
-        volumes, inputs and outputs, and so no claim.
+        The claim, not created yet.
+    """
+    task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
+    return PVC(task_name + "-pvc", data["resources"]["disk_gb"], args.namespace)
+
+
+def task_pvc(data: dict[str, Any]) -> PVC | None:
+    """Describe the task's claim, if it has one, without creating it.
+
+    Args:
+        data: The task.
+
+    Returns:
+        The claim, as `init_pvc` creates it (`new_pvc`); none if the task
+        has no volumes, inputs and outputs, and so no claim.
     """
     if not (data.get("volumes") or data.get("inputs") or data.get("outputs")):
         return None
-    task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
-    return PVC(task_name + "-pvc", data["resources"]["disk_gb"], args.namespace)
+    return new_pvc(data)
 
 
 def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
@@ -233,7 +245,7 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     global created_pvc  # noqa: PLW0603 -- module state, see `clean_on_interrupt`
 
     task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
-    pvc = PVC(task_name + "-pvc", data["resources"]["disk_gb"], args.namespace)
+    pvc = new_pvc(data)
 
     mounts = generate_mounts(data, pvc)
     logging.debug(mounts)
@@ -473,7 +485,7 @@ def main() -> None:
 
 def clean_on_interrupt() -> None:
     """Delete the jobs that the taskmaster created."""
-    logger.debug("Caught interrupt signal, deleting jobs and pvc")
+    logger.debug("Caught interrupt signal, deleting jobs")
 
     for job in created_jobs:
         job.delete()
@@ -499,7 +511,7 @@ def keep_failed_pvc() -> bool:
     return value == "true"
 
 
-def delete_created_pvc(keep_failed: bool = True) -> None:
+def delete_created_pvc(*, keep_failed: bool = True) -> None:
     """Delete the task's claim, if the taskmaster created one, and forget it.
 
     An error is logged, not raised, so that the taskmaster goes on as it
