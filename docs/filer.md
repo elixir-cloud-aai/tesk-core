@@ -44,6 +44,9 @@ reads for the URL's host.
 
 ### FTP
 
+Directory downloads skip, with a warning, listing entries whose names aren't
+a single path component (empty, `.`, `..`, or with `/` or `\`).
+
 If a `.netrc` file is mounted, the filer logs in with its credentials for
 the URL's host, or anonymously if it has none for that host. Without a
 `.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`,

@@ -143,3 +143,35 @@ def test_ftp_download_dir_local_error(
     )
     assert transfer.download_dir() == 1
     assert "Unable to create local directory" in caplog.text
+
+
+@pytest.mark.parametrize("dirbit", ["d", "-"])
+@pytest.mark.parametrize("name", ["../outside", "a/b", "a\\b", "..", "."])
+def test_ftp_download_dir_invalid_names(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    dirbit: str,
+    name: str,
+) -> None:
+    """Test that listing entries with invalid names are skipped.
+
+    For directories and files alike; the valid entries are downloaded.
+    """
+    listing = [
+        f"{dirbit}rw-r--r--    1 owner group     7 Nov 07 05:00 {name}",
+        "-rw-r--r--    1 owner group     7 Nov 07 05:00 ok.txt",
+    ]
+    conn = MagicMock()
+    conn.retrlines.side_effect = lambda command, callback: [
+        callback(line) for line in listing
+    ]
+    download = mocker.patch("tesk_core.filer.ftp_download_file", return_value=0)
+    dest = tmp_path / "dest" / "local"
+    transfer = FTPTransput(str(dest), "ftp://ftp.example.org/dir", Type.Directory, conn)
+
+    assert transfer.download_dir() == 0
+
+    download.assert_called_once_with(conn, "/dir/ok.txt", str(dest) + "/ok.txt")
+    assert sorted(path.name for path in tmp_path.rglob("*")) == ["dest", "local"]
+    assert "Skipping listing entry" in caplog.text

@@ -421,6 +421,9 @@ class FTPTransput(Transput):
             name = matches.group("name")  # type: ignore[union-attr]
 
             file_path = self.path + "/" + name
+            if not valid_entry_name(name, self.path, file_path):
+                logging.warning("Skipping listing entry %r", name)
+                continue
             file_url = self.url + "/" + name
 
             ftype = Type.Directory if dirbit == "d" else Type.File
@@ -453,6 +456,24 @@ class FTPTransput(Transput):
         """Close the connection, if the transfer opened it."""
         if self.connection_owner:
             self.ftp_connection.close()
+
+
+def valid_entry_name(name: str, parent: str, path: str) -> bool:
+    """Tell whether a name from a directory listing is safe to use.
+
+    Args:
+        name: The name of the entry.
+        parent: The local directory the entry is downloaded into.
+        path: The local path of the entry.
+
+    Returns:
+        Whether the name is a single path component other than `.` and
+        `..`, and the path stays below `parent`.
+    """
+    if name in {"", ".", ".."} or "/" in name or "\\" in name:
+        return False
+    parent_real = os.path.realpath(parent)
+    return os.path.realpath(path).startswith(parent_real.rstrip(os.sep) + os.sep)
 
 
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
