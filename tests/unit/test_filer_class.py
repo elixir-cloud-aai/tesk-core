@@ -133,3 +133,27 @@ class TestFilerClassNoEnv:
 
         f = Filer("name", {"a": 1}, pullPolicyAlways=True)
         assert f.getImagePullPolicy() == "Always"
+
+
+@patch.dict(os.environ, {"TESK_FTP_HOSTS": "ftp.example.org,[::1]:2121"})
+def test_set_ftp_passes_hosts() -> None:
+    """Test that the FTP credentials are passed with the taskmaster's hosts."""
+    f = Filer("name", {"a": 1})
+    f.set_ftp("user", "pass")
+
+    assert f.getEnv()[-3:] == [
+        {"name": "TESK_FTP_USERNAME", "value": "user"},
+        {"name": "TESK_FTP_PASSWORD", "value": "pass"},
+        {"name": "TESK_FTP_HOSTS", "value": "ftp.example.org,[::1]:2121"},
+    ]
+
+
+@patch.dict(os.environ, clear=True)
+def test_set_ftp_without_hosts() -> None:
+    """Test that only the credentials are passed without hosts."""
+    f = Filer("name", {"a": 1})
+    f.set_ftp("user", "pass")
+
+    names = [var["name"] for var in f.getEnv()]
+    assert "TESK_FTP_USERNAME" in names
+    assert "TESK_FTP_HOSTS" not in names

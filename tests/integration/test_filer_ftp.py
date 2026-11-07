@@ -11,6 +11,7 @@ from pytest_mock import MockerFixture
 from tesk_core.filer import (
     FTPTransput,
     Type,
+    ftp_login,
     ftp_make_dirs,
 )
 
@@ -268,3 +269,44 @@ def test_ftp_download_dir_keeps_empty_dirs(
     assert (tmp_path / "local" / "empty").is_dir()
     assert (tmp_path / "local" / "dir2" / "empty").is_dir()
     assert (tmp_path / "local" / "dir2" / "file").read_text() == "content"
+
+
+@pytest.mark.parametrize(("hosts", "logged_in"), [("LOCALHOST", True), ("", False)])
+def test_ftp_login_env_credentials(
+    tmp_path: Path, ftpserver: Any, hosts: str, logged_in: bool
+) -> None:
+    """Test that the env credentials are sent only to listed hosts.
+
+    The local FTP server has an account and an anonymous user with separate
+    home directories; an upload shows which one the filer logged in as.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+        hosts: The value of `TESK_FTP_HOSTS`.
+        logged_in: Whether the filer logs in to the account.
+    """
+    login = ftpserver.get_login_data()
+    # The server is shared by the tests of the session
+    target = Path(ftpserver.server_home) / "probe.txt"
+    target.unlink(missing_ok=True)
+    source = tmp_path / "probe.txt"
+    source.write_text("probe")
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
+    conn.connect(host="localhost", port=login["port"])
+    env = {
+        "TESK_FTP_USERNAME": login["user"],
+        "TESK_FTP_PASSWORD": login["passwd"],
+        "TESK_FTP_HOSTS": hosts,
+    }
+    try:
+        with mock.patch.dict("os.environ", env, clear=True):
+            ftp_login(conn, f"localhost:{login['port']}", None)
+        with source.open("rb") as file:
+            conn.storbinary("STOR probe.txt", file)
+    except ftplib.error_perm:
+        pass
+    finally:
+        conn.close()
+    assert target.exists() is logged_in

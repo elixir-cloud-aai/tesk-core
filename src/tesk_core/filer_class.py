@@ -1,6 +1,7 @@
 """The manifest of a filer job."""
 
 import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from tesk_core import path
@@ -183,6 +184,9 @@ class Filer:
     def set_ftp(self, user: str | None, pw: str | None) -> None:
         """Pass FTP credentials to the filer.
 
+        With them, the hosts they may be sent to, `TESK_FTP_HOSTS`, from the
+        taskmaster's environment, if set.
+
         Args:
             user: The FTP user name.
             pw: The FTP password.
@@ -190,6 +194,9 @@ class Filer:
         env = self.getEnv()
         env.append({"name": "TESK_FTP_USERNAME", "value": user})
         env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
+        hosts = os.environ.get("TESK_FTP_HOSTS")
+        if hosts is not None:
+            env.append({"name": "TESK_FTP_HOSTS", "value": hosts})
 
     def set_backoffLimit(self, limit: int) -> None:
         """Set the number of retries of the job (Kubernetes' default is 6).
