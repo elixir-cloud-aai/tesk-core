@@ -26,3 +26,12 @@ upgrade:
 
 Deployments without these credentials, or with a `.netrc` file, need no
 change.
+
+### `.netrc` and the env credentials together
+
+With a `.netrc` file, the filer used to ignore `TESK_FTP_USERNAME` and
+`TESK_FTP_PASSWORD`, and logged in anonymously to hosts without an entry.
+Now it uses them for hosts without an entry that are in `TESK_FTP_HOSTS`
+(see [Filer](filer.md#ftp)). An entry for the host and port, or for the host,
+still wins, then the `default` entry. No change is needed, unless you
+listed hosts in `TESK_FTP_HOSTS` that must still be accessed anonymously.
