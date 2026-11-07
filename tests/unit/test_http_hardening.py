@@ -321,6 +321,7 @@ def test_pprint_json_input_url_fields() -> None:
         {"name": "JSON_INPUT", "value": "not json https://h/p?q=SECRET"},
         {"url": None},
         {"url": "http://[bad/x?q=SECRET"},
+        {"args": ("https://h/?k=SECRET",)},
     ],
 )
 def test_pprint_odd_data(data: dict[str, Any]) -> None:
@@ -377,14 +378,12 @@ def test_pvc_spec_logged_redacted(
         mocker: The mocker fixture.
         caplog: The log capture fixture.
     """
-    pprint_mock = mocker.patch("tesk_core.pvc.pprint", return_value="redacted")
-    claim = PVC.__new__(PVC)
-    claim.spec = {"metadata": {"annotations": {"u": URL}}}
-    claim.namespace = "ns"
-    claim.cv1 = mocker.MagicMock()
+    mocker.patch("tesk_core.pvc.client")
+    claim = PVC("task-pvc", 1, "ns")
+    claim.spec["metadata"]["annotations"] = {"u": URL}
     caplog.set_level(logging.DEBUG)
     claim.create()
-    pprint_mock.assert_called_once_with(claim.spec)
+    assert "https://example.org/bucket/a.txt" in caplog.text
     assert SIGNATURE not in caplog.text
 
 

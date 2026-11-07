@@ -14,7 +14,8 @@ def redact(data: Any) -> Any:
 
     Strips the URLs in all strings (see `redact_urls`) and the whole value
     of each `url` key (see `url_for_log`), also in the task in
-    `JSON_INPUT`, and hides the values of the variables in `SECRET_ENV`.
+    `JSON_INPUT` (re-serialized; as text if it isn't JSON), and hides the
+    values of the variables in `SECRET_ENV`.
     Only environment entries with a literal `value` hold secrets: those
     with `valueFrom` only name a source.
 
@@ -26,7 +27,7 @@ def redact(data: Any) -> Any:
     """
     if isinstance(data, str):
         return redact_urls(data)
-    if isinstance(data, list):
+    if isinstance(data, (list, tuple)):
         return [redact(item) for item in data]
     if isinstance(data, dict):
         name = data.get("name")
