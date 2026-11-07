@@ -45,18 +45,20 @@ reads for the URL's host.
 ### FTP
 
 The filer connects to the URL's host and port (21 if the URL has none);
-user information in the URL is ignored.
+user information in the URL is ignored. A URL without a valid host or port
+(e.g. `ftp://ftp.example.org:99999/data`) fails the transfer with an error.
 
 Directory downloads skip, with a warning, listing entries whose names aren't
 a single path component (empty, `.`, `..`, or with `/` or `\`).
 
 The filer logs in with the first credentials it finds:
 
-1. The entry in a mounted `.netrc` file for the URL's host and port (e.g.
-   `machine ftp.example.org:2121` for `ftp://ftp.example.org:2121/data`)
-   or for its host (`machine ftp.example.org`),
-   matched as written, including case; otherwise its `default` entry, if it
-   has one, for any host.
+1. The entry in a mounted `.netrc` file for the URL's host and port as
+   written (e.g. `machine ftp.example.org:2121` for
+   `ftp://ftp.example.org:2121/data`); for port 21 (or none), the entry for
+   the host (`machine ftp.example.org`); otherwise its `default` entry, if
+   it has one, for any host and port. Hosts are matched as written,
+   including case.
 2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set (the user
    name not empty) and the URL's host is in `TESK_FTP_HOSTS` (see below).
 3. Anonymously.
@@ -68,15 +70,16 @@ TESK's Helm chart sets the credentials from a Kubernetes secret
 TESK documentation).
 
 `TESK_FTP_HOSTS` lists the hosts that the credentials are sent to,
-separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
+separated by commas, e.g.
+`ftp.example.org,data.example.org:2121,[2001:db8::1]`:
 
 - Each entry is `host` or `host:port`; IPv6 addresses go in brackets.
   Spaces around entries are ignored.
 - Hosts match exactly, ignoring case: `ftp.example.org` matches neither
   `example.org` nor `ftp.example.org.other.org`. There are no wildcards.
-- An entry without a port matches the host on any port; one with a port
-  matches only that port (`ftp.example.org:21` also matches URLs without
-  a port).
+- An entry without a port matches the host on port 21 only (and URLs
+  without a port); list other ports explicitly, e.g.
+  `data.example.org:2121`.
 - Entries with user information, a path, whitespace or control characters
   inside, or an empty, invalid or zero port (e.g. `ftp.example.org:`)
   match nothing;
@@ -85,8 +88,7 @@ separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
 
 If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
 `TESK_FTP_HOSTS` is not (or has no entries), the credentials are sent to no
-host:
-the filer logs in anonymously and logs an error, once per run, that says to
+host: the filer logs in anonymously and logs an error, once per run, that says to
 set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain neither
 the credentials nor the user information of URLs.
 
