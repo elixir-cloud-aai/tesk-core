@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from unittest import mock
 from unittest.mock import MagicMock
+from urllib.parse import urlsplit
 
 import pytest
 from pytest_mock import MockerFixture
@@ -372,7 +373,58 @@ def test_ftp_login_unparsable_netloc(
     with mock.patch.dict("os.environ", env, clear=True):
         ftp_login(conn, netloc, netrc_file)
     conn.login.assert_called_once_with()
-    assert "secret" not in caplog.text
+    assert "Invalid host in FTP URL" in caplog.text
+
+
+def test_ftp_login_host_mismatch(
+    mocker: MockerFixture, netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that no credentials are sent if the two parses of a host differ.
+
+    The connection's host (`split_host_port`) and the `.netrc` lookup's
+    (`netloc_host`) must agree, ignoring case.
+
+    Args:
+        mocker: The mocker fixture.
+        netrc_file: The `.netrc` file, with an entry for `FTP.example.org`.
+        caplog: The log capture fixture.
+    """
+    mocker.patch(
+        "tesk_core.filer.split_host_port", return_value=("other.example.org", None)
+    )
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, "FTP.example.org", netrc_file)
+    conn.login.assert_called_once_with()
+    assert "Invalid host in FTP URL" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("machine", "netloc"),
+    [
+        ("ftp.example.org:21", "ftp.example.org"),
+        ("ftp.example.org:21", "u@ftp.example.org:021"),
+        ("[::1]:21", "[::1]"),
+        ("[::1]", "[::1]:21"),
+    ],
+)
+def test_ftp_login_netrc_default_port(
+    tmp_path: Path, machine: str, netloc: str
+) -> None:
+    """Test that entries for port 21 match URLs with or without it.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        machine: The host of the `.netrc` entry.
+        netloc: The network location of the URL.
+    """
+    path = tmp_path / ".netrc"
+    path.write_text(f"machine {machine} login port_user password port_pass\n")
+    path.chmod(0o600)
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, netloc, netrc.netrc(str(path)))
+    conn.login.assert_called_once_with("port_user", "port_pass")
 
 
 @pytest.mark.parametrize(
@@ -400,10 +452,12 @@ def test_ftp_connect_host_port(
     """
     conn = mocker.MagicMock()
     mocker.patch("tesk_core.filer.FTP", return_value=conn)
-    mocker.patch("tesk_core.filer.ftp_login")
+    login = mocker.patch("tesk_core.filer.ftp_login")
     with FTPTransput("/tmp/x", url, Type.File):
         pass
     conn.connect.assert_called_once_with(host, port)
+    # The credentials are looked up for the network location as written
+    login.assert_called_once_with(conn, urlsplit(url).netloc, mocker.ANY)
 
 
 @pytest.mark.parametrize(

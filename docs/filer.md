@@ -56,9 +56,9 @@ The filer logs in with the first credentials it finds:
 1. The entry in a mounted `.netrc` file for the URL's host and port as
    written (e.g. `machine ftp.example.org:2121` for
    `ftp://ftp.example.org:2121/data`); for port 21 (or none), the entry for
-   the host (`machine ftp.example.org`); otherwise its `default` entry, if
-   it has one, for any host and port. Hosts are matched as written,
-   including case.
+   the host with `:21` or without a port (`machine ftp.example.org`);
+   otherwise its `default` entry, if it has one, for any host and port.
+   Hosts are matched as written, including case.
 2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set (the user
    name not empty) and the URL's host is in `TESK_FTP_HOSTS` (see below).
 3. Anonymously.
@@ -88,9 +88,9 @@ separated by commas, e.g.
 
 If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
 `TESK_FTP_HOSTS` is not (or has no entries), the credentials are sent to no
-host: the filer logs in anonymously and logs an error, once per run, that says to
-set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain neither
-the credentials nor the user information of URLs.
+host: the filer logs in anonymously and logs an error, once per run, that
+says to set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain
+neither the credentials nor the user information of URLs.
 
 ### S3
 
@@ -148,10 +148,19 @@ If the taskmaster has the environment variable `NETRC_SECRET_NAME`, it mounts
 the key `.netrc` of that Kubernetes secret into the filer as
 `/opt/home/.netrc`, and sets `HOME` to `/opt/home`. The filer then uses it
 for FTP and HTTP(S), as described above. TESK's Helm chart creates such a
-secret with `ftp.netrcSecret`. A `.netrc` file has one entry per host:
+secret with `ftp.netrcSecret`. A `.netrc` file has one entry per host, or
+per host and port:
 
 ```text
 machine ftp.example.org
 login <user>
 password <password>
+
+machine data.example.org:2121
+login <user>
+password <password>
 ```
+
+For FTP, an entry without a port is used for port 21 only (see
+[FTP](#ftp)); a `default` entry is used for every host and port without an
+entry of its own.

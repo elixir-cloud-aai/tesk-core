@@ -31,12 +31,13 @@ change.
 
 The filer now connects to FTP URLs with a port (e.g.
 `ftp://ftp.example.org:2121/data`); before, these failed. Credentials go to
-such a URL only from an entry with that port: `machine
-ftp.example.org:2121` in `.netrc`, or `ftp.example.org:2121` in
-`TESK_FTP_HOSTS`. Entries without a port apply to port 21 only, except the
-`default` entry of `.netrc`, which applies to every host and port. No change
-is needed, unless your tasks use FTP URLs with a port: then add entries
-with that port.
+such a URL (with a port other than 21) only from an entry with that port:
+`machine ftp.example.org:2121` in `.netrc`, or `ftp.example.org:2121` in
+`TESK_FTP_HOSTS`. A `.netrc` entry without a port (`machine
+ftp.example.org`), as in existing files, and an entry of `TESK_FTP_HOSTS`
+without a port are used for port 21 only; the `default` entry of `.netrc` is
+used for every host and port. URLs without a port work as before. If your
+tasks use FTP URLs with other ports, add entries with those ports.
 
 ### `.netrc` and the env credentials together
 

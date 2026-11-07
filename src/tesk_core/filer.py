@@ -690,18 +690,23 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     creds: tuple[str, str | None, str | None] | None = None
     target = split_host_port(netloc)
     host = netloc_host(netloc)
-    # The `.netrc` lookup keeps the host's case, the connection doesn't; on
-    # anything else (e.g., odd brackets), send no credentials
+    # `FTPTransput` connects to the host of `split_host_port`; the `.netrc`
+    # lookup keeps the host's case, but must otherwise agree with it (callers
+    # may pass any network location), or no credentials are sent
     if target is None or target[0] != host.lower():
         logging.error("Invalid host in FTP URL; logging in anonymously")
         ftp_connection.login()
         return
     if netrc_file is not None:
-        # An entry for the host and port; then one for the host, for the
-        # default port only, or the `default` entry
-        creds = netrc_file.hosts.get(netloc.rpartition("@")[2])
+        # An entry for the host and port as written; for the default port,
+        # one for the host with `:21`, or without a port; then the `default`
+        # entry
+        written = netloc.rpartition("@")[2]
+        creds = netrc_file.hosts.get(written)
         if not creds and (target[1] or ftplib.FTP_PORT) == ftplib.FTP_PORT:
-            creds = netrc_file.authenticators(host)
+            bare = written[: written.index("]") + 1] if "]" in written else host
+            creds = netrc_file.hosts.get(f"{bare}:{ftplib.FTP_PORT}")
+            creds = creds or netrc_file.hosts.get(bare) or netrc_file.hosts.get(host)
         creds = creds or netrc_file.hosts.get("default")
     if creds:
         user, _, password = creds
