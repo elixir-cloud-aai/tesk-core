@@ -203,61 +203,6 @@ def test_run_executor_failure(
 
 
 @pytest.mark.parametrize(
-    ("spec", "expected"),
-    [
-        (
-            {"restartPolicy": "Never"},
-            {
-                "rules": [
-                    {
-                        "action": "Ignore",
-                        "onPodConditions": [{"type": "DisruptionTarget"}],
-                    }
-                ]
-            },
-        ),
-        ({"restartPolicy": "OnFailure"}, None),
-        ({}, None),
-    ],
-)
-@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
-@patch("tesk_core.taskmaster.logger")
-def test_run_executor_pod_failure_policy(
-    mock_logger: MagicMock,
-    mock_run_to_compl: MagicMock,
-    spec: dict[str, str],
-    expected: dict[str, Any] | None,
-    data: dict[str, Any],
-) -> None:
-    """Test that disrupted executor pods (e.g., evicted) don't fail the job.
-
-    Kubernetes allows a pod failure policy only with `restartPolicy: Never`;
-    a policy of the job is kept.
-    """
-    executor = data["executors"][0]
-    pod_spec = executor["spec"]["template"]["spec"]
-    pod_spec.pop("restartPolicy", None)
-    pod_spec.pop("restart_policy", None)
-    pod_spec.update(spec)
-    run_executor(executor, taskmaster.args.namespace)
-    assert executor["spec"].get("podFailurePolicy") == expected
-
-
-@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
-@patch("tesk_core.taskmaster.logger")
-def test_run_executor_keeps_pod_failure_policy(
-    mock_logger: MagicMock, mock_run_to_compl: MagicMock, data: dict[str, Any]
-) -> None:
-    """Test that the pod failure policy of an executor's job is kept."""
-    executor = data["executors"][0]
-    executor["spec"]["template"]["spec"]["restartPolicy"] = "Never"
-    policy = {"rules": [{"action": "FailJob", "onExitCodes": {"values": [1]}}]}
-    executor["spec"]["podFailurePolicy"] = policy
-    run_executor(executor, taskmaster.args.namespace)
-    assert executor["spec"]["podFailurePolicy"] == policy
-
-
-@pytest.mark.parametrize(
     ("env", "spec", "expected"),
     [
         ({}, {}, 0),

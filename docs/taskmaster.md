@@ -36,18 +36,17 @@ If a pod of a job can't pull its image (`ImagePullBackOff`) for longer than
 `activeDeadlineSeconds` to 1 second, so that Kubernetes deletes the job's
 active pods and marks the job `Failed` with the reason `DeadlineExceeded`
 (the pod's events show why it couldn't start). The taskmaster then handles it
-like any job that failed; if Kubernetes hasn't marked the job within another
-`--pod-timeout`, it stops anyway. If the taskmaster can't change the job
-(e.g., its role lacks `patch` on jobs), it deletes the job, as earlier
-releases did. Pods that stay pending for other reasons don't time out.
+like any job that failed. If the taskmaster can't change the job (e.g., its
+role lacks `patch` on jobs), or Kubernetes hasn't marked the job within
+another `--pod-timeout`, the taskmaster deletes the job, as earlier releases
+did, and stops. Pods that stay pending for other reasons don't time out.
 
-Executor jobs aren't retried (`backoffLimit: 0`), so that the state and logs
-are those of the executor's only run; `EXECUTOR_BACKOFF_LIMIT` sets another
-limit. Pods that Kubernetes disrupts, e.g. evicts from a drained node, are
-replaced and don't fail the job: executor jobs with the restart policy
-`Never` (as the TESK API creates them) get a pod failure policy that ignores
-the condition `DisruptionTarget`, unless they have a pod failure policy of
-their own. Kubernetes supports pod failure policies from 1.26 on.
+Executor jobs aren't retried (`backoffLimit: 0`) unless
+`EXECUTOR_BACKOFF_LIMIT` (or the job) sets a limit, so that the state and logs
+are those of the executor's only run. The limit also covers pods that
+Kubernetes evicts, e.g. from a drained node: without retries, an evicted
+executor fails. TESK's Helm chart sets `EXECUTOR_BACKOFF_LIMIT` from
+`tesk.executorRetries` (2 by default); set it to 0 for single runs.
 
 To cancel a task, the TESK API labels the taskmaster's pod: the taskmaster
 reads its labels from `/podinfo/labels` (a Kubernetes downward API volume)

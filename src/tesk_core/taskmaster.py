@@ -6,7 +6,6 @@ one job per executor, one after another, and a filer job for the outputs.
 """
 
 import argparse
-import copy
 import gzip
 import json
 import logging
@@ -25,10 +24,6 @@ created_jobs: list[Job] = []
 created_pvc: PVC | None = None
 poll_interval = 5
 task_volume_basename = "task-volume"
-# Pod failure policy of executor jobs: disrupted pods are replaced
-DISRUPTION_POLICY: dict[str, Any] = {
-    "rules": [{"action": "Ignore", "onPodConditions": [{"type": "DisruptionTarget"}]}]
-}
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -43,8 +38,7 @@ def run_executor(
     is kept, so that the TESK API reports the executor's state
     (`EXECUTOR_ERROR`) and logs. Executor jobs aren't retried
     (`backoffLimit: 0`), unless the job or `EXECUTOR_BACKOFF_LIMIT` sets a
-    limit, but pods that are disrupted are replaced (`DISRUPTION_POLICY`,
-    unless the job has a pod failure policy).
+    limit; that limit also covers pods that are evicted.
 
     Args:
         executor: The manifest of the executor job.
@@ -65,14 +59,6 @@ def run_executor(
 
     if "restartPolicy" not in spec and "restart_policy" in spec:
         spec["restartPolicy"] = spec["restart_policy"]
-
-    # Pods that are disrupted (e.g., evicted from a drained node) don't count
-    # as failures of the executor, also without retries; Kubernetes allows a
-    # pod failure policy only with the restart policy `Never`
-    if spec.get("restartPolicy") == "Never":
-        executor["spec"].setdefault(
-            "podFailurePolicy", copy.deepcopy(DISRUPTION_POLICY)
-        )
 
     for container in spec["containers"]:
         if "limits" not in container["resources"]:

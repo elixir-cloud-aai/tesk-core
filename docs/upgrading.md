@@ -9,11 +9,12 @@
   1.31 and later) counts as failed. The TESK API can then report the
   executor as failed (`EXECUTOR_ERROR`) and show its logs. Clean-up of
   finished jobs is up to the deployment, as before for jobs that failed.
-- **Executors aren't retried.** Executor jobs get `backoffLimit: 0` unless
-  the job or `EXECUTOR_BACKOFF_LIMIT` sets a limit. Before, Kubernetes' default
-  of 6 retries applied. Set `EXECUTOR_BACKOFF_LIMIT` to keep retrying. Pods
-  that Kubernetes disrupts (e.g., evictions) are still replaced, through a pod
-  failure policy (Kubernetes 1.26 or later).
+- **Executors aren't retried by default.** Executor jobs get
+  `backoffLimit: 0` unless the job or `EXECUTOR_BACKOFF_LIMIT` sets a limit.
+  Before, Kubernetes' default of 6 retries applied. TESK's Helm chart sets
+  `EXECUTOR_BACKOFF_LIMIT` from `tesk.executorRetries` (2 by default), so chart
+  deployments keep that limit; set it to 0 for single runs. Without retries,
+  an executor whose pod is evicted (e.g., from a drained node) fails.
 - **Permissions.** The taskmaster now patches jobs (to fail them). The
   taskmaster role of TESK's Helm chart already allows `patch` on `jobs`; if
   you use your own role, add it. Without it, the taskmaster deletes such jobs,

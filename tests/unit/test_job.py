@@ -656,28 +656,31 @@ def test_get_status_pod_timeout_patch_error(
 
 
 @pytest.mark.parametrize(
-    ("waited", "conditions", "expected"),
+    ("waited", "conditions", "expected", "deleted"),
     [
-        (10, None, "Running"),
-        (60, None, "Failed"),
-        (10, [("Failed", "True")], "Failed"),
-        (10, [("Complete", "True")], "Complete"),
+        (10, None, "Running", False),
+        (60, None, "Failed", True),
+        (10, [("Failed", "True")], "Failed", False),
+        (10, [("Complete", "True")], "Complete", False),
     ],
 )
+@patch("kubernetes.client.BatchV1Api.delete_namespaced_job")
 @patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
 @patch("kubernetes.client.BatchV1Api.read_namespaced_job")
 def test_get_status_failing(
     mock_read_namespaced_job: MagicMock,
     mock_list_namespaced_pod: MagicMock,
+    mock_delete_namespaced_job: MagicMock,
     waited: int,
     conditions: list[tuple[str, str]] | None,
     expected: str,
+    deleted: bool,
     data: dict[str, Any],
 ) -> None:
     """Test the status of a job that was failed.
 
     It runs until Kubernetes ends it, for at most another timeout; then it
-    counts as failed. The pods aren't checked again.
+    is deleted and counts as failed. The pods aren't checked again.
     """
     mock_read_namespaced_job.return_value = job_with_conditions(conditions)
     job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
@@ -687,6 +690,7 @@ def test_get_status_failing(
     )
     status, _ = job.get_status(False)
     assert status == expected
+    assert mock_delete_namespaced_job.called == deleted
     mock_list_namespaced_pod.assert_not_called()
 
 

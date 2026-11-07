@@ -105,7 +105,7 @@ class Job:
 
         A pod that can't pull its image (`ImagePullBackOff`) for longer than
         `timeout` fails the job (`fail`); the job runs until Kubernetes marks
-        it `Failed`, for at most another `timeout`.
+        it `Failed`, for at most another `timeout`; then it is deleted.
 
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
@@ -136,8 +136,11 @@ class Job:
             waited = (datetime.now(timezone.utc) - self.failing_since).total_seconds()
             if waited > self.timeout:
                 logging.warning(
-                    "Job '%s' wasn't marked failed within %s s", self.name, self.timeout
+                    "Job '%s' wasn't marked failed within %s s; deleting it",
+                    self.name,
+                    self.timeout,
                 )
+                self.delete_quietly()
                 self.status = "Failed"
             return self.status, is_all_pods_runnning
 
@@ -190,19 +193,23 @@ class Job:
             )
         except ApiException as ex:
             logging.error("Can't fail job '%s' (%s); deleting it", self.name, ex.status)
-            try:
-                self.delete()
-            except ApiException as delete_ex:
-                logging.error("Can't delete job '%s' (%s)", self.name, delete_ex.status)
+            self.delete_quietly()
             return False
         self.failing_since = datetime.now(timezone.utc)
         return True
+
+    def delete_quietly(self) -> None:
+        """Delete the job, as a last resort; log an error if that fails."""
+        try:
+            self.delete()
+        except ApiException as ex:
+            logging.error("Can't delete job '%s' (%s)", self.name, ex.status)
 
     def delete(self) -> None:
         """Delete the job and, in the background, its pods.
 
         Only on cancellation, on an interrupt of the taskmaster, and if a job
-        can't be failed (`fail`).
+        can't be failed (`fail`) or isn't marked failed in time.
         """
         logging.info("Deleting job '%s'", self.name)
         self.bv1.delete_namespaced_job(
