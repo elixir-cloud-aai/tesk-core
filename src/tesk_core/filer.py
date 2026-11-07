@@ -545,10 +545,11 @@ def ftp_host_entry_valid(entry: str) -> bool:
         Whether the entry is valid; invalid entries match nothing.
     """
     # No user information, path, query or fragment, which `urlsplit` would
-    # split off
-    if not entry or any(char in entry for char in "@/?#"):
+    # split off, and no spaces or control characters, which no host has
+    if not entry.isprintable() or any(char in entry for char in "@/?# "):
         return False
-    return split_host_port(entry) is not None
+    parts = split_host_port(entry)
+    return parts is not None and parts[1] != 0
 
 
 @functools.cache
@@ -626,7 +627,8 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
 
     Args:
         ftp_connection: The connection.
-        netloc: The host (and port) of the server.
+        netloc: The network location of the URL: host, and port and user
+            information, if any.
         netrc_file: The `.netrc` file, if it was read.
     """
     user = None

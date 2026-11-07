@@ -67,7 +67,8 @@ separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
 - An entry without a port matches the host on any port; one with a port
   matches only that port (`ftp.example.org:21` also matches URLs without
   a port).
-- Entries with user information, a path or an invalid port match nothing;
+- Entries with user information, a path, spaces or an invalid port (or
+  port 0) match nothing;
   the filer logs an error, once per run, with their number (not their
   text).
 

@@ -89,6 +89,9 @@ def test_ftp_host_allowed(hosts: str, netloc: str) -> None:
         ("\uff03x", "x"),
         ("ftp://ftp.example.org", "ftp.example.org"),
         ("ftp.example.org", "[::1"),
+        ("ftp example.org", "ftp example.org"),
+        ("h\x00", "h\x00"),
+        ("ftp.example.org:0", "ftp.example.org:0"),
     ],
 )
 def test_ftp_host_not_allowed(hosts: str, netloc: str) -> None:
@@ -182,14 +185,15 @@ def test_ftp_login_invalid_hosts(
         caplog: The log capture fixture.
     """
     conn = mocker.MagicMock()
-    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp://u:secret@h, [::1, ftp.example.org"}
+    hosts = "ftp://u:secret@h, [::1, a b, ftp.example.org"
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": hosts}
     with mock.patch.dict("os.environ", env, clear=True):
         ftp_login(conn, "ftp.example.org", None)
         ftp_login(conn, "ftp.example.org", None)
     assert conn.login.call_args_list == [mock.call("test", "test_pass")] * 2
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
-    assert "2 invalid entries" in errors[0].getMessage()
+    assert "3 invalid entries" in errors[0].getMessage()
     assert "secret" not in caplog.text
 
 
