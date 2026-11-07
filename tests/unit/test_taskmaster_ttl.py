@@ -243,6 +243,9 @@ def test_new_job_owner_references(monkeypatch: pytest.MonkeyPatch) -> None:
     bare = new_job({"metadata": {}}, "task-1234-ex-01")
 
     assert job.body["metadata"]["ownerReferences"] == [other, OWNER]
+    # A manifest that is reused (as the filer's) gets the owner once
+    again = new_job(job.body, "task-1234-ex-00")
+    assert again.body["metadata"]["ownerReferences"] == [other, OWNER]
     assert bare.body["metadata"]["ownerReferences"] == [OWNER]
     assert job.namespace == "tesk"
     assert job.name == "task-1234-ex-00"

@@ -36,7 +36,8 @@ pods, are deleted, the PVC stays `Terminating`, as after a task that
 completed. The jobs stay until they are deleted, by hand or after a TTL
 (see [Deleting finished tasks](#deleting-finished-tasks)). To keep the PVCs
 of tasks that don't complete, e.g. to inspect their files, set
-`KEEP_FAILED_PVC` to `true`; then delete them yourself. Tasks that complete delete their PVC either way.
+`KEEP_FAILED_PVC` to `true`; then delete them yourself. Tasks that
+complete delete their PVC either way.
 
 An error deleting the PVC is logged, also a request that times out (after
 5 seconds to connect or 30 seconds to answer, per attempt of the Kubernetes
@@ -160,7 +161,12 @@ deletes them and their pods too. The taskmaster takes the job's name and
 UID from its pod's labels (`batch.kubernetes.io/job-name` and
 `batch.kubernetes.io/controller-uid`, or `job-name` and `controller-uid`
 before Kubernetes 1.27); without them (e.g. outside a pod), the jobs get no
-owner.
+owner. The references don't block the owner's deletion
+(`blockOwnerDeletion` isn't set), so they need no permission beyond
+creating jobs. To delete a task by hand, delete its taskmaster's job with
+`kubectl delete job <task>`, or through the API with the propagation
+policy `Background` or `Foreground`: a `batch/v1` job deleted through the
+API without a policy leaves the jobs it owns behind.
 
 By default, nothing deletes the jobs. With `TASK_TTL_SECONDS` set to a
 whole number of seconds, the taskmaster sets `ttlSecondsAfterFinished` on
