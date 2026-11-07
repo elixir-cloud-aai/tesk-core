@@ -131,7 +131,10 @@ def test_ftp_login_env_credentials_other_host(
     with mock.patch.dict("os.environ", env, clear=True), caplog.at_level("DEBUG"):
         ftp_login(conn, "user:pw@other.example.org:2121", None)
     conn.login.assert_called_once_with()
-    assert "other.example.org" in caplog.text
+    assert caplog.messages == [
+        "FTP host other.example.org:2121 is not in TESK_FTP_HOSTS; "
+        "logging in anonymously"
+    ]
     assert "pw@" not in caplog.text
     assert "test_pass" not in caplog.text
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
