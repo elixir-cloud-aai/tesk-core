@@ -602,8 +602,9 @@ def subfolders_in(whole_path: str) -> list[str]:
     return subfolders
 
 
-# Returns an error code at each step that can fail
-def ftp_make_dirs(ftp_connection: FTP, path: str) -> int:  # noqa: PLR0911
+def ftp_make_dirs(  # noqa: PLR0911 -- an error code for each step that can fail
+    ftp_connection: FTP, path: str
+) -> int:
     """Create a remote directory and its parents, unless it exists.
 
     Args:
