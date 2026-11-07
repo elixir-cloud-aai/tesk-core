@@ -13,6 +13,38 @@ from tesk_core.Util import pprint
 
 logging.basicConfig(format="%(message)s", level=logging.INFO)
 
+# Reasons why containers of a pending pod wait that don't resolve by
+# waiting; pods that wait for other reasons (e.g., to be scheduled, or while
+# a large image is pulled) are queued and keep waiting
+CANNOT_START_REASONS = frozenset(
+    {
+        "CreateContainerConfigError",
+        "ErrImagePull",
+        "ImagePullBackOff",
+        "InvalidImageName",
+    }
+)
+
+
+def cannot_start(pod: client.V1Pod) -> client.V1ContainerStateWaiting | None:
+    """Find a container of a pod that waits for a reason that won't resolve.
+
+    Args:
+        pod: The pod.
+
+    Returns:
+        The waiting state of the first such container, init containers
+        included, or `None`.
+    """
+    statuses = (pod.status.init_container_statuses or []) + (
+        pod.status.container_statuses or []
+    )
+    for status in statuses:
+        waiting = status.state.waiting if status.state is not None else None
+        if waiting is not None and waiting.reason in CANNOT_START_REASONS:
+            return waiting
+    return None
+
 
 class Job:
     """A Kubernetes job, run to completion.
@@ -24,8 +56,8 @@ class Job:
             `Failed` or `Error`.
         bv1: Client of the Kubernetes batch API.
         cv1: Client of the Kubernetes core API.
-        timeout: Seconds after which pods that can't pull their image fail
-            the job.
+        timeout: Seconds after which pending pods that can't start (see
+            `CANNOT_START_REASONS`) fail the job.
         body: The manifest of the job.
     """
 
@@ -60,8 +92,8 @@ class Job:
             poll_interval: Seconds between status checks.
             check_cancelled: Tells whether the task was cancelled; if so, the
                 job is deleted.
-            pod_timeout: Seconds after which pods that can't pull their
-                image fail the job.
+            pod_timeout: Seconds after which pending pods that can't start
+                (see `CANNOT_START_REASONS`) fail the job.
 
         Returns:
             The final status: `Complete`, `Failed`, `Error` or `Cancelled`.
@@ -136,18 +168,17 @@ class Job:
                 ).items
                 is_all_pods_runnning = True
                 for pod in pods:
-                    if pod.status.phase == "Pending" and pod.status.start_time:
-                        is_all_pods_runnning = False
-                        delta = (
-                            datetime.now(timezone.utc) - pod.status.start_time
-                        ).total_seconds()
-                        if (
-                            delta > self.timeout
-                            and pod.status.container_statuses[0].state.waiting.reason
-                            == "ImagePullBackOff"
-                        ):
-                            logging.info(pod.status.container_statuses[0].state.waiting)
-                            return "Error", is_all_pods_runnning
+                    if pod.status.phase != "Pending":
+                        continue
+                    is_all_pods_runnning = False
+                    since = pod.status.start_time or pod.metadata.creation_timestamp
+                    if since is None:
+                        continue
+                    delta = (datetime.now(timezone.utc) - since).total_seconds()
+                    waiting = cannot_start(pod)
+                    if delta > self.timeout and waiting is not None:
+                        logging.info(waiting)
+                        return "Error", is_all_pods_runnning
 
         return self.status, is_all_pods_runnning
 

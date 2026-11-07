@@ -20,11 +20,22 @@ outputs, volumes and resources.
    (`<task>-outputs-filer`) to upload the outputs, then deletes the PVC.
 
 The taskmaster polls each job until it completes. If a job doesn't complete,
-or a pod of it can't pull its image (`ImagePullBackOff`) for longer than
-`--pod-timeout`, the taskmaster stops without running the remaining jobs. It
-deletes an executor's job with the status `Error` (not one that `Failed`),
-but not the PVC, and exits with code 0 in either case. Pods that stay
-pending for other reasons don't time out. To cancel a task, the TESK API labels the
+the taskmaster stops without running the remaining jobs, keeps the PVC, and
+exits with code 0. The TESK API derives the task's state from the jobs, so
+the exit code doesn't report the failure. It also keeps the job of an
+executor that `Failed`, so that the TESK API can report the state and the
+executor's logs.
+
+A pending pod whose containers can't start fails its job after
+`--pod-timeout` seconds. That covers an image that can't be pulled
+(`ErrImagePull`, `ImagePullBackOff`, `InvalidImageName`) and a broken
+container configuration (`CreateContainerConfigError`, e.g. a missing secret
+or ConfigMap). The timeout is measured from the pod's start, or from its
+creation if it hasn't started. The taskmaster then deletes the executor's
+job (status `Error`). Pods that are pending for other reasons, e.g. waiting
+to be scheduled or pulling a large image, are queued and keep waiting.
+
+To cancel a task, the TESK API labels the
 taskmaster's pod: the taskmaster reads its labels from `/podinfo/labels` (a
 Kubernetes downward API volume) while it polls, and when it finds the value
 `Cancelled`, it deletes the running job and stops.
@@ -41,7 +52,7 @@ development and debugging.
 | `-fn`, `--filer-name` | `eu.gcr.io/tes-wes/filer` | Image of the filer, without its tag. |
 | `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
 | `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
-| `-pt`, `--pod-timeout` | `240` | Seconds that a job's pod may take to start. |
+| `-pt`, `--pod-timeout` | `240` | Seconds after which a pending pod that can't start fails its job (see above). |
 | `-d`, `--debug` | off | Debug logging, also of the filer. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
