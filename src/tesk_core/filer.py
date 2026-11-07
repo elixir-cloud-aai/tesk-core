@@ -329,12 +329,21 @@ class FTPTransput(Transput):
         return self
 
     def upload_dir(self) -> int:
-        """Upload the files below the directory, recursively.
+        """Upload the directory and everything below it, recursively.
+
+        Creates the remote directory and its parents, so that empty
+        directories are kept.
 
         Returns:
             0 on success, otherwise 1.
         """
-        for file in os.listdir(self.path):
+        # The source first, so that a missing one creates nothing
+        entries = os.listdir(self.path)
+        if ftp_make_dirs(self.ftp_connection, self.url_path):
+            logging.error("Unable to create remote directory %s", url_for_log(self.url))
+            return 1
+
+        for file in entries:
             file_path = self.path + "/" + file
             file_url = self.url + "/" + file
 
@@ -351,8 +360,7 @@ class FTPTransput(Transput):
 
             logging.debug('Uploading %s\t"%s"', ftype.value, file_path)
 
-            # We recurse into new transputs, ending with files which are uploaded
-            # Downside is nothing happens with empty dirs.
+            # Recurse into new transfers, ending with files, which are uploaded
             with FTPTransput(file_path, file_url, ftype) as transfer:
                 if transfer.upload():
                     return 1
@@ -378,7 +386,10 @@ class FTPTransput(Transput):
         return ftp_upload_file(self.ftp_connection, self.path, self.url_path)
 
     def download_dir(self) -> int:
-        """Download the files below the directory, recursively.
+        """Download the directory and everything below it, recursively.
+
+        Creates the local directory and its parents, so that empty
+        directories are kept.
 
         Returns:
             0 on success, otherwise 1.
@@ -386,7 +397,13 @@ class FTPTransput(Transput):
         logging.debug(
             "Processing ftp dir: %s target: %s", url_for_log(self.url), self.path
         )
+        # The source first, so that a missing one creates nothing
         self.ftp_connection.cwd(self.url_path)
+        try:
+            os.makedirs(self.path, exist_ok=True)
+        except OSError:
+            logging.exception("Unable to create local directory %s", self.path)
+            return 1
 
         # This is horrible and I'm sorry but it works flawlessly.
         # Credit to Chris Haas for writing this
@@ -409,12 +426,15 @@ class FTPTransput(Transput):
             name = matches.group("name")  # type: ignore[union-attr]
 
             file_path = self.path + "/" + name
+            if not valid_entry_name(name, self.path, file_path):
+                logging.warning("Skipping listing entry %r", name)
+                continue
             file_url = self.url + "/" + name
 
             ftype = Type.Directory if dirbit == "d" else Type.File
 
-            # We recurse into new transputs, ending with files which are downloaded
-            # Downside is nothing happens with empty dirs.
+            # Recurse into new transfers, ending with files, which are
+            # downloaded
             with FTPTransput(
                 file_path, file_url, ftype, self.ftp_connection
             ) as transfer:
@@ -441,6 +461,24 @@ class FTPTransput(Transput):
         """Close the connection, if the transfer opened it."""
         if self.connection_owner:
             self.ftp_connection.close()
+
+
+def valid_entry_name(name: str, parent: str, path: str) -> bool:
+    """Tell whether a name from a directory listing is safe to use.
+
+    Args:
+        name: The name of the entry.
+        parent: The local directory the entry is downloaded into.
+        path: The local path of the entry.
+
+    Returns:
+        Whether the name is a single path component other than `.` and
+        `..`, and the path stays below `parent`.
+    """
+    if name in {"", ".", ".."} or "/" in name or "\\" in name:
+        return False
+    parent_real = os.path.realpath(parent)
+    return os.path.realpath(path).startswith(parent_real.rstrip(os.sep) + os.sep)
 
 
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:

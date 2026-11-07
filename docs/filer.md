@@ -27,7 +27,7 @@ writes to `path`. The scheme of the URL selects the protocol.
 | Scheme | Inputs | Outputs |
 |---|---|---|
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
-| `ftp` | Files and directories (not empty ones) | Files and directories (not empty ones; creating the remote directories) |
+| `ftp` | Files and directories, including empty ones | Files and directories, including empty ones (creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
 | `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
 
@@ -46,6 +46,9 @@ reads for the URL's host.
 
 The filer connects to the URL's host and port (21 if the URL has none);
 user information in the URL is ignored.
+
+Directory downloads skip, with a warning, listing entries whose names aren't
+a single path component (empty, `.`, `..`, or with `/` or `\`).
 
 If a `.netrc` file is mounted, the filer logs in with its credentials for
 the URL's network location as written (e.g. `machine ftp.example.org:2121`
