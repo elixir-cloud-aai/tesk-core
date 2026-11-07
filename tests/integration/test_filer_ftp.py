@@ -1,8 +1,12 @@
 """Integration tests of the filer's FTP transfers, against a local FTP server."""
 
 import ftplib
-import os
+from pathlib import Path
+from typing import Any
 from unittest import mock
+
+import pytest
+from pytest_mock import MockerFixture
 
 from tesk_core.filer import (
     FTPTransput,
@@ -11,10 +15,15 @@ from tesk_core.filer import (
 )
 
 
-def test_ftp_upload_dir(mocker, tmp_path, ftpserver):
-    """Check whether the upload of a directory through FTP completes
-    successfully."""
+def test_ftp_upload_dir(mocker: MockerFixture, tmp_path: Path, ftpserver: Any) -> None:
+    """Test that the upload of a directory through FTP completes successfully.
 
+    Args:
+        mocker: The mocker fixture.
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+    """
     # Local nested directories with files, on the real file system and with
     # an absolute path: the FTP server runs in a thread of this process, so a
     # fake file system (pyfakefs) would hide its home directory from it, and
@@ -26,7 +35,7 @@ def test_ftp_upload_dir(mocker, tmp_path, ftpserver):
 
     login_dict = ftpserver.get_login_data()
 
-    conn = ftplib.FTP()
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
 
     mocker.patch(
         "ftplib.FTP.connect",
@@ -62,40 +71,45 @@ def test_ftp_upload_dir(mocker, tmp_path, ftpserver):
     )
 
 
-def test_ftp_download_dir(mocker, tmpdir, tmp_path, ftpserver):
-    """Check whether the download of a directory through FTP completes
-    successfully."""
+def test_ftp_download_dir(
+    mocker: MockerFixture, tmp_path: Path, ftpserver: Any
+) -> None:
+    """Test that the download of a directory through FTP completes successfully.
 
+    Args:
+        mocker: The mocker fixture.
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+    """
     # Temporary nested directories with files
-    file1 = tmpdir.mkdir("dir1").join("file1")
-    file1.write("this is random")
-    file2 = tmpdir.mkdir("dir1/dir2").join("file2")
-    file2.write("not really")
-    file3 = tmpdir.join("dir1/dir2/file3")
-    file3.write("took me a while")
+    (tmp_path / "dir1" / "dir2").mkdir(parents=True)
+    (tmp_path / "dir1" / "file1").write_text("this is random")
+    (tmp_path / "dir1" / "dir2" / "file2").write_text("not really")
+    (tmp_path / "dir1" / "dir2" / "file3").write_text("took me a while")
 
     # Temporary folder for download
-    tmpdir.mkdir("downloads")
+    (tmp_path / "downloads").mkdir()
 
     # Populate the server with the above files to later download
-    ftpserver.put_files({"src": str(tmp_path) + "/dir1/file1", "dest": "remote1/file1"})
+    ftpserver.put_files({"src": str(tmp_path / "dir1/file1"), "dest": "remote1/file1"})
     ftpserver.put_files(
-        {"src": str(tmp_path) + "/dir1/dir2/file2", "dest": "remote1/remote2/file2"}
+        {"src": str(tmp_path / "dir1/dir2/file2"), "dest": "remote1/remote2/file2"}
     )
     ftpserver.put_files(
-        {"src": str(tmp_path) + "/dir1/dir2/file3", "dest": "remote1/remote2/file3"}
+        {"src": str(tmp_path / "dir1/dir2/file3"), "dest": "remote1/remote2/file3"}
     )
 
     login_dict = ftpserver.get_login_data()
 
-    conn = ftplib.FTP()
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
     conn.connect(host=login_dict["host"], port=login_dict["port"])
     conn.login(login_dict["user"], login_dict["passwd"])
 
     mock_retrbinary = mocker.patch("ftplib.FTP.retrbinary", side_effect=conn.retrbinary)
 
     ftp_obj = FTPTransput(
-        str(tmp_path) + "downloads",
+        str(tmp_path / "downloads"),
         "ftp://" + login_dict["host"],
         Type.Directory,
         ftp_conn=conn,
@@ -114,18 +128,25 @@ def test_ftp_download_dir(mocker, tmpdir, tmp_path, ftpserver):
         ]
     )
 
-    assert os.path.exists(str(tmp_path) + "downloads/remote1/file1")
-    assert os.path.exists(str(tmp_path) + "downloads/remote1/remote2/file2")
-    assert os.path.exists(str(tmp_path) + "downloads/remote1/remote2/file3")
+    assert (tmp_path / "downloads/remote1/file1").exists()
+    assert (tmp_path / "downloads/remote1/remote2/file2").exists()
+    assert (tmp_path / "downloads/remote1/remote2/file3").exists()
 
 
-def test_ftp_make_dirs_error(mocker, ftpserver, caplog):
-    """Ensure in case of 'ftplib.error_reply', both the return value
-    and the error message are correct."""
+def test_ftp_make_dirs_error(
+    mocker: MockerFixture, ftpserver: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test the return value and the message for an `ftplib.error_reply`.
 
+    Args:
+        mocker: The mocker fixture.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+        caplog: The fixture that captures the log.
+    """
     login_dict = ftpserver.get_login_data()
 
-    conn = ftplib.FTP()
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
     conn.connect(host=login_dict["host"], port=login_dict["port"])
     conn.login(login_dict["user"], login_dict["passwd"])
 

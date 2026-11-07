@@ -1,12 +1,14 @@
+"""Tests for the transfers of the filer and its helpers."""
+
+from collections.abc import Iterator
 from io import StringIO
 import logging
 import os
-import shutil
-import tempfile
-import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import fsspec
+import fsspec  # type: ignore[import-untyped]  # fsspec ships no type information
+import pytest
 
 from tesk_core.exception import FileProtocolDisabled, InvalidHostPath, UnknownProtocol
 from tesk_core.filer import (
@@ -23,10 +25,19 @@ from tesk_core.filer import (
 )
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath
-from tests.unit.assertThrows import AssertThrowsMixin
+
+RESOURCES = Path(__file__).parent / "resources"
 
 
-def getTree(rootDir):
+def getTree(rootDir: str) -> str:
+    """List the directories and files below a root directory.
+
+    Args:
+        rootDir: The root directory.
+
+    Returns:
+        One line per root, directory and file.
+    """
     fs, base_path = fsspec.core.url_to_fs(rootDir)
     out = StringIO()
 
@@ -40,33 +51,45 @@ def getTree(rootDir):
     return out.getvalue()
 
 
-def normalize_tree(tree_str, abs_root, prefix):
-    """Convert absolute paths from getTree into relative paths."""
+def normalize_tree(tree_str: str, abs_root: str, prefix: str) -> str:
+    """Convert absolute paths from getTree into relative paths.
+
+    Args:
+        tree_str: The tree as returned by `getTree`.
+        abs_root: The absolute root directory to replace.
+        prefix: The prefix to put in its place.
+
+    Returns:
+        The tree with relative paths.
+    """
     lines = []
     for line in tree_str.splitlines():
-        if line.startswith(abs_root):
-            stripped = prefix + line[len(abs_root) :]
-        else:
-            stripped = line
+        stripped = prefix + line[len(abs_root) :] if line.startswith(abs_root) else line
         stripped = stripped.lstrip("/")
         lines.append(stripped)
     return "\n".join(lines)
 
 
-def rmDir(d):
-    shutil.rmtree(d, ignore_errors=True)
-
-
 @patch("tesk_core.path.HOST_BASE_PATH", "/home/tfga/workspace/cwl-tes")
 @patch("tesk_core.path.CONTAINER_BASE_PATH", "/transfer")
-class FilerTest(unittest.TestCase, AssertThrowsMixin):
+class TestFiler:
+    """Tests with the base paths set."""
+
+    @pytest.fixture(scope="class", autouse=True)
     @classmethod
-    def setUpClass(cls):
+    def log_config(cls) -> Iterator[None]:
+        """Configure the logging of the filer for the tests of the class.
+
+        Yields:
+            Nothing, while the tests run.
+        """
         logConfig(logging.DEBUG)  # Doesn't work...
+        yield
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.shutil.copy")
-    def test_download_file(self, copyMock, copyDirMock):
+    def test_download_file(self, copyMock: MagicMock, copyDirMock: MagicMock) -> None:
+        """Test that a `file:` input is copied as a file."""
         filedata = {
             "url": "file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/md5",
             "path": "/var/lib/cwl/stgda974802-fa81-4f0b-8fe4-341d5655af4b/md5",
@@ -87,7 +110,8 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.shutil.copy")
-    def test_download_dir(self, copyMock, copyDirMock):
+    def test_download_dir(self, copyMock: MagicMock, copyDirMock: MagicMock) -> None:
+        """Test that a `file:` input is copied as a directory."""
         filedata = {
             "url": "file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/",
             "path": "/TclSZU",
@@ -103,7 +127,8 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.shutil.copy")
-    def test_upload_dir(self, copyMock, copyDirMock):
+    def test_upload_dir(self, copyMock: MagicMock, copyDirMock: MagicMock) -> None:
+        """Test that a `file:` output is copied as a directory."""
         filedata = {
             "url": "file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/",
             "path": "/TclSZU",
@@ -119,8 +144,8 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.copyFile")
-    def test_upload_file(self, copyFileMock, copyDirMock):
-
+    def test_upload_file(self, copyFileMock: MagicMock, copyDirMock: MagicMock) -> None:
+        """Test that a `file:` output is copied as a file."""
         filedata = {
             "url": "file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/md5",
             "path": "/TclSZU/md5",
@@ -136,8 +161,10 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.copyFile")
-    def test_upload_file_glob(self, copyFileMock, copyDirMock):
-
+    def test_upload_file_glob(
+        self, copyFileMock: MagicMock, copyDirMock: MagicMock
+    ) -> None:
+        """Test that a `file:` output with a glob is copied as a file."""
         filedata = {
             "url": "file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/md5*",
             "path": "/TclSZU/md5*",
@@ -153,21 +180,20 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
             "/TclSZU/md5*", "/transfer/tmphrtip1o8/md5*"
         )
 
-    def test_copyDir(self):
-        src = os.path.join(os.path.dirname(__file__), "resources/copyDirTest/src")
-        baseDir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, baseDir)
-        dst1 = os.path.join(baseDir, "dst1")
-        dst2 = os.path.join(baseDir, "dst2")
+    def test_copyDir(self, tmp_path: Path) -> None:
+        """Test copying a directory to an existing and a new destination."""
+        src = str(RESOURCES / "copyDirTest/src")
+        dst1 = os.path.join(tmp_path, "dst1")
+        dst2 = os.path.join(tmp_path, "dst2")
 
-        self.assertTrue(os.path.exists(src))  # src should exist
-        self.assertFalse(os.path.exists(dst1))  # dst1 shouldn't
-        self.assertFalse(os.path.exists(dst2))  # dst2 shouldn't
+        assert os.path.exists(src)  # src should exist
+        assert not os.path.exists(dst1)  # dst1 shouldn't
+        assert not os.path.exists(dst2)  # dst2 shouldn't
 
         # Copying to existing dst ---------------------------------------------
         # Let's create dst1
         os.mkdir(dst1)
-        self.assertTrue(os.path.exists(dst1))  # Now dst1 should exist
+        assert os.path.exists(dst1)  # Now dst1 should exist
 
         # Let's try to copy
         copyDir(src, dst1)
@@ -180,7 +206,7 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
         normalized_lines = sorted(normalizedTree.splitlines())
         expected_lines = sorted(expected.splitlines())
 
-        self.assertEqual(normalized_lines, expected_lines)
+        assert normalized_lines == expected_lines
 
         # Copying to non-existing dst -----------------------------------------
         # # Let's try to copy
@@ -194,79 +220,77 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
         normalized_lines = sorted(normalizedTree.splitlines())
         expected_lines = sorted(expected.splitlines())
 
-        self.assertEqual(normalized_lines, expected_lines)
+        assert normalized_lines == expected_lines
 
-    def test_getPath(self):
-
-        self.assertEqual(
-            getPath("file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"),
-            "/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5",
+    def test_getPath(self) -> None:
+        """Test that the path is taken from a `file:` URL."""
+        assert (
+            getPath("file:///home/tfga/workspace/cwl-tes/tmphrtip1o8/md5")
+            == "/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"
         )
 
-    def test_getPathNoScheme(self):
-
-        self.assertEqual(
-            getPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"),
-            "/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5",
+    def test_getPathNoScheme(self) -> None:
+        """Test that a path without scheme is kept and mapped to the container."""
+        assert (
+            getPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5")
+            == "/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"
         )
 
-        self.assertEqual(
-            containerPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"),
-            "/transfer/tmphrtip1o8/md5",
+        assert (
+            containerPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5")
+            == "/transfer/tmphrtip1o8/md5"
         )
 
-    def test_containerPath(self):
-        self.assertEqual(
-            containerPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5"),
-            "/transfer/tmphrtip1o8/md5",
+    def test_containerPath(self) -> None:
+        """Test the container path, and that paths outside the base fail."""
+        assert (
+            containerPath("/home/tfga/workspace/cwl-tes/tmphrtip1o8/md5")
+            == "/transfer/tmphrtip1o8/md5"
         )
 
         # What happens if 'path' is not a descendant of HOST_BASE_PATH?
-        self.assertThrows(
-            lambda: containerPath("/someOtherFolder"),
-            InvalidHostPath,
+        with pytest.raises(InvalidHostPath) as excinfo:
+            containerPath("/someOtherFolder")
+        assert str(excinfo.value) == (
             "'/someOtherFolder' is not a descendant of "
-            "'HOST_BASE_PATH' (/home/tfga/workspace/cwl-tes)",
+            "'HOST_BASE_PATH' (/home/tfga/workspace/cwl-tes)"
         )
 
-    def test_newTransput(self):
-        self.assertEqual(newTransput("ftp", "test.com"), FTPTransput)
-        self.assertEqual(newTransput("http", "test.com"), HTTPTransput)
-        self.assertEqual(newTransput("https", "test.com"), HTTPTransput)
-        self.assertEqual(newTransput("file", "/home/tfga/workspace/"), FileTransput)
-        self.assertEqual(newTransput("s3", "/home/tfga/workspace/"), S3Transput)
-        self.assertEqual(newTransput("http", "s3.aws.com"), HTTPTransput)
+    def test_newTransput(self) -> None:
+        """Test that the transput class is chosen by the protocol."""
+        assert newTransput("ftp", "test.com") == FTPTransput
+        assert newTransput("http", "test.com") == HTTPTransput
+        assert newTransput("https", "test.com") == HTTPTransput
+        assert newTransput("file", "/home/tfga/workspace/") == FileTransput
+        assert newTransput("s3", "/home/tfga/workspace/") == S3Transput
+        assert newTransput("http", "s3.aws.com") == HTTPTransput
 
-        self.assertThrows(
-            lambda: newTransput("svn", "example.com"),
-            UnknownProtocol,
-            "Unknown protocol: 'svn'",
-        )
+        with pytest.raises(UnknownProtocol) as excinfo:
+            newTransput("svn", "example.com")
+        assert str(excinfo.value) == "Unknown protocol: 'svn'"
 
     @patch("ftplib.FTP")
-    def test_ftp_check_directory(self, conn):
-        """Ensure that when the path provided is an existing directory, the
-        return value is 0."""
+    def test_ftp_check_directory(self, conn: MagicMock) -> None:
+        """Test that an existing directory returns 0."""
         path = os.path.curdir
-        self.assertEqual(ftp_check_directory(conn, path), 0)
+        assert ftp_check_directory(conn, path) == 0
 
-    def test_subfolders_in(self):
-        """Ensure the all the subfolders of a path are properly returned."""
+    def test_subfolders_in(self) -> None:
+        """Test that all the subfolders of a path are properly returned."""
         path = "/this/is/a/path"
         subfldrs = ["/this", "/this/is", "/this/is/a", "/this/is/a/path"]
-        self.assertEqual(subfolders_in(path), subfldrs)
+        assert subfolders_in(path) == subfldrs
 
 
-class FilerTest_no_env(unittest.TestCase, AssertThrowsMixin):
-    def test_newTransput_file_disabled(self):
-        self.assertThrows(
-            lambda: newTransput("file", "/home/user/test"),
-            FileProtocolDisabled,
+class TestFilerNoEnv:
+    """Tests without the base paths."""
+
+    def test_newTransput_file_disabled(self) -> None:
+        """Test that the `file:` protocol is disabled without base paths."""
+        with pytest.raises(FileProtocolDisabled) as excinfo:
+            newTransput("file", "/home/user/test")
+        assert str(excinfo.value) == (
             "'file:' protocol disabled\n"
-            "To enable it, both 'HOST_BASE_PATH' and 'CONTAINER_BASE_PATH' environment variables must be defined.",
+            "To enable it, both 'HOST_BASE_PATH' and 'CONTAINER_BASE_PATH' "
+            "environment variables must be defined."
         )
-
-
-if __name__ == "__main__":
-    # import sys;sys.argv = ['', 'Test.testName']
-    unittest.main()

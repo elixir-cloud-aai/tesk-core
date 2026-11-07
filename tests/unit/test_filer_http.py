@@ -1,9 +1,13 @@
 """Tests for 'filer.py' HTTP functionalities using 'pytest'."""
 
 import os
+from pathlib import Path
+from typing import IO
 from unittest import mock
 
+from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
+from pytest_mock import MockerFixture
 from requests import Response
 
 from tesk_core.filer import HTTPTransput, Type, http_join
@@ -13,15 +17,14 @@ PATH_UP = __file__
 SUCCESS = 200
 FAIL = 300
 URL = "http://www.foo.bar"
-FTYPE = "FILE"
+FTYPE = Type.File
 
 resp = Response()
 resp._content = b'{ "foo" : "bar" }'
 
 
-def test_download_file(mocker):
-    """Ensure a file gets properly downloaded."""
-
+def test_download_file(mocker: MockerFixture) -> None:
+    """Test that a file gets properly downloaded."""
     resp.status_code = SUCCESS
     http_obj = HTTPTransput(PATH_DOWN, URL, FTYPE)
     mocker.patch("requests.get", return_value=resp)
@@ -29,46 +32,46 @@ def test_download_file(mocker):
     with mock.patch(
         "builtins.open", mock.mock_open(read_data=resp._content), create=False
     ):
-        assert 0 == http_obj.download_file()
-        assert open(PATH_DOWN, "rb").read() == resp._content
+        assert http_obj.download_file() == 0
+        with open(PATH_DOWN, "rb") as fh:
+            assert fh.read() == resp._content
 
 
-def test_download_file_error(mocker, caplog):
-    """Ensure download error returns the correct value and log message."""
-
+def test_download_file_error(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a download error returns the correct value and message."""
     resp.status_code = FAIL
     http_obj = HTTPTransput(PATH_DOWN, URL, FTYPE)
     mocker.patch("requests.get", return_value=resp)
 
-    assert 1 == http_obj.download_file()
-    assert "Got status code: {}".format(FAIL) in caplog.text
+    assert http_obj.download_file() == 1
+    assert f"Got status code: {FAIL}" in caplog.text
 
 
-def test_upload_file(mocker):
-    """Ensure a file gets properly uploaded."""
-
+def test_upload_file(mocker: MockerFixture) -> None:
+    """Test that a file gets properly uploaded."""
     resp.status_code = SUCCESS
     http_obj = HTTPTransput(PATH_UP, URL, FTYPE)
     mocker.patch("requests.put", return_value=resp)
 
-    assert 0 == http_obj.upload_file()
+    assert http_obj.upload_file() == 0
 
 
-def test_upload_file_error(mocker, caplog):
-    """Ensure upload error returns the correct value and log message."""
-
+def test_upload_file_error(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that an upload error returns the correct value and message."""
     resp.status_code = FAIL
     http_obj = HTTPTransput(PATH_UP, URL, FTYPE)
     mocker.patch("requests.put", return_value=resp)
 
-    assert 1 == http_obj.upload_file()
-    assert "Got status code: {}".format(FAIL) in caplog.text
+    assert http_obj.upload_file() == 1
+    assert f"Got status code: {FAIL}" in caplog.text
 
 
-def test_upload_dir(mocker, fs):
-    """Ensure that each file inside nexted directories gets successfully
-    uploaded."""
-
+def test_upload_dir(mocker: MockerFixture, fs: FakeFilesystem) -> None:
+    """Test that each file inside nested directories gets uploaded."""
     # Tele2 Speedtest Service, free upload /download test server
     endpoint = "http://speedtest.tele2.net/upload.php"
     resp.status_code = 200
@@ -83,7 +86,7 @@ def test_upload_dir(mocker, fs):
     # during the call.
     uploads = {}
 
-    def mock_put(url, data):
+    def mock_put(url: str, data: bytes | IO[bytes]) -> Response:
         uploads[url] = data if isinstance(data, bytes) else data.read()
         return resp
 
@@ -122,15 +125,15 @@ def test_upload_dir(mocker, fs):
         ),
     ],
 )
-def test_http_join(url, name, expected):
-    """Ensure a file name is escaped and the URL's query is kept."""
-
+def test_http_join(url: str, name: str, expected: str) -> None:
+    """Test that a file name is escaped and the URL's query is kept."""
     assert http_join(url, name) == expected
 
 
-def test_upload_dir_stops_at_first_failure(mocker, tmp_path):
-    """Ensure a directory upload stops at the first file that fails."""
-
+def test_upload_dir_stops_at_first_failure(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """Test that a directory upload stops at the first file that fails."""
     (tmp_path / "a.txt").write_bytes(b"a")
     (tmp_path / "b.txt").write_bytes(b"b")
     resp_fail = Response()

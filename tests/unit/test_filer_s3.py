@@ -1,28 +1,36 @@
+"""Tests for the S3 transfers of the filer."""
+
+from collections.abc import Iterator
 import os
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import boto3
 
 # from tesk_core.extract_endpoint import extract_endpoint
 from moto import mock_s3
+from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
 
 from tesk_core.filer_s3 import S3Transput
+from tesk_core.transput import Type
 
 RESOURCES_SRC = os.path.join(os.path.dirname(__file__), "resources/copyDirTest/src")
 
 
-@pytest.fixture()
-def moto_boto():
+@pytest.fixture
+def moto_boto() -> Iterator[None]:
+    """Mock S3 with a bucket `tesk` that holds two objects.
+
+    Yields:
+        Nothing, while the mock is active.
+    """
     with mock_s3():
         boto3.client("s3", endpoint_url="http://s3.amazonaws.com")
 
         client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
         client.create_bucket(Bucket="tesk")
-        client.Bucket("tesk").put_object(Bucket="tesk", Key="folder/file.txt", Body="")
-        client.Bucket("tesk").put_object(
-            Bucket="tesk", Key="folder1/folder2/file.txt", Body=""
-        )
+        client.Bucket("tesk").put_object(Key="folder/file.txt", Body="")
+        client.Bucket("tesk").put_object(Key="folder1/folder2/file.txt", Body="")
         yield
 
 
@@ -32,21 +40,21 @@ def moto_boto():
         (
             "/home/user/filer_test/file.txt",
             "s3://tesk/folder/file.txt",
-            "FILE",
+            Type.File,
             ("tesk", "folder/file.txt"),
         ),
         (
             "/home/user/filer_test/file.txt",
             "s3://tesk/folder1/folder2",
-            "DIRECTORY",
+            Type.Directory,
             ("tesk", "folder1/folder2"),
         ),
     ],
 )
-def test_get_bucket_name_and_file_path(moto_boto, path, url, ftype, expected):
-    """
-    Check if the bucket name and path is extracted correctly for file and folders
-    """
+def test_get_bucket_name_and_file_path(
+    moto_boto: None, path: str, url: str, ftype: Type, expected: tuple[str, str]
+) -> None:
+    """Test that the bucket name and path are extracted for files and folders."""
     trans = S3Transput(path, url, ftype)
     assert trans.get_bucket_name_and_file_path() == expected
 
@@ -54,16 +62,26 @@ def test_get_bucket_name_and_file_path(moto_boto, path, url, ftype, expected):
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", "FILE", 0),
-        ("/home/user/filer_test/file.txt", "s3://mybucket/folder/file.txt", "FILE", 1),
-        ("/home/user/filer_test/", "s3://tesk/folder1/folder2", "DIRECTORY", 0),
-        ("/home/user/filer_test/", "s3://mybucket/folder1/folder2", "DIRECTORY", 1),
+        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", Type.File, 0),
+        (
+            "/home/user/filer_test/file.txt",
+            "s3://mybucket/folder/file.txt",
+            Type.File,
+            1,
+        ),
+        ("/home/user/filer_test/", "s3://tesk/folder1/folder2", Type.Directory, 0),
+        (
+            "/home/user/filer_test/",
+            "s3://mybucket/folder1/folder2",
+            Type.Directory,
+            1,
+        ),
     ],
 )
-def test_check_if_bucket_exists(moto_boto, path, url, ftype, expected):
-    """
-    Check if the bucket exists
-    """
+def test_check_if_bucket_exists(
+    moto_boto: None, path: str, url: str, ftype: Type, expected: int
+) -> None:
+    """Test that the existence of the bucket is checked."""
     client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
     trans = S3Transput(path, url, ftype)
     assert trans.check_if_bucket_exists(client) == expected
@@ -75,14 +93,25 @@ def test_check_if_bucket_exists(moto_boto, path, url, ftype, expected):
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", "FILE", 0),
-        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file_new.txt", "FILE", 1),
+        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", Type.File, 0),
+        (
+            "/home/user/filer_test/file.txt",
+            "s3://tesk/folder/file_new.txt",
+            Type.File,
+            1,
+        ),
     ],
 )
-def test_s3_download_file(moto_boto, path, url, ftype, expected, fs, caplog):
-    """
-    Checking for successful/failed file download from Object storage server
-    """
+def test_s3_download_file(
+    moto_boto: None,
+    path: str,
+    url: str,
+    ftype: Type,
+    expected: int,
+    fs: FakeFilesystem,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a successful and a failed file download from the object storage."""
     with S3Transput(path, url, ftype) as trans:
         assert trans.download_file() == expected
         if expected:
@@ -98,40 +127,55 @@ def test_s3_download_file(moto_boto, path, url, ftype, expected, fs, caplog):
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        ("filer_test/", "s3://tesk/folder1/", "DIRECTORY", 0),
-        ("filer_test/", "s3://tesk/folder10/folder20", "DIRECTORY", 1),
+        ("filer_test/", "s3://tesk/folder1/", Type.Directory, 0),
+        ("filer_test/", "s3://tesk/folder10/folder20", Type.Directory, 1),
     ],
 )
 def test_s3_download_directory(
-    mock_makedirs, mock_open, mock_rename, path, url, ftype, expected, moto_boto, caplog
-):
-    """
-    test case to check directory download from Object storage server
-    """
+    mock_makedirs: MagicMock,
+    mock_open: MagicMock,
+    mock_rename: MagicMock,
+    path: str,
+    url: str,
+    ftype: Type,
+    expected: int,
+    moto_boto: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a successful and a failed directory download from the storage."""
     with S3Transput(path, url, ftype) as trans:
         assert trans.download_dir() == expected
         print(mock_rename.mock_calls)
         if expected:
             assert "Invalid file path" in caplog.text
         else:
-            """
-            s3 object path s3://tesk/folder1/ will contain 'folder2', checking if the 'folder2'
-             is present in the download folder.
-            """
+            # The s3 object path s3://tesk/folder1/ will contain 'folder2',
+            # checking if the 'folder2' is present in the download folder.
             mock_rename.assert_called_once_with("filer_test/folder2", exist_ok=True)
 
 
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", "FILE", 0),
-        ("/home/user/filer_test/file_new.txt", "s3://tesk/folder/file.txt", "FILE", 1),
+        ("/home/user/filer_test/file.txt", "s3://tesk/folder/file.txt", Type.File, 0),
+        (
+            "/home/user/filer_test/file_new.txt",
+            "s3://tesk/folder/file.txt",
+            Type.File,
+            1,
+        ),
     ],
 )
-def test_s3_upload_file(moto_boto, path, url, ftype, expected, fs, caplog):
-    """
-    Testing successful/failed file upload to object storage server
-    """
+def test_s3_upload_file(
+    moto_boto: None,
+    path: str,
+    url: str,
+    ftype: Type,
+    expected: int,
+    fs: FakeFilesystem,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a successful and a failed file upload to the object storage."""
     fs.create_file("/home/user/filer_test/file.txt")
     client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
     trans = S3Transput(path, url, ftype)
@@ -140,11 +184,11 @@ def test_s3_upload_file(moto_boto, path, url, ftype, expected, fs, caplog):
     if expected:
         assert "File upload failed for" in caplog.text
     else:
-        """
-        Checking if the file was uploaded, if the object is found, load() method will return None
-        otherwise an exception will be raised.
-        """
-        assert client.Object("tesk", "folder/file.txt").load() is None
+        # Checking if the file was uploaded: if the object is found, the
+        # load() method returns None, otherwise an exception is raised.
+        # (load() is typed as returning nothing, but it is checked on purpose)
+        loaded = client.Object("tesk", "folder/file.txt").load()  # type: ignore[func-returns-value]
+        assert loaded is None
 
 
 @pytest.mark.parametrize(
@@ -154,13 +198,17 @@ def test_s3_upload_file(moto_boto, path, url, ftype, expected, fs, caplog):
         ("file.zip", "s3://tesk/folder/file.zip", "application/zip"),
     ],
 )
-def test_s3_upload_file_content_type(moto_boto, filename, url, expected_content, fs):
-    """
-    Ensure uploaded objects have correct Content-Type metadata based on file extension
-    """
+def test_s3_upload_file_content_type(
+    moto_boto: None,
+    filename: str,
+    url: str,
+    expected_content: str,
+    fs: FakeFilesystem,
+) -> None:
+    """Test that uploaded objects have the Content-Type of their extension."""
     fs.create_file(f"/home/user/filer_test/{filename}")
     client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
-    trans = S3Transput(f"/home/user/filer_test/{filename}", url, "FILE")
+    trans = S3Transput(f"/home/user/filer_test/{filename}", url, Type.File)
     trans.bucket_obj = client.Bucket(trans.bucket)
     assert trans.upload_file() == 0
     head = client.meta.client.head_object(Bucket=trans.bucket, Key=trans.file_path)
@@ -170,14 +218,24 @@ def test_s3_upload_file_content_type(moto_boto, filename, url, expected_content,
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        (RESOURCES_SRC, "s3://tesk/folder1/folder2", "DIRECTORY", 0),
-        ("/home/user/filer_test_new/", "s3://tesk/folder1/folder2", "DIRECTORY", 1),
+        (RESOURCES_SRC, "s3://tesk/folder1/folder2", Type.Directory, 0),
+        (
+            "/home/user/filer_test_new/",
+            "s3://tesk/folder1/folder2",
+            Type.Directory,
+            1,
+        ),
     ],
 )
-def test_s3_upload_directory(path, url, ftype, expected, moto_boto, caplog):
-    """
-    Checking for successful and failed Directory upload to object storage server
-    """
+def test_s3_upload_directory(
+    path: str,
+    url: str,
+    ftype: Type,
+    expected: int,
+    moto_boto: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a successful and a failed directory upload to the object storage."""
     client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
     trans = S3Transput(path, url, ftype)
     trans.bucket_obj = client.Bucket(trans.bucket)
@@ -185,25 +243,29 @@ def test_s3_upload_directory(path, url, ftype, expected, moto_boto, caplog):
     if expected:
         assert "File upload failed for" in caplog.text
     else:
-        """
-        Checking if the file was uploaded, if the object is found load() method will return None
-        otherwise an exception will be raised.
-        """
-        assert client.Object("tesk", "folder1/folder2/a/1.txt").load() is None
+        # Checking if the file was uploaded: if the object is found, the
+        # load() method returns None, otherwise an exception is raised.
+        loaded = client.Object("tesk", "folder1/folder2/a/1.txt").load()  # type: ignore[func-returns-value]
+        assert loaded is None
         head = client.meta.client.head_object(
             Bucket=trans.bucket, Key="folder1/folder2/a/1.txt"
         )
         assert head["ContentType"].startswith("text/")
 
 
-def test_upload_directory_for_unknown_file_type(moto_boto, fs, monkeypatch, caplog):
-    """
-    Checking whether an exception is raised when the object type is neither file or directory
-    If the exception is raised, an error message will be logged.
+def test_upload_directory_for_unknown_file_type(
+    moto_boto: None,
+    fs: FakeFilesystem,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that an object that is neither file nor directory is logged.
+
+    If the exception is raised, an error message is logged.
     """
     monkeypatch.setattr(os.path, "isfile", lambda _: False)
     fs.create_file("/home/user/filer_test/text.txt")
-    url, ftype = "s3://tesk/folder10/folder20", "DIRECTORY"
+    url, ftype = "s3://tesk/folder10/folder20", Type.Directory
     path = "/home/user/filer_test/"
     trans = S3Transput(path, url, ftype)
     client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
@@ -213,10 +275,8 @@ def test_upload_directory_for_unknown_file_type(moto_boto, fs, monkeypatch, capl
 
 
 @patch("tesk_core.filer.os.path.exists", return_value=1)
-def test_extract_url_from_config_file(mock_path_exists):
-    """
-    Testing extraction of endpoint url from default file location
-    """
+def test_extract_url_from_config_file(mock_path_exists: MagicMock) -> None:
+    """Test the extraction of the endpoint URL from the default file."""
     read_data = "\n".join(
         ["[default]", "endpoint_url = http://s3-aws-region.amazonaws.com"]
     )
@@ -229,10 +289,8 @@ def test_extract_url_from_config_file(mock_path_exists):
 
 
 @patch.dict(os.environ, {"AWS_CONFIG_FILE": "~/.aws/config"})
-def test_extract_url_from_environ_variable():
-    """
-    Testing successful extraction of endpoint url read from file path saved on enviornment variable
-    """
+def test_extract_url_from_environ_variable() -> None:
+    """Test the extraction of the endpoint URL from the path in the environment."""
     read_data = "\n".join(
         ["[default]", "endpoint_url = http://s3-aws-region.amazonaws.com"]
     )
@@ -241,4 +299,6 @@ def test_extract_url_from_environ_variable():
     ) as mock_file:
         mock_file.return_value.__iter__.return_value = read_data.splitlines()
         # assert (extract_endpoint() == "http://s3-aws-region.amazonaws.com")
-        # mock_file.assert_called_once_with(os.environ["AWS_CONFIG_FILE"], encoding=None)
+        # mock_file.assert_called_once_with(
+        #     os.environ["AWS_CONFIG_FILE"], encoding=None
+        # )

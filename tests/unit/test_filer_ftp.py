@@ -4,6 +4,9 @@ import ftplib
 import os
 from unittest import mock
 
+import pytest
+from pytest_mock import MockerFixture
+
 from tesk_core.filer import (
     ftp_check_directory,
     ftp_download_file,
@@ -13,10 +16,8 @@ from tesk_core.filer import (
 )
 
 
-def test_ftp_login(mocker):
-    """Ensure ftp_login detects ftp credentials and properly calls
-    ftplib.FTP.login."""
-
+def test_ftp_login(mocker: MockerFixture) -> None:
+    """Test that ftp_login detects credentials and calls ftplib.FTP.login."""
     conn = mocker.patch("ftplib.FTP")
     mock_login = mocker.patch("ftplib.FTP.login")
     with mock.patch.dict(
@@ -26,37 +27,39 @@ def test_ftp_login(mocker):
             "TESK_FTP_PASSWORD": "test_pass",
         },
     ):
-        ftp_login(conn, None, None)
+        ftp_login(conn, "", None)
         mock_login.assert_called_with("test", "test_pass")
 
 
-def test_ftp_upload_file_error(mocker, caplog):
-    """Ensure that upon upload error, ftp_upload_file behaves correctly."""
-
+def test_ftp_upload_file_error(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that ftp_upload_file behaves correctly upon upload error."""
     conn = mocker.patch("ftplib.FTP")
     mocker.patch("ftplib.FTP.storbinary", side_effect=ftplib.error_reply)
-    assert 1 == ftp_upload_file(conn, __file__, "/home/tesk/test_copy.py")
+    assert ftp_upload_file(conn, __file__, "/home/tesk/test_copy.py") == 1
     assert "Unable to upload file" in caplog.text
 
 
-def test_ftp_download_file_error(mocker, caplog):
-    """Ensure that upon download error, ftp_download_file behaves correctly."""
-
+def test_ftp_download_file_error(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that ftp_download_file behaves correctly upon download error."""
     conn = mocker.patch("ftplib.FTP")
     mocker.patch("ftplib.FTP.retrbinary", side_effect=ftplib.error_perm)
     with mock.patch("builtins.open", mock.mock_open(), create=False):
-        assert 1 == ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py")
+        assert ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py") == 1
         assert "Unable to download file" in caplog.text
 
 
-def test_ftp_download_file_success(mocker, caplog):
-    """Ensure that upon successful download, the local destination file has
-    been created."""
-
+def test_ftp_download_file_success(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a successful download creates the local destination file."""
     conn = mocker.patch("ftplib.FTP")
     mock_retrbin = mocker.patch("ftplib.FTP.retrbinary")
     with mock.patch("builtins.open", mock.mock_open(), create=False) as m:
-        assert 0 == ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py")
+        assert ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py") == 0
 
         mock_retrbin.assert_called_with("RETR " + "test_filer_ftp_pytest.py", mock.ANY)
 
@@ -69,18 +72,17 @@ def test_ftp_download_file_success(mocker, caplog):
         # assert os.path.exists('test_copy.py')
 
 
-def test_ftp_check_directory_error(mocker, caplog):
-    """Ensure ftp_check_directory_error creates the proper error log
-    message in case of error."""
-
+def test_ftp_check_directory_error(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that ftp_check_directory logs the proper error message."""
     conn = mocker.patch("ftplib.FTP")
     mocker.patch("ftplib.FTP.cwd", side_effect=ftplib.error_reply)
-    assert 1 == ftp_check_directory(conn, "/folder/file")
+    assert ftp_check_directory(conn, "/folder/file") == 1
     assert "Could not check if path" in caplog.text
 
 
-def test_ftp_make_dirs(mocker):
-    """In case of existing directory, exit with 0."""
-
+def test_ftp_make_dirs(mocker: MockerFixture) -> None:
+    """Test that ftp_make_dirs exits with 0 for an existing directory."""
     conn = mocker.patch("ftplib.FTP")
     assert ftp_make_dirs(conn, os.curdir) == 0

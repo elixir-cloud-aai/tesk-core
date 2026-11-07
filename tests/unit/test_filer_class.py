@@ -1,7 +1,6 @@
-# encoding: utf-8
+"""Tests for the filer job specification of `Filer`."""
 
 import os
-import unittest
 from unittest.mock import patch
 
 from tesk_core import path
@@ -19,30 +18,32 @@ from tesk_core.Util import pprint
         "AWS_CONFIG_FILE": "/aws/config",
     },
 )
-class FilerClassTest_env(unittest.TestCase):
-    def test_env_vars(self):
+class TestFilerClassEnv:
+    """Tests with the base paths and the AWS files set."""
 
+    def test_env_vars(self) -> None:
+        """Test the environment variables and the backoff limit."""
         f = Filer("name", {"a": 1})
         f.set_backoffLimit(10)
 
         pprint(f.spec)
 
-        self.assertEqual(
-            f.getEnv(),
-            [
-                {"name": "JSON_INPUT", "value": '{"a": 1}'},
-                {"name": "HOST_BASE_PATH", "value": "/home/tfga/workspace/cwl-tes"},
-                {"name": "CONTAINER_BASE_PATH", "value": "/transfer"},
-                {"name": "AWS_CONFIG_FILE", "value": "/aws/config"},
-                {"name": "AWS_REQUEST_CHECKSUM_CALCULATION", "value": "WHEN_REQUIRED"},
-                {"name": "AWS_RESPONSE_CHECKSUM_VALIDATION", "value": "WHEN_REQUIRED"},
-                {"name": "AWS_SHARED_CREDENTIALS_FILE", "value": "/aws/credentials"},
-            ],
-        )
-        self.assertEqual(f.spec["spec"]["backoffLimit"], 10)
+        assert f.getEnv() == [
+            {"name": "JSON_INPUT", "value": '{"a": 1}'},
+            {"name": "HOST_BASE_PATH", "value": "/home/tfga/workspace/cwl-tes"},
+            {"name": "CONTAINER_BASE_PATH", "value": "/transfer"},
+            {"name": "AWS_CONFIG_FILE", "value": "/aws/config"},
+            {"name": "AWS_REQUEST_CHECKSUM_CALCULATION", "value": "WHEN_REQUIRED"},
+            {"name": "AWS_RESPONSE_CHECKSUM_VALIDATION", "value": "WHEN_REQUIRED"},
+            {"name": "AWS_SHARED_CREDENTIALS_FILE", "value": "/aws/credentials"},
+        ]
+        assert f.spec["spec"]["backoffLimit"] == 10
 
-    def test_mounts(self):
-        """
+    def test_mounts(self) -> None:
+        """Test the volume mounts and the volumes.
+
+        The pod looks like this:
+
         kind: Pod
         apiVersion: v1
         metadata:
@@ -61,85 +62,71 @@ class FilerClassTest_env(unittest.TestCase):
               # persistentVolumeClaim:
               #  claimName: task-pv-claim
         """
-
         f = Filer("name", {"a": 1})
 
         pprint(f.spec)
 
         pprint(f.getVolumeMounts())
 
-        self.assertEqual(
-            f.getVolumeMounts(),
-            [
-                {
-                    "name": "transfer-volume",
-                    "mountPath": path.CONTAINER_BASE_PATH,
+        assert f.getVolumeMounts() == [
+            {
+                "name": "transfer-volume",
+                "mountPath": path.CONTAINER_BASE_PATH,
+            },
+            {"mountPath": "/aws", "name": "s3-conf", "readOnly": True},
+        ]
+
+        assert f.getVolumes() == [
+            {
+                "name": "transfer-volume",
+                "persistentVolumeClaim": {"claimName": "transfer-pvc"},
+            },
+            {
+                "name": "s3-conf",
+                "secret": {
+                    "secretName": "aws-secret",
+                    "items": [
+                        {"key": "credentials", "path": "credentials"},
+                        {"key": "config", "path": "config"},
+                    ],
+                    "optional": True,
                 },
-                {"mountPath": "/aws", "name": "s3-conf", "readOnly": True},
-            ],
-        )
-
-        self.assertEqual(
-            f.getVolumes(),
-            [
-                {
-                    "name": "transfer-volume",
-                    "persistentVolumeClaim": {"claimName": "transfer-pvc"},
-                },
-                {
-                    "name": "s3-conf",
-                    "secret": {
-                        "secretName": "aws-secret",
-                        "items": [
-                            {"key": "credentials", "path": "credentials"},
-                            {"key": "config", "path": "config"},
-                        ],
-                        "optional": True,
-                    },
-                },
-            ],
-        )
+            },
+        ]
 
 
-class FilerClassTest_no_env(unittest.TestCase):
-    def test_mounts_file_disabled(self):
+class TestFilerClassNoEnv:
+    """Tests without the base paths."""
 
+    def test_mounts_file_disabled(self) -> None:
+        """Test that only the AWS volume is mounted without base paths."""
         f = Filer("name", {"a": 1})
 
         pprint(f.spec)
 
         pprint(f.getVolumeMounts())
 
-        self.assertEqual(
-            f.getVolumeMounts(),
-            [{"mountPath": "/aws", "name": "s3-conf", "readOnly": True}],
-        )
-        self.assertEqual(
-            f.getVolumes(),
-            [
-                {
-                    "name": "s3-conf",
-                    "secret": {
-                        "secretName": "aws-secret",
-                        "items": [
-                            {"key": "credentials", "path": "credentials"},
-                            {"key": "config", "path": "config"},
-                        ],
-                        "optional": True,
-                    },
-                }
-            ],
-        )
+        assert f.getVolumeMounts() == [
+            {"mountPath": "/aws", "name": "s3-conf", "readOnly": True}
+        ]
+        assert f.getVolumes() == [
+            {
+                "name": "s3-conf",
+                "secret": {
+                    "secretName": "aws-secret",
+                    "items": [
+                        {"key": "credentials", "path": "credentials"},
+                        {"key": "config", "path": "config"},
+                    ],
+                    "optional": True,
+                },
+            }
+        ]
 
-    def test_image_pull_policy(self):
-
+    def test_image_pull_policy(self) -> None:
+        """Test the image pull policy with and without `pullPolicyAlways`."""
         f = Filer("name", {"a": 1})
-        self.assertEqual(f.getImagePullPolicy(), "IfNotPresent")
+        assert f.getImagePullPolicy() == "IfNotPresent"
 
         f = Filer("name", {"a": 1}, pullPolicyAlways=True)
-        self.assertEqual(f.getImagePullPolicy(), "Always")
-
-
-if __name__ == "__main__":
-    # import sys;sys.argv = ['', 'Test.testName']
-    unittest.main()
+        assert f.getImagePullPolicy() == "Always"

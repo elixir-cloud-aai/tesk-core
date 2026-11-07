@@ -131,17 +131,15 @@ force-sort-within-sections = true
 known-first-party = ["tesk_core"]
 
 [tool.ruff.lint.per-file-ignores]
-# The tests move to `tests/unit/` and `tests/integration/` and are rewritten
-# with pytest, docstrings and type hints in #69; until then, they are only
-# formatted, sorted and checked for errors
-"tests/**" = ["B", "D", "E501", "PL", "RUF", "S", "SIM", "UP"]
+# pytest checks with `assert`; the tests use fake paths under `/tmp` that are
+# never written
+"tests/**" = ["S101", "S108"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.mypy]
-# The tests join once they move to the `tests/` layout (#69)
-files = ["src"]
+files = ["src", "tests"]
 python_version = "3.10"
 # Complete type hints: all functions annotated, generic types parametrized
 disallow_untyped_defs = true
