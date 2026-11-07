@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, mock_open, patch
 import boto3
 
 # from tesk_core.extract_endpoint import extract_endpoint
-from moto import mock_s3
+from moto import mock_aws
 from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
 
@@ -26,7 +26,7 @@ def moto_boto() -> Iterator[None]:
     Yields:
         Nothing, while the mock is active.
     """
-    with mock_s3():
+    with mock_aws():
         boto3.client("s3", endpoint_url="http://s3.amazonaws.com")
 
         client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
@@ -328,7 +328,7 @@ def moto_s3_in_bucket_names() -> Iterator[None]:
     Yields:
         Nothing, while the mock is active.
     """
-    with mock_s3():
+    with mock_aws():
         client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
         for bucket in S3_IN_BUCKET_NAMES:
             client.create_bucket(Bucket=bucket)
