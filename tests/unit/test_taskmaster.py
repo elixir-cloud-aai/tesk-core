@@ -176,20 +176,63 @@ def test_pvc_failure(
         init_pvc(data, filer)
 
 
+@pytest.mark.parametrize("status", ["Failed", "Error", "Cancelled"])
 @patch("tesk_core.taskmaster.PVC.delete")
 @patch("tesk_core.taskmaster.Job.delete")
-@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Error")
+@patch("tesk_core.taskmaster.Job.run_to_completion")
 @patch("tesk_core.taskmaster.logger")
 def test_run_executor_failure(
     mock_logger: MagicMock,
     mock_run_to_compl: MagicMock,
     mock_job_delete: MagicMock,
     mock_pvc_delete: MagicMock,
+    status: str,
     data: dict[str, Any],
 ) -> None:
-    """Test that a failed executor exits."""
-    with pytest.raises(SystemExit):
+    """Test that a failed executor exits with code 0 and keeps its job.
+
+    The TESK API reads the state and the logs of the executor from the job.
+    """
+    mock_run_to_compl.return_value = status
+    with pytest.raises(SystemExit) as exit_info:
         run_executor(data["executors"][0], taskmaster.args.namespace)
+    assert exit_info.value.code == 0
+    mock_job_delete.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("env", "spec", "expected"),
+    [
+        ({}, {}, 0),
+        ({}, {"backoffLimit": 2}, 2),
+        ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {}, 3),
+        ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {"backoffLimit": 2}, 3),
+    ],
+)
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.logger")
+def test_run_executor_backoff_limit(
+    mock_logger: MagicMock,
+    mock_run_to_compl: MagicMock,
+    env: dict[str, str],
+    spec: dict[str, int],
+    expected: int,
+    data: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that executor jobs aren't retried unless configured.
+
+    `EXECUTOR_BACKOFF_LIMIT` overrides the job's `backoffLimit`, which is 0
+    if neither sets it.
+    """
+    monkeypatch.delenv("EXECUTOR_BACKOFF_LIMIT", raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    executor = data["executors"][0]
+    executor["spec"].pop("backoffLimit", None)
+    executor["spec"].update(spec)
+    run_executor(executor, taskmaster.args.namespace)
+    assert executor["spec"]["backoffLimit"] == expected
 
 
 @patch("tesk_core.taskmaster.PVC")
