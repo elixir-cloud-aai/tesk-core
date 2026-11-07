@@ -454,7 +454,8 @@ class FTPTransput(Transput):
 
             # Recurse into new transfers, ending with files, which are
             # uploaded; on this connection, as downloads do, so that a
-            # directory needs one login, not one per entry
+            # directory needs one login, not one per entry. Remote paths must
+            # stay absolute: entries share the connection's working directory
             with FTPTransput(
                 file_path, file_url, ftype, self.ftp_connection
             ) as transfer:

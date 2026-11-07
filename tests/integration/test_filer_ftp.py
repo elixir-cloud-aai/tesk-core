@@ -438,8 +438,8 @@ def test_ftp_upload_dir_into_existing_dirs(
 ) -> None:
     """Test that a directory uploads into remote directories that exist.
 
-    The connection is shared, so the directory that one entry changes to
-    must not change where the next one goes.
+    Entries share the connection, and creating a directory that exists
+    must not fail the entries after it.
 
     Args:
         tmp_path: The temporary directory of the test.
@@ -462,3 +462,33 @@ def test_ftp_upload_dir_into_existing_dirs(
 
     assert (home / "pre" / "dir2" / "b").read_text() == "b"
     assert (home / "pre" / "z").read_text() == "z"
+
+
+def test_ftp_upload_dir_stops_at_failed_entry(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    ftpserver: Any,
+    ftp_redirect: dict[str, Any],
+) -> None:
+    """Test that a failed entry stops the upload and closes the connection once.
+
+    Args:
+        mocker: The mocker fixture.
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    (tmp_path / "dir1" / "dir2").mkdir(parents=True)
+    (tmp_path / "dir1" / "dir2" / "b").write_text("b")
+    mocker.patch("tesk_core.filer.ftp_upload_file", return_value=1)
+    close = mocker.spy(ftplib.FTP, "close")
+
+    with FTPTransput(
+        str(tmp_path / "dir1"),
+        "ftp://" + ftp_redirect["host"] + "/fail",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.upload_dir() == 1
+
+    assert close.call_count == 1
