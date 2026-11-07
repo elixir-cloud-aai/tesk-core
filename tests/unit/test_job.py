@@ -1399,3 +1399,53 @@ def test_get_status_max_queue_pod_check_interval(
     job.get_status(False)
 
     mock_list_namespaced_pod.assert_called_once()
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_max_queue_deleted_despite_error(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a job gone after a deletion that failed counts as deleted.
+
+    A server error can come after the deletion happened.
+
+    Args:
+        mock_list_namespaced_pod: The mocked listing of the job's pods.
+        mock_read_namespaced_job: The mocked reading of the job.
+        mock_job_delete: The mocked deletion of the job.
+        data: The task.
+    """
+    mock_list_namespaced_pod.return_value = unschedulable_pod(minutes=10)
+    mock_read_namespaced_job.side_effect = [
+        read_namespaced_job_error("task-ex-00", "default"),
+        ApiException(status=404),
+    ]
+    mock_job_delete.side_effect = ApiException(status=504)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.max_queue = 60
+    job.delete_unschedulable = True
+
+    assert job.get_status(False) == ("Running", False)
+    assert job.get_status(False) == ("Failed", False)
+
+
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_get_status_missing_job(
+    mock_read_namespaced_job: MagicMock, data: dict[str, Any]
+) -> None:
+    """Test that a job that is gone, without a deletion, is still an error.
+
+    Args:
+        mock_read_namespaced_job: The mocked reading of the job.
+        data: The task.
+    """
+    mock_read_namespaced_job.side_effect = ApiException(status=404)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+
+    with pytest.raises(ApiException):
+        job.get_status(False)

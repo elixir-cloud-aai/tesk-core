@@ -98,6 +98,8 @@ class Job:
         body: The manifest of the job.
         max_queue: Seconds after which a pod that the scheduler can't place
             (`unschedulable`) ends the job; `None` waits forever.
+        deleting: Whether a deletion of `end_unschedulable` failed, and is
+            tried again; a job that is gone then counts as deleted.
         delete_unschedulable: Whether such a job is deleted, rather than
             failed and kept (`fail`).
     """
@@ -124,6 +126,7 @@ class Job:
         self.failed_pods = 0
         self.max_queue: int | None = None
         self.delete_unschedulable = False
+        self.deleting = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -182,9 +185,9 @@ class Job:
         that, counted from its creation, ends the job
         (`end_unschedulable`). Pending pods are checked at most every
         `pod_check_interval` seconds, once the job has run for longer than
-        `timeout` or `max_queue`. The job runs until
-        Kubernetes marks it `Failed`, for at most another `timeout`; then it
-        counts as `Failed`, and is kept.
+        `timeout` or `max_queue`. A failed job runs until Kubernetes marks it
+        `Failed`, for at most another `timeout`; then it counts as `Failed`,
+        and is kept.
 
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
@@ -194,7 +197,14 @@ class Job:
             The status (`Running`, `Complete` or `Failed`) and whether all
             pods of the job are running.
         """
-        job = self.bv1.read_namespaced_job(self.name, self.namespace)
+        try:
+            job = self.bv1.read_namespaced_job(self.name, self.namespace)
+        except ApiException as ex:
+            # A deletion that failed with a server error may have happened
+            if self.deleting and ex.status == 404:
+                self.status = "Failed"
+                return self.status, is_all_pods_runnning
+            raise
         self.status = "Running"
         # Only conditions with the status "True" count. `FailureTarget`
         # (Kubernetes 1.31+) comes before `Failed`, `SuccessCriteriaMet`
@@ -322,6 +332,7 @@ class Job:
             if ex.status is not None and 400 <= ex.status < 500:
                 return self.fail(reason)
             logging.warning("Can't delete job '%s' (%s) yet", self.name, ex.status)
+            self.deleting = True
             return "Running"
         return "Failed"
 
