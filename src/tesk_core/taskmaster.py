@@ -237,7 +237,8 @@ def task_pvc(data: dict[str, Any]) -> PVC | None:
 def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     """Create the task's persistent volume claim and stage the inputs.
 
-    Exits (`exit_cancelled`) if the inputs filer job doesn't complete.
+    The inputs filer job runs only if the task has inputs. Exits
+    (`exit_cancelled`) if it doesn't complete.
 
     Args:
         data: The task.
@@ -263,6 +264,11 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
 
     if os.environ.get("NETRC_SECRET_NAME") is not None:
         filer.add_netrc_mount(os.environ.get("NETRC_SECRET_NAME"))
+
+    # Volumes only need the claim: the subpaths of their mounts are created
+    # when the executors start
+    if not data["inputs"]:
+        return pvc
 
     filerjob = Job(
         filer.get_spec("inputs", args.debug),
@@ -290,6 +296,8 @@ def run_task(
     """Run a task: stage the inputs, run the executors, stage the outputs.
 
     Without volumes, inputs and outputs, no filer jobs and claim are created.
+    The inputs filer runs only with inputs, the outputs filer only with
+    outputs.
 
     Args:
         data: The task.
@@ -333,8 +341,8 @@ def run_task(
     # run executors
     logging.debug("Finished running executors")
 
-    # upload files and delete pvc
-    if data["volumes"] or data["inputs"] or data["outputs"]:
+    # upload the outputs, if any
+    if data["outputs"]:
         if check_cancelled():
             exit_cancelled("Cancelled before the outputs filer")
         filerjob = Job(
@@ -351,8 +359,8 @@ def run_task(
         )
         if status != "Complete":
             exit_cancelled("Got status " + status)
-        # The claim of `init_pvc`
-        delete_created_pvc(keep_failed=False)
+    # The claim of `init_pvc`, if any: deleted also when no outputs filer ran
+    delete_created_pvc(keep_failed=False)
 
 
 def newParser() -> argparse.ArgumentParser:

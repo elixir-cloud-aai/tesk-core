@@ -58,6 +58,8 @@ def data() -> dict[str, Any]:
     """
     with (RESOURCES / "inputFile.json").open() as fh:
         task: dict[str, Any] = json.load(fh)
+    # An output, so that the outputs filer runs too
+    task["outputs"] = [{"path": "/out", "url": "s3://b/out", "type": "DIRECTORY"}]
     return task
 
 

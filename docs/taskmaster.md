@@ -11,13 +11,16 @@ outputs, volumes and resources.
 
 1. If the task has inputs, outputs or volumes, the taskmaster creates a
    persistent volume claim (PVC) of the task's disk size
-   (`resources.disk_gb`) for them. It then runs the [filer](filer.md) as a
-   job (`<task>-inputs-filer`) that downloads the inputs onto that volume.
+   (`resources.disk_gb`) for them. If it has inputs, it then runs the
+   [filer](filer.md) as a job (`<task>-inputs-filer`) that downloads them
+   onto that volume.
 2. It runs the executors, one after another, each as a job with the task's
    volume mounted. If an executor has resource requests but no limits, the
    requests also become its limits.
-3. If the task has inputs, outputs or volumes, it runs the filer again
-   (`<task>-outputs-filer`) to upload the outputs, then deletes the PVC.
+3. If the task has outputs, it runs the filer again
+   (`<task>-outputs-filer`) to upload them. It then deletes the PVC, if
+   there is one. Volumes need no filer: their directories on the PVC are
+   created when the executors start, and their contents aren't uploaded.
 
 The taskmaster polls each job until it completes. If a job doesn't complete,
 the taskmaster stops without running the remaining jobs, deletes the PVC, and
