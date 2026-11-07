@@ -6,6 +6,12 @@ to the filer.
 
 ## Unreleased
 
+### One FTP connection per uploaded directory
+
+The filer uploads a directory over a single FTP connection; before, it
+connected and logged in again for each file and subdirectory, which FTP
+servers that limit connections or logins could refuse. Nothing to change.
+
 ### Filers run only when they have something to stage
 
 The taskmaster runs the inputs filer (`<task>-inputs-filer`) only for tasks

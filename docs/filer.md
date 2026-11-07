@@ -57,6 +57,12 @@ The filer connects to the URL's host and port (21 if the URL has none);
 user information in the URL is ignored. A URL without a valid host or port
 (e.g. `ftp://ftp.example.org:99999/data`) fails the transfer with an error.
 
+Each input or output opens one connection and logs in once; a directory's
+files and subdirectories, downloaded or uploaded, share it. A failed
+transfer fails the filer's job, which Kubernetes retries up to the filer's
+`backoffLimit` (`FILER_BACKOFF_LIMIT`; see
+[Taskmaster](taskmaster.md#environment-variables)).
+
 Directory downloads skip, with a warning, listing entries whose names aren't
 a single path component (empty, `.`, `..`, or with `/` or `\`).
 
