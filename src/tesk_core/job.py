@@ -16,6 +16,8 @@ logging.basicConfig(format="%(message)s", level=logging.INFO)
 # Job conditions that end a job, when their status is "True"
 JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
+# Active deadline that fails a job (`Job.fail`), in seconds
+FAIL_DEADLINE = 1
 
 
 class Job:
@@ -105,7 +107,8 @@ class Job:
 
         A pod that can't pull its image (`ImagePullBackOff`) for longer than
         `timeout` fails the job (`fail`); the job runs until Kubernetes marks
-        it `Failed`, for at most another `timeout`; then it is deleted.
+        it `Failed`, for at most another `timeout`; then it counts as
+        `Failed`, and is kept.
 
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
@@ -132,15 +135,19 @@ class Job:
                 break
         if self.status != "Running":
             return self.status, is_all_pods_runnning
+        # A job that an earlier run of the taskmaster failed (see `fail`)
+        spec = getattr(job, "spec", None)
+        if (
+            self.failing_since is None
+            and getattr(spec, "active_deadline_seconds", None) == FAIL_DEADLINE
+        ):
+            self.failing_since = datetime.now(timezone.utc)
         if self.failing_since is not None:
             waited = (datetime.now(timezone.utc) - self.failing_since).total_seconds()
             if waited > self.timeout:
                 logging.warning(
-                    "Job '%s' wasn't marked failed within %s s; deleting it",
-                    self.name,
-                    self.timeout,
+                    "Job '%s' wasn't marked failed within %s s", self.name, self.timeout
                 )
-                self.delete_quietly()
                 self.status = "Failed"
             return self.status, is_all_pods_runnning
 
@@ -168,35 +175,43 @@ class Job:
                         == "ImagePullBackOff"
                     ):
                         logging.info(pod.status.container_statuses[0].state.waiting)
-                        if not self.fail():
-                            self.status = "Failed"
+                        self.status = self.fail()
                         break
 
         return self.status, is_all_pods_runnning
 
-    def fail(self) -> bool:
+    def fail(self) -> str:
         """Fail the job, and keep it.
 
-        Sets an active deadline that has passed, so that Kubernetes deletes
-        the job's active pods and marks the job `Failed` with the reason
-        `DeadlineExceeded`. If the job can't be changed, it is deleted
-        instead, as it can't be left waiting.
+        Sets an active deadline that has passed (`FAIL_DEADLINE`), so that
+        Kubernetes deletes the job's active pods and marks the job `Failed`
+        with the reason `DeadlineExceeded`. If the Kubernetes API rejects the
+        change (a client error, e.g. a role without `patch` on jobs), the job
+        is deleted instead, as it can't be left waiting; after other errors
+        (e.g. server errors or no response), the next poll tries again.
 
         Returns:
-            Whether the job was changed; if not, it was deleted, or that
-            failed too (both errors are logged).
+            The job's status: `Running` while Kubernetes fails it, or the
+            next poll tries again; `Failed` if the change was rejected.
         """
         logging.info("Failing job '%s': its pod can't start", self.name)
         try:
             self.bv1.patch_namespaced_job(
-                self.name, self.namespace, {"spec": {"activeDeadlineSeconds": 1}}
+                self.name,
+                self.namespace,
+                {"spec": {"activeDeadlineSeconds": FAIL_DEADLINE}},
             )
         except ApiException as ex:
-            logging.error("Can't fail job '%s' (%s); deleting it", self.name, ex.status)
-            self.delete_quietly()
-            return False
+            if ex.status is not None and 400 <= ex.status < 500:
+                logging.error(
+                    "Can't fail job '%s' (%s); deleting it", self.name, ex.status
+                )
+                self.delete_quietly()
+                return "Failed"
+            logging.warning("Can't fail job '%s' (%s) yet", self.name, ex.status)
+            return "Running"
         self.failing_since = datetime.now(timezone.utc)
-        return True
+        return "Running"
 
     def delete_quietly(self) -> None:
         """Delete the job, as a last resort; log an error if that fails."""
@@ -208,8 +223,8 @@ class Job:
     def delete(self) -> None:
         """Delete the job and, in the background, its pods.
 
-        Only on cancellation, on an interrupt of the taskmaster, and if a job
-        can't be failed (`fail`) or isn't marked failed in time.
+        Only on cancellation, on an interrupt of the taskmaster, and if the
+        Kubernetes API rejects failing it (`fail`).
         """
         logging.info("Deleting job '%s'", self.name)
         self.bv1.delete_namespaced_job(

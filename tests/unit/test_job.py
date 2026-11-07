@@ -12,7 +12,7 @@ from kubernetes.client.rest import ApiException
 import pytest
 
 from tesk_core import taskmaster
-from tesk_core.job import Job
+from tesk_core.job import FAIL_DEADLINE, Job
 
 START_TIME = datetime.datetime.now(timezone.utc)
 RESOURCES = Path(__file__).parent / "resources"
@@ -621,12 +621,18 @@ def test_run_to_completion_pod_timeout_cancelled(
     mock_job_delete.assert_called_once()
 
 
-@pytest.mark.parametrize("delete_fails", [False, True])
-@patch("kubernetes.client.BatchV1Api.delete_namespaced_job")
-@patch(
-    "kubernetes.client.BatchV1Api.patch_namespaced_job",
-    side_effect=ApiException(status=403, reason="Forbidden"),
+@pytest.mark.parametrize(
+    ("patch_status", "delete_fails", "expected", "deleted"),
+    [
+        (403, False, "Failed", True),
+        (403, True, "Failed", True),
+        (404, False, "Failed", True),
+        (500, False, "Running", False),
+        (None, False, "Running", False),
+    ],
 )
+@patch("kubernetes.client.BatchV1Api.delete_namespaced_job")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
 @patch(
     "kubernetes.client.BatchV1Api.read_namespaced_job",
     side_effect=read_namespaced_job_error,
@@ -637,29 +643,58 @@ def test_get_status_pod_timeout_patch_error(
     mock_read_namespaced_job: MagicMock,
     mock_patch_namespaced_job: MagicMock,
     mock_delete_namespaced_job: MagicMock,
+    patch_status: int | None,
     delete_fails: bool,
+    expected: str,
+    deleted: bool,
     data: dict[str, Any],
 ) -> None:
-    """Test that a job that can't be failed is deleted, as before, and fails.
+    """Test a job whose change to fail it returns an error.
 
-    The taskmaster stops either way, also if the job can't be deleted.
+    A rejected change (client error) deletes the job, as before, and the job
+    fails, also if it can't be deleted. After other errors, the job runs on,
+    and the next poll tries again.
     """
+    mock_patch_namespaced_job.side_effect = ApiException(status=patch_status)
     if delete_fails:
         mock_delete_namespaced_job.side_effect = ApiException(status=403)
     mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
     job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
     job.timeout = 50
     status, _ = job.get_status(False)
-    assert status == "Failed"
+    assert status == expected
     assert job.failing_since is None
-    mock_delete_namespaced_job.assert_called_once()
+    assert mock_delete_namespaced_job.called == deleted
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_get_status_failed_by_earlier_run(
+    mock_read_namespaced_job: MagicMock,
+    mock_list_namespaced_pod: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a job failed by an earlier taskmaster run counts as failing.
+
+    After a restart, the taskmaster waits for Kubernetes to mark it, for at
+    most another timeout, without checking the pods again.
+    """
+    read = job_with_conditions(None)
+    read.__dict__["spec"] = MockObject({"active_deadline_seconds": FAIL_DEADLINE})
+    mock_read_namespaced_job.return_value = read
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    status, _ = job.get_status(False)
+    assert status == "Running"
+    assert job.failing_since is not None
+    mock_list_namespaced_pod.assert_not_called()
 
 
 @pytest.mark.parametrize(
     ("waited", "conditions", "expected", "deleted"),
     [
         (10, None, "Running", False),
-        (60, None, "Failed", True),
+        (60, None, "Failed", False),
         (10, [("Failed", "True")], "Failed", False),
         (10, [("Complete", "True")], "Complete", False),
     ],
@@ -680,7 +715,7 @@ def test_get_status_failing(
     """Test the status of a job that was failed.
 
     It runs until Kubernetes ends it, for at most another timeout; then it
-    is deleted and counts as failed. The pods aren't checked again.
+    counts as failed, and is kept. The pods aren't checked again.
     """
     mock_read_namespaced_job.return_value = job_with_conditions(conditions)
     job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)

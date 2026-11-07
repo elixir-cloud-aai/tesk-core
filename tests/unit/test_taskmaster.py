@@ -195,17 +195,21 @@ def test_run_executor_failure(
     `run_to_completion` itself deletes the job of a cancelled task.
     """
     mock_run_to_compl.return_value = status
+    pvc = MagicMock(spec=PVC, volume_mounts=[])
+    pvc.name = "task-pvc"
     with pytest.raises(SystemExit) as exit_info:
-        run_executor(data["executors"][0], taskmaster.args.namespace)
+        run_executor(data["executors"][0], taskmaster.args.namespace, pvc)
     assert exit_info.value.code == 0
     mock_job_delete.assert_not_called()
     mock_pvc_delete.assert_not_called()
+    pvc.delete.assert_not_called()
 
 
 @pytest.mark.parametrize(
     ("env", "spec", "expected"),
     [
         ({}, {}, 0),
+        ({}, {"backoffLimit": None}, 0),
         ({}, {"backoffLimit": 2}, 2),
         ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {}, 3),
         ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {"backoffLimit": 2}, 3),

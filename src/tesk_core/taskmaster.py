@@ -55,7 +55,8 @@ def run_executor(
         executor["spec"].update(
             {"backoffLimit": int(os.environ["EXECUTOR_BACKOFF_LIMIT"])}
         )
-    executor["spec"].setdefault("backoffLimit", 0)
+    if executor["spec"].get("backoffLimit") is None:
+        executor["spec"]["backoffLimit"] = 0
 
     if "restartPolicy" not in spec and "restart_policy" in spec:
         spec["restartPolicy"] = spec["restart_policy"]
@@ -316,7 +317,11 @@ def newParser() -> argparse.ArgumentParser:
 
     parser.add_argument("-p", "--poll-interval", help="Job polling interval", default=5)
     parser.add_argument(
-        "-pt", "--pod-timeout", type=int, help="Pod creation timeout", default=240
+        "-pt",
+        "--pod-timeout",
+        type=int,
+        help="Seconds after which a pod that can't pull its image fails its job",
+        default=240,
     )
     parser.add_argument(
         "-fn",
