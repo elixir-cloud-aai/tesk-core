@@ -6,6 +6,27 @@ to the filer.
 
 ## Unreleased
 
+### PVCs of failed and cancelled tasks are deleted
+
+The taskmaster used to delete a task's PVC only after the outputs were
+uploaded: tasks that failed or were cancelled left their PVC behind. Now
+the taskmaster deletes the PVC whenever it stops because a job didn't
+complete or the task was cancelled (see
+[Taskmaster](taskmaster.md#what-it-does)). As for completed tasks,
+Kubernetes frees the storage once the task's jobs are deleted. PVCs left
+behind by earlier releases stay: list them with
+`kubectl get pvc --namespace <namespace>`, and delete those of tasks that
+have ended (`<task>-pvc`, where `<task>` is the task's ID).
+
+To keep the earlier behaviour, e.g. to inspect the files of failed tasks,
+set `KEEP_FAILED_PVC` to `true` in the taskmaster's environment: the TESK
+API passes it on from its own variable
+`TESK_API_TASKMASTER_ENVIRONMENT_KEEP_FAILED_PVC` (see
+[Environment variables](taskmaster.md#environment-variables)), which TESK's
+Helm chart will set from a value (elixir-cloud-aai/TESK#261). A PVC that the taskmaster can't delete (e.g. a role
+without `delete` on `persistentvolumeclaims`) is now logged as an error,
+also for a completed task, which no longer fails the taskmaster's pod.
+
 ### Early cancellation stops the task
 
 A task cancelled while its taskmaster's pod was pending, or before the pod

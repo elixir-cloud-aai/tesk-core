@@ -111,7 +111,7 @@ def test_pullPolicyAlways() -> None:
     ),
 )
 @patch("tesk_core.taskmaster.logger", newLogger(logging.DEBUG))
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 @patch("tesk_core.taskmaster.Job.run_to_completion", jobRunToCompletionMock)
 def test_run_task(mock_create: MagicMock, mock_delete: MagicMock) -> None:
@@ -134,7 +134,8 @@ def test_run_task(mock_create: MagicMock, mock_delete: MagicMock) -> None:
         "task-1000-ex-00",
         "task-1000-outputs-filer",
     ]
-    assert taskmaster.created_pvc is not None
-    assert taskmaster.created_pvc.name == "task-1000-pvc"
     mock_create.assert_called_once_with()
-    mock_delete.assert_called_once_with()
+    mock_delete.assert_called_once()
+    assert mock_delete.call_args.args[0].name == "task-1000-pvc"
+    # Forgotten once deleted, so that stopping deletes it no more
+    assert taskmaster.created_pvc is None

@@ -189,7 +189,7 @@ def test_run_executor_failure(
     status: str,
     data: dict[str, Any],
 ) -> None:
-    """Test that a failed executor exits with code 0 and keeps its job and PVC.
+    """Test that a failed executor exits with code 0 and keeps its job.
 
     The TESK API reads the state and the logs of the executor from the job.
     `run_to_completion` itself deletes the job of a cancelled task.

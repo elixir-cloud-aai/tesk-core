@@ -20,11 +20,28 @@ outputs, volumes and resources.
    (`<task>-outputs-filer`) to upload the outputs, then deletes the PVC.
 
 The taskmaster polls each job until it completes. If a job doesn't complete,
-the taskmaster stops without running the remaining jobs, keeps the PVC, and
+the taskmaster stops without running the remaining jobs, deletes the PVC, and
 exits with code 0. The TESK API derives the task's state from the jobs, not
 from the taskmaster's exit code: an executor job that failed gives
 `EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
 keeps the jobs that failed, with the logs of their pods that ended.
+
+The PVC is also deleted when the taskmaster stops on a cancelled task, also
+one cancelled before the taskmaster started. Kubernetes frees the PVC's
+storage only once no pod refers to it: until the task's jobs, and so their
+pods, are deleted, the PVC stays `Terminating`, as after a task that
+completed. Neither the taskmaster nor the TESK API deletes the jobs (see
+elixir-cloud-aai/TESK#123). To keep the PVCs of tasks that don't complete,
+e.g. to inspect their files, set `KEEP_FAILED_PVC` to `true`; then delete
+them yourself. Tasks that complete delete their PVC either way.
+
+An error deleting the PVC is logged, also a request that times out (after
+5 seconds to connect or 30 seconds to answer, per attempt of the Kubernetes
+client); the taskmaster goes on as it would
+(e.g. stops, or ends a completed task). An unexpected error of the
+taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
+reuses it; if every retry fails, the PVC is left behind. An interrupt
+(`SIGINT`, see below) keeps it too.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
@@ -122,6 +139,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
 | `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests (not FTP or S3), in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
+| `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
 | `TESK_FTP_HOSTS` | Hosts that the filer sends the FTP credentials to, passed on to the filer with them (see [Filer](filer.md#ftp)). |
 | `NETRC_SECRET_NAME` | Name of a secret with a `.netrc` file (key `.netrc`), mounted into the filer for HTTP(S) and FTP credentials. |
