@@ -92,3 +92,13 @@ def test_containerPath_normalises():
 
     assert containerPath("/tmp/a/../b/c") == "/transfer/b/c"
     assert containerPath("/tmp") == "/transfer"
+
+
+@mock.patch("tesk_core.path.HOST_BASE_PATH", BASE)
+@mock.patch("tesk_core.path.CONTAINER_BASE_PATH", None)
+def test_containerPath_without_container_base_path():
+    """Without `CONTAINER_BASE_PATH`, paths can't be mapped and raise an
+    error instead of becoming relative."""
+
+    with pytest.raises(ValueError, match="CONTAINER_BASE_PATH"):
+        containerPath("/tmp/a")

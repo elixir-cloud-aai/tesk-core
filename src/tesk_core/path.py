@@ -119,9 +119,12 @@ def containerPath(path: str) -> str:
 
     Raises:
         InvalidHostPath: The path is not `HOST_BASE_PATH` or below it.
+        ValueError: `CONTAINER_BASE_PATH` is not set.
     """
     validatePath(path)
+    if CONTAINER_BASE_PATH is None:
+        raise ValueError("'CONTAINER_BASE_PATH' is not set")
 
     relPath = relpath(path, HOST_BASE_PATH)
 
-    return os.path.normpath(os.path.join(CONTAINER_BASE_PATH or "", relPath))
+    return os.path.normpath(os.path.join(CONTAINER_BASE_PATH, relPath))
