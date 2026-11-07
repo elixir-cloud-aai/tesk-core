@@ -4,6 +4,7 @@ from argparse import Namespace
 import datetime
 from datetime import timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -1241,4 +1242,160 @@ def test_get_status_max_queue_checks_pods_early(
 
     job.max_queue = 60
     job.get_status(False)
+    mock_list_namespaced_pod.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected", "failed"),
+    [
+        (404, "Failed", False),  # Already gone
+        (403, "Running", True),  # Rejected: failed and kept instead
+        (503, "Running", False),  # Tried again at the next poll
+    ],
+)
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_max_queue_delete_error(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+    status: int,
+    expected: str,
+    failed: bool,
+) -> None:
+    """Test that a job that can't be deleted is failed, or deleted later.
+
+    So that an executor job that is left can't run after the task stopped.
+
+    Args:
+        mock_list_namespaced_pod: The mocked listing of the job's pods.
+        mock_read_namespaced_job: The mocked reading of the job.
+        mock_patch_namespaced_job: The mocked patch of the job.
+        mock_job_delete: The mocked deletion of the job.
+        data: The task.
+        status: The status of the API error of the deletion.
+        expected: The status of the job.
+        failed: Whether the job is failed instead.
+    """
+    mock_list_namespaced_pod.return_value = unschedulable_pod(minutes=10)
+    mock_job_delete.side_effect = ApiException(status=status)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.max_queue = 60
+    job.delete_unschedulable = True
+
+    assert job.get_status(False) == (expected, False)
+
+    assert mock_patch_namespaced_job.called is failed
+    if expected == "Running" and not failed:
+        # Not waiting for the next pod check: the next poll tries again
+        job.get_status(False)
+        assert mock_job_delete.call_count == 2
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_max_queue_retry_kept(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that a job whose earlier pod failed is failed and kept, not deleted.
+
+    Its executor ran, so its logs are kept, and the TESK API reports the
+    executor's failure.
+
+    Args:
+        mock_list_namespaced_pod: The mocked listing of the job's pods.
+        mock_read_namespaced_job: The mocked reading of the job.
+        mock_patch_namespaced_job: The mocked patch of the job.
+        mock_job_delete: The mocked deletion of the job.
+        data: The task.
+        caplog: The fixture that captures the log.
+    """
+    mock_list_namespaced_pod.return_value = unschedulable_pod(minutes=10)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.max_queue = 60
+    job.delete_unschedulable = True
+    job.failed_pods = 1
+
+    with caplog.at_level(logging.INFO):
+        assert job.get_status(False) == ("Running", False)
+
+    mock_job_delete.assert_not_called()
+    mock_patch_namespaced_job.assert_called_once()
+    assert "its pod wasn't scheduled in time" in caplog.text
+
+
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_max_queue_cannot_start(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a pod that can't start still fails its job with a max queue time.
+
+    Args:
+        mock_list_namespaced_pod: The mocked listing of the job's pods.
+        mock_read_namespaced_job: The mocked reading of the job.
+        mock_patch_namespaced_job: The mocked patch of the job.
+        data: The task.
+    """
+    pods: Any = pending_pod("ErrImagePull", 10)
+    pods.items[0].status.conditions = None
+    mock_list_namespaced_pod.return_value = pods
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    job.max_queue = 3600
+
+    assert job.get_status(False) == ("Running", False)
+
+    mock_patch_namespaced_job.assert_called_once()
+
+
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_max_queue_pod_check_interval(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that pods within the max queue time are checked once a minute.
+
+    Args:
+        mock_list_namespaced_pod: The mocked listing of the job's pods.
+        mock_read_namespaced_job: The mocked reading of the job.
+        data: The task.
+    """
+    mock_list_namespaced_pod.return_value = unschedulable_pod(minutes=1)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 3600
+    job.max_queue = 300
+
+    job.get_status(False)
+    job.get_status(False)
+
     mock_list_namespaced_pod.assert_called_once()

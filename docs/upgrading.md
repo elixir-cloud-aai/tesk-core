@@ -17,6 +17,8 @@ wait as before. An executor whose pod can't be scheduled in time has its
 job deleted; the TESK API reports that as `SYSTEM_ERROR` from the release
 that derives the task state from all jobs of a task
 ([tesk-api#104](https://github.com/elixir-cloud-aai/tesk-api/issues/104)).
+TESK API 1.1 and earlier report a task whose later executor was deleted as
+`COMPLETE`: set `TESK_MAX_QUEUE_SECONDS` only with a newer TESK API.
 
 ### Finished tasks can be deleted after a TTL
 

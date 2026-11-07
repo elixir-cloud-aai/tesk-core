@@ -89,14 +89,31 @@ nodes are available: 3 Insufficient cpu.`, and stops. The TESK API then
 reports `SYSTEM_ERROR`:
 
 - An executor's job is deleted, as its executor never ran: the task lacks
-  an executor, which gives `SYSTEM_ERROR` rather than `EXECUTOR_ERROR`.
+  an executor, which gives `SYSTEM_ERROR` rather than `EXECUTOR_ERROR`. This
+  needs a TESK API release that derives the task state from all jobs of a
+  task ([tesk-api#104](https://github.com/elixir-cloud-aai/tesk-api/issues/104));
+  TESK API 1.1 and earlier report a task whose later executor was deleted
+  as `COMPLETE`, so don't set `TESK_MAX_QUEUE_SECONDS` with them.
+- If a pod of the executor's job failed before (e.g. a retry, with
+  `EXECUTOR_BACKOFF_LIMIT`, whose new pod can't be scheduled), the job is
+  failed and kept instead, with the logs of the pods that ran: the TESK API
+  reports `EXECUTOR_ERROR`.
 - A filer's job is failed and kept, as for pods that can't start; a failed
   filer gives `SYSTEM_ERROR`.
 
-The pods are checked once the job has been active for longer than the max
-queue time (or `--pod-timeout`, if that is shorter), then at most once a
-minute, so a task can end up to about a minute later than the max queue
-time.
+If the Kubernetes API rejects the deletion, the job is failed and kept
+instead; after other errors, the taskmaster tries again at the next poll.
+
+The pods are checked once the job has been active for longer than the
+shorter of the max queue time and `--pod-timeout`, then at most once a
+minute: with `TESK_MAX_QUEUE_SECONDS=600` and `--pod-timeout 240`, from
+240 seconds on. So a task can end up to about a minute later than the max
+queue time.
+
+The max queue time covers the pods of the task's jobs only, not the
+taskmaster's own pod: a task whose taskmaster can't be scheduled waits as
+before. Neither does it cover pods that are never created, e.g. because a
+`ResourceQuota` of the namespace is used up.
 
 Executor jobs aren't retried (`backoffLimit: 0`) unless
 `EXECUTOR_BACKOFF_LIMIT` (or the job) sets a limit, so that the state and logs

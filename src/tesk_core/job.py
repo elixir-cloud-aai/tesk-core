@@ -301,17 +301,31 @@ class Job:
     def end_unschedulable(self) -> str:
         """End the job, as its pod can't be scheduled in time.
 
-        Deletes it if `delete_unschedulable`, otherwise fails it (`fail`).
+        Deletes it if `delete_unschedulable` and none of its pods failed
+        before (so its container never ran); otherwise, or if the Kubernetes
+        API rejects the deletion (a client error), fails it (`fail`), which
+        keeps the logs of pods that ran. After other errors, the next poll
+        tries again, so that the job can't run after the task stopped.
 
         Returns:
-            The job's status: `Failed` once deleted, otherwise as `fail`.
+            The job's status: `Failed` once deleted (or already gone),
+            `Running` to try again, otherwise as `fail`.
         """
-        if self.delete_unschedulable:
-            self.delete_quietly()
-            return "Failed"
-        return self.fail()
+        reason = "its pod wasn't scheduled in time"
+        if not self.delete_unschedulable or self.failed_pods:
+            return self.fail(reason)
+        try:
+            self.delete()
+        except ApiException as ex:
+            if ex.status == 404:
+                return "Failed"
+            if ex.status is not None and 400 <= ex.status < 500:
+                return self.fail(reason)
+            logging.warning("Can't delete job '%s' (%s) yet", self.name, ex.status)
+            return "Running"
+        return "Failed"
 
-    def fail(self) -> str:
+    def fail(self, reason: str = "its pod can't start") -> str:
         """Fail the job, and keep it.
 
         Sets an active deadline that has passed (`FAIL_DEADLINE`), so that
@@ -321,11 +335,14 @@ class Job:
         is deleted instead, as it can't be left waiting; after other errors
         (e.g. server errors or no response), the next poll tries again.
 
+        Args:
+            reason: Why the job is failed, for the log.
+
         Returns:
             The job's status: `Running` while Kubernetes fails it, or the
             next poll tries again; `Failed` if the change was rejected.
         """
-        logging.info("Failing job '%s': its pod can't start", self.name)
+        logging.info("Failing job '%s': %s", self.name, reason)
         try:
             self.bv1.patch_namespaced_job(
                 self.name,
