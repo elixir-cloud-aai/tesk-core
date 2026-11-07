@@ -2,7 +2,8 @@
 """The taskmaster: runs a TES task as Kubernetes jobs.
 
 Creates the task's persistent volume claim, runs a filer job for the inputs,
-one job per executor, one after another, and a filer job for the outputs.
+if any, one job per executor, one after another, and a filer job for the
+outputs, if any.
 """
 
 import argparse
@@ -341,10 +342,13 @@ def run_task(
     # run executors
     logging.debug("Finished running executors")
 
+    # A task cancelled after its last executor stops as cancelled (which
+    # keeps its claim with `KEEP_FAILED_PVC`), with outputs or not
+    if pvc is not None and check_cancelled():
+        exit_cancelled("Cancelled before the outputs filer or the end")
+
     # upload the outputs, if any
     if data["outputs"]:
-        if check_cancelled():
-            exit_cancelled("Cancelled before the outputs filer")
         filerjob = Job(
             filer.get_spec("outputs", args.debug),
             task_name + "-outputs-filer",

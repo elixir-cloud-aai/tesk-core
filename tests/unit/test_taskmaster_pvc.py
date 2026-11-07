@@ -443,3 +443,37 @@ def test_interrupt_keeps_pvc(
 
     mock_job_delete.assert_called_once_with()
     mock_delete.assert_not_called()
+
+
+@patch("tesk_core.taskmaster.check_cancelled")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
+@patch("tesk_core.taskmaster.PVC.create")
+@patch.object(Job, "run_to_completion", statuses())
+def test_cancelled_after_executors_without_outputs(
+    mock_create: MagicMock,
+    mock_delete: MagicMock,
+    mock_cancelled: MagicMock,
+    data: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a task without outputs cancelled at its end stops as cancelled.
+
+    No outputs filer runs, but the task still counts as cancelled, so that
+    `KEEP_FAILED_PVC` keeps its claim.
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+        mock_cancelled: The mocked check for cancellation.
+        data: The task.
+        monkeypatch: The fixture that sets the environment.
+    """
+    data["outputs"] = []
+    monkeypatch.setenv(taskmaster.keep_failed_pvc_env, "true")
+    # Not cancelled before the executor, but after it
+    mock_cancelled.side_effect = [False, True]
+
+    with pytest.raises(SystemExit):
+        run_task(data, "filer_name", "filer_version")
+
+    mock_delete.assert_not_called()
