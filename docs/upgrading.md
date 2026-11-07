@@ -6,6 +6,12 @@ to the filer.
 
 ## Unreleased
 
+### One FTP connection per uploaded directory
+
+The filer uploads a directory over a single FTP connection; before, it
+connected and logged in again for each file and subdirectory, which FTP
+servers that limit connections or logins could refuse. Nothing to change.
+
 ### PVCs of failed and cancelled tasks are deleted
 
 The taskmaster used to delete a task's PVC only after the outputs were

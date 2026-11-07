@@ -452,8 +452,12 @@ class FTPTransput(Transput):
 
             logging.debug('Uploading %s\t"%s"', ftype.value, file_path)
 
-            # Recurse into new transfers, ending with files, which are uploaded
-            with FTPTransput(file_path, file_url, ftype) as transfer:
+            # Recurse into new transfers, ending with files, which are
+            # uploaded; on this connection, as downloads do, so that a
+            # directory needs one login, not one per entry
+            with FTPTransput(
+                file_path, file_url, ftype, self.ftp_connection
+            ) as transfer:
                 if transfer.upload():
                     return 1
         return 0

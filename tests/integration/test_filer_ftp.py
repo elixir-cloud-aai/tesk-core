@@ -391,3 +391,74 @@ def test_ftp_login_env_credentials(tmp_path: Path, ftpserver: Any, hosts: str) -
         uploaded = target.exists()
         target.unlink(missing_ok=True)
     assert uploaded is (hosts == "LOCALHOST:{port}")
+
+
+def test_ftp_upload_dir_reuses_connection(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    ftpserver: Any,
+    ftp_redirect: dict[str, Any],
+) -> None:
+    """Test that uploading a directory connects and logs in once.
+
+    Each file and subdirectory used to open a connection of its own, which
+    FTP servers can refuse when there are many (elixir-cloud-aai/tesk-core#4).
+
+    Args:
+        mocker: The mocker fixture.
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    (tmp_path / "dir1" / "dir2" / "dir3").mkdir(parents=True)
+    (tmp_path / "dir1" / "a").write_text("a")
+    (tmp_path / "dir1" / "dir2" / "b").write_text("b")
+    (tmp_path / "dir1" / "dir2" / "dir3" / "c").write_text("c")
+    connect = mocker.spy(ftplib.FTP, "connect")
+    login = mocker.spy(ftplib.FTP, "login")
+
+    with FTPTransput(
+        str(tmp_path / "dir1"),
+        "ftp://" + ftp_redirect["host"] + "/up",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.upload_dir() == 0
+
+    assert connect.call_count == 1
+    assert login.call_count == 1
+    home = Path(ftpserver.server_home)
+    assert (home / "up" / "a").read_text() == "a"
+    assert (home / "up" / "dir2" / "b").read_text() == "b"
+    assert (home / "up" / "dir2" / "dir3" / "c").read_text() == "c"
+
+
+def test_ftp_upload_dir_into_existing_dirs(
+    tmp_path: Path, ftpserver: Any, ftp_redirect: dict[str, Any]
+) -> None:
+    """Test that a directory uploads into remote directories that exist.
+
+    The connection is shared, so the directory that one entry changes to
+    must not change where the next one goes.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    home = Path(ftpserver.server_home)
+    (home / "pre" / "dir2").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "dir1" / "dir2").mkdir(parents=True)
+    (tmp_path / "dir1" / "dir2" / "b").write_text("b")
+    (tmp_path / "dir1" / "z").write_text("z")
+
+    with FTPTransput(
+        str(tmp_path / "dir1"),
+        "ftp://" + ftp_redirect["host"] + "/pre",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.upload_dir() == 0
+
+    assert (home / "pre" / "dir2" / "b").read_text() == "b"
+    assert (home / "pre" / "z").read_text() == "z"
