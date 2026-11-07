@@ -26,13 +26,20 @@ from the taskmaster's exit code: an executor job that failed gives
 `EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
 keeps the jobs that failed, with the logs of their pods that ended.
 
-The PVC is also deleted when the taskmaster stops on a cancelled task. While
-pods of the kept jobs still use it, Kubernetes may hold it back (its status
-is `Terminating`) until those jobs are deleted. To keep the PVCs of tasks
-that don't complete, e.g. to inspect their files, set `KEEP_FAILED_PVC` to
-`true`; then delete them yourself. An error deleting the PVC is logged; the
-taskmaster stops anyway. An unexpected error of the taskmaster itself fails
-its pod and keeps the PVC, as a retry of the pod reuses it.
+The PVC is also deleted when the taskmaster stops on a cancelled task, also
+one cancelled before the taskmaster started. Kubernetes frees the PVC's
+storage only once no pod refers to it: until the task's jobs, and so their
+pods, are deleted, the PVC stays `Terminating`, as after a task that
+completed. Neither the taskmaster nor the TESK API deletes the jobs (see
+elixir-cloud-aai/TESK#123). To keep the PVCs of tasks that don't complete,
+e.g. to inspect their files, set `KEEP_FAILED_PVC` to `true`; then delete
+them yourself. Tasks that complete delete their PVC either way.
+
+An error deleting the PVC is logged; the taskmaster goes on as it would
+(e.g. stops, or ends a completed task). An unexpected error of the
+taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
+reuses it; if every retry fails, the PVC is left behind. An interrupt
+(`SIGINT`, see below) keeps it too.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as

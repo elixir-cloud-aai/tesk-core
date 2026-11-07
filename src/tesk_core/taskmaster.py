@@ -202,6 +202,22 @@ def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
     return volume_mounts
 
 
+def task_pvc(data: dict[str, Any]) -> PVC | None:
+    """Describe the task's claim, without creating it.
+
+    Args:
+        data: The task.
+
+    Returns:
+        The claim, as `init_pvc` creates it; none if the task has no
+        volumes, inputs and outputs, and so no claim.
+    """
+    if not (data.get("volumes") or data.get("inputs") or data.get("outputs")):
+        return None
+    task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
+    return PVC(task_name + "-pvc", data["resources"]["disk_gb"], args.namespace)
+
+
 def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     """Create the task's persistent volume claim and stage the inputs.
 
@@ -217,9 +233,7 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     global created_pvc  # noqa: PLW0603 -- module state, see `clean_on_interrupt`
 
     task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
-    pvc_name = task_name + "-pvc"
-    pvc_size = data["resources"]["disk_gb"]
-    pvc = PVC(pvc_name, pvc_size, args.namespace)
+    pvc = PVC(task_name + "-pvc", data["resources"]["disk_gb"], args.namespace)
 
     mounts = generate_mounts(data, pvc)
     logging.debug(mounts)
@@ -268,8 +282,6 @@ def run_task(
         have_json_pvc: Whether the task is in a ConfigMap named after it,
             rather than passed to the filer in the environment.
     """
-    global created_pvc  # noqa: PLW0603 -- module state, see `delete_created_pvc`
-
     task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
     pvc = None
 
@@ -323,10 +335,8 @@ def run_task(
         )
         if status != "Complete":
             exit_cancelled("Got status " + status)
-        elif pvc is not None:
-            # Forgotten first, so that it isn't deleted again if this fails
-            created_pvc = None
-            pvc.delete()
+        # The claim of `init_pvc`
+        delete_created_pvc(keep_failed=False)
 
 
 def newParser() -> argparse.ArgumentParser:
@@ -449,7 +459,10 @@ def main() -> None:
     else:
         config.load_incluster_config()
 
-    created_pvc = None
+    # Known before the claim is created, so that a task cancelled now also
+    # deletes the claim that an earlier attempt of this pod left behind
+    # after an unexpected error (a claim that doesn't exist is no error)
+    created_pvc = task_pvc(data)
 
     # Check if we're cancelled during init
     if check_cancelled():
@@ -475,28 +488,32 @@ def keep_failed_pvc() -> bool:
     Returns:
         Whether to keep the claim.
     """
-    value = os.environ.get(keep_failed_pvc_env, "").strip().lower()
+    raw = os.environ.get(keep_failed_pvc_env, "")
+    value = raw.strip().lower()
     if value not in ("", "true", "false"):
         logger.warning(
             "Ignoring %s=%r: not true or false; deleting the PVC",
             keep_failed_pvc_env,
-            value,
+            raw,
         )
     return value == "true"
 
 
-def delete_created_pvc() -> None:
-    """Delete the task's claim, if the taskmaster created one.
+def delete_created_pvc(keep_failed: bool = True) -> None:
+    """Delete the task's claim, if the taskmaster created one, and forget it.
 
-    Kept if `keep_failed_pvc` says so. An error is logged, not raised, so
-    that the taskmaster still stops as it should; a claim that is already
-    gone isn't an error.
+    An error is logged, not raised, so that the taskmaster goes on as it
+    should; a claim that is already gone isn't an error.
+
+    Args:
+        keep_failed: Whether `keep_failed_pvc` can keep the claim: true when
+            the taskmaster stops early, false when the task completed.
     """
     global created_pvc  # noqa: PLW0603 -- module state, see `clean_on_interrupt`
     pvc = created_pvc
     if pvc is None:
         return
-    if keep_failed_pvc():
+    if keep_failed and keep_failed_pvc():
         logger.info("Keeping PVC '%s' (%s)", pvc.name, keep_failed_pvc_env)
         return
     # Forgotten first, so that it isn't deleted twice

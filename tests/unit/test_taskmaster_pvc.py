@@ -39,8 +39,9 @@ def taskmaster_state(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(taskmaster, "created_jobs", [])
     monkeypatch.setattr(taskmaster, "created_pvc", None)
+    # A logger that propagates to `caplog`, not one set up by `newLogger`
     monkeypatch.setattr(taskmaster, "logger", logging.getLogger("tesk_core.test"))
-    monkeypatch.delenv("KEEP_FAILED_PVC", raising=False)
+    monkeypatch.delenv(taskmaster.keep_failed_pvc_env, raising=False)
 
 
 @pytest.fixture
@@ -55,22 +56,24 @@ def data() -> dict[str, Any]:
     return task
 
 
-def statuses(*names: str) -> Callable[..., str]:
+def statuses(*names: str, status: str = "Failed") -> Callable[..., str]:
     """Mock `Job.run_to_completion` with a status per job name.
 
     Args:
-        names: Names of the jobs that don't complete; they get `Failed`.
+        names: Names of the jobs that don't complete.
+        status: The status of those jobs.
 
     Returns:
         The mock, which returns `Complete` for the other jobs.
     """
 
     def run_to_completion(job: Job, *args: Any) -> str:
-        return "Failed" if job.name in names else "Complete"
+        return status if job.name in names else "Complete"
 
     return run_to_completion
 
 
+@pytest.mark.parametrize("status", ["Failed", "Cancelled"])
 @pytest.mark.parametrize(
     "failing_job",
     ["task-1000-inputs-filer", "task-1000-ex-00", "task-1000-outputs-filer"],
@@ -81,6 +84,7 @@ def test_failed_job_deletes_pvc(
     mock_create: MagicMock,
     mock_delete: MagicMock,
     failing_job: str,
+    status: str,
     data: dict[str, Any],
 ) -> None:
     """Test that a job that doesn't complete deletes the claim, once.
@@ -88,11 +92,12 @@ def test_failed_job_deletes_pvc(
     Args:
         mock_create: The mocked creation of the claim.
         mock_delete: The mocked deletion of the claim.
-        failing_job: The job that fails.
+        failing_job: The job that doesn't complete.
+        status: Its status: failed, or cancelled while it ran.
         data: The task.
     """
     with (
-        patch.object(Job, "run_to_completion", statuses(failing_job)),
+        patch.object(Job, "run_to_completion", statuses(failing_job, status=status)),
         pytest.raises(SystemExit) as exit_info,
     ):
         run_task(data, "filer_name", "filer_version")
@@ -136,20 +141,87 @@ def test_cancelled_task_deletes_pvc(
 @patch("tesk_core.taskmaster.PVC.delete")
 @patch("tesk_core.taskmaster.PVC.create")
 @patch.object(Job, "run_to_completion", statuses())
-def test_completed_task_deletes_pvc_once(
-    mock_create: MagicMock, mock_delete: MagicMock, data: dict[str, Any]
+def test_completed_task_ignores_keep_failed_pvc(
+    mock_create: MagicMock,
+    mock_delete: MagicMock,
+    data: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test that a completed task deletes the claim once, and forgets it.
+    """Test that a completed task deletes the claim also with `KEEP_FAILED_PVC`.
 
     Args:
         mock_create: The mocked creation of the claim.
         mock_delete: The mocked deletion of the claim.
         data: The task.
+        monkeypatch: The fixture that sets the environment.
     """
+    monkeypatch.setenv(taskmaster.keep_failed_pvc_env, "true")
+
     run_task(data, "filer_name", "filer_version")
 
     mock_delete.assert_called_once_with()
     assert taskmaster.created_pvc is None
+
+
+@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.create")
+@patch.object(Job, "run_to_completion", statuses())
+def test_completed_task_delete_error_is_logged(
+    mock_create: MagicMock,
+    mock_delete: MagicMock,
+    data: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that an error deleting the claim of a completed task is logged.
+
+    The task completed, so the taskmaster doesn't fail (and isn't retried).
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+        data: The task.
+        caplog: The fixture that captures the log.
+    """
+    mock_delete.side_effect = ApiException(status=500, reason="Server Error")
+
+    with caplog.at_level(logging.ERROR):
+        run_task(data, "filer_name", "filer_version")
+
+    assert "Can't delete PVC 'task-1000-pvc': 500 Server Error" in caplog.text
+
+
+@patch("tesk_core.taskmaster.client")
+@patch("tesk_core.taskmaster.config")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=True)
+@patch("tesk_core.taskmaster.run_task")
+def test_cancelled_during_init_deletes_pvc(
+    mock_run_task: MagicMock,
+    mock_cancelled: MagicMock,
+    mock_config: MagicMock,
+    mock_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a task cancelled before it starts deletes its claim.
+
+    A retry of the taskmaster's pod after an unexpected error finds the claim
+    of the earlier attempt; a first attempt finds none, which is no error.
+
+    Args:
+        mock_run_task: The mocked run of the task.
+        mock_cancelled: The mocked check for cancellation.
+        mock_config: The mocked Kubernetes configuration.
+        mock_client: The mocked Kubernetes client.
+        monkeypatch: The fixture that sets the command line.
+    """
+    with (RESOURCES / "inputFile.json").open() as fh:
+        task = fh.read()
+    monkeypatch.setattr("sys.argv", ["taskmaster", "-n", "tesk", task])
+
+    with patch.object(PVC, "delete") as mock_delete, pytest.raises(SystemExit):
+        taskmaster.main()
+
+    mock_delete.assert_called_once_with()
+    mock_run_task.assert_not_called()
 
 
 @pytest.mark.parametrize("value", ["true", "TRUE", " True "])
@@ -172,7 +244,7 @@ def test_keep_failed_pvc(
         data: The task.
         monkeypatch: The fixture that sets the environment.
     """
-    monkeypatch.setenv("KEEP_FAILED_PVC", value)
+    monkeypatch.setenv(taskmaster.keep_failed_pvc_env, value)
 
     with pytest.raises(SystemExit):
         run_task(data, "filer_name", "filer_version")
@@ -189,6 +261,7 @@ def test_keep_failed_pvc(
         ("False", False, False),
         ("true", True, False),
         ("yes", False, True),
+        (" Yes ", False, True),
         ("1", False, True),
     ],
 )
@@ -212,12 +285,12 @@ def test_keep_failed_pvc_values(
         caplog: The fixture that captures the log.
     """
     if value is not None:
-        monkeypatch.setenv("KEEP_FAILED_PVC", value)
+        monkeypatch.setenv(taskmaster.keep_failed_pvc_env, value)
 
     with caplog.at_level(logging.WARNING):
         assert keep_failed_pvc() is keep
 
-    assert ("KEEP_FAILED_PVC" in caplog.text) is warns
+    assert (f"KEEP_FAILED_PVC={value!r}" in caplog.text) is warns
 
 
 @pytest.mark.parametrize(
