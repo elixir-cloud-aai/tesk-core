@@ -24,7 +24,7 @@ from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import requests
 
-from tesk_core.exception import FileProtocolDisabled, UnknownProtocol
+from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, getPath
 from tesk_core.transput import Transput, Type, url_for_log
@@ -316,11 +316,23 @@ class FTPTransput(Transput):
     def __enter__(self) -> "FTPTransput":
         """Connect and log in, unless the connection is reused.
 
+        Connects to the URL's host and port (the default port, 21, if the URL
+        has none), without its user information: the host and port that the
+        credentials are looked up for (see `ftp_login`).
+
         Returns:
             The transfer itself.
+
+        Raises:
+            InvalidURL: The URL has no valid host or port.
         """
         if self.connection_owner:
-            self.ftp_connection.connect(self.netloc)
+            target = split_host_port(self.netloc)
+            if target is None:
+                raise InvalidURL("Invalid host or port in FTP URL")
+            host, port = target
+            # Port 0 makes `ftplib` use the default port
+            self.ftp_connection.connect(host, port or 0)
             ftp_login(self.ftp_connection, self.netloc, self.netrc_file)
         return self
 
@@ -521,10 +533,10 @@ def ftp_host_allowed(netloc: str, hosts: str) -> bool:
     """Check whether a URL's host is in a list of hosts.
 
     Each entry of the list is `host` or `host:port` (IPv6 addresses in
-    brackets). Hosts match exactly, ignoring case; an entry without a port
-    matches any port of the host, one with a port only that port (21 for
-    URLs without a port). Invalid entries (see `ftp_host_entry_valid`)
-    match nothing.
+    brackets). Hosts match exactly, ignoring case. An entry without a port
+    matches the default port, 21, only, and one with a port only that port;
+    URLs without a port have port 21. Invalid entries (see
+    `ftp_host_entry_valid`) match nothing.
 
     Args:
         netloc: The network location of the URL.
@@ -541,7 +553,7 @@ def ftp_host_allowed(netloc: str, hosts: str) -> bool:
         allowed = split_host_port(entry) if ftp_host_entry_valid(entry) else None
         if allowed is None or allowed[0] != host:
             continue
-        if allowed[1] is None or allowed[1] == (port or ftplib.FTP_PORT):
+        if (allowed[1] or ftplib.FTP_PORT) == (port or ftplib.FTP_PORT):
             return True
     return False
 
@@ -660,11 +672,12 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     """Log in to an FTP server.
 
     With the first credentials found: the `.netrc` entry for the host and
-    port, the one for the host, or the `default` entry, if `.netrc` was
-    read; otherwise `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both
-    are set and the host is in `TESK_FTP_HOSTS` (see
-    `ftp_env_credentials`). Without credentials, or if they are refused,
-    anonymously.
+    port, the one for the host (only for the default port, 21), or the
+    `default` entry, if `.netrc` was read; otherwise `TESK_FTP_USERNAME` and
+    `TESK_FTP_PASSWORD`, if both are set and the host is in
+    `TESK_FTP_HOSTS` (see `ftp_env_credentials`). Without credentials, if
+    they are refused, or if the host can't be parsed the same way as for
+    the connection, anonymously.
 
     Args:
         ftp_connection: The connection.
@@ -675,11 +688,26 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     user = None
     password: str | None = None
     creds: tuple[str, str | None, str | None] | None = None
+    target = split_host_port(netloc)
+    host = netloc_host(netloc)
+    # `FTPTransput` connects to the host of `split_host_port`; the `.netrc`
+    # lookup keeps the host's case, but must otherwise agree with it (callers
+    # may pass any network location), or no credentials are sent
+    if target is None or target[0] != host.lower():
+        logging.error("Invalid host in FTP URL; logging in anonymously")
+        ftp_connection.login()
+        return
     if netrc_file is not None:
-        # An entry for the host and port, as before; then one for the host,
-        # or the `default` entry
-        creds = netrc_file.hosts.get(netloc.rpartition("@")[2])
-        creds = creds or netrc_file.authenticators(netloc_host(netloc))
+        # An entry for the host and port as written; for the default port,
+        # one for the host with `:21`, or without a port; then the `default`
+        # entry
+        written = netloc.rpartition("@")[2]
+        creds = netrc_file.hosts.get(written)
+        if not creds and (target[1] or ftplib.FTP_PORT) == ftplib.FTP_PORT:
+            bare = written[: written.index("]") + 1] if "]" in written else host
+            creds = netrc_file.hosts.get(f"{bare}:{ftplib.FTP_PORT}")
+            creds = creds or netrc_file.hosts.get(bare) or netrc_file.hosts.get(host)
+        creds = creds or netrc_file.hosts.get("default")
     if creds:
         user, _, password = creds
     else:
@@ -961,11 +989,17 @@ def process_file(ttype: str, filedata: dict[str, Any]) -> int:
 
     trans = newTransput(scheme, netloc)
 
-    with trans(filedata["path"], filedata["url"], Type(filedata["type"])) as transfer:
-        if ttype == "inputs":
-            return transfer.download()
-        if ttype == "outputs":
-            return transfer.upload()
+    try:
+        with trans(
+            filedata["path"], filedata["url"], Type(filedata["type"])
+        ) as transfer:
+            if ttype == "inputs":
+                return transfer.download()
+            if ttype == "outputs":
+                return transfer.upload()
+    except InvalidURL as err:
+        logging.error("%s: %s", err, url_for_log(filedata["url"]))
+        return 1
 
     logging.info("There was no action to do with %s", filedata["path"])
     return 0

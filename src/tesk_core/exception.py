@@ -9,5 +9,9 @@ class FileProtocolDisabled(Exception):
     """`file:` URLs are used, but no shared volume is configured."""
 
 
+class InvalidURL(Exception):
+    """A URL has no valid host or port."""
+
+
 class InvalidHostPath(Exception):
     """A path is not below the base path of the shared volume."""

@@ -27,6 +27,18 @@ upgrade:
 Deployments without these credentials, or with a `.netrc` file, need no
 change.
 
+### FTP URLs with a port
+
+The filer now connects to FTP URLs with a port (e.g.
+`ftp://ftp.example.org:2121/data`); before, these failed. Credentials go to
+such a URL (with a port other than 21) only from an entry with that port:
+`machine ftp.example.org:2121` in `.netrc`, or `ftp.example.org:2121` in
+`TESK_FTP_HOSTS`. A `.netrc` entry without a port (`machine
+ftp.example.org`), as in existing files, and an entry of `TESK_FTP_HOSTS`
+without a port are used for port 21 only; the `default` entry of `.netrc` is
+used for every host and port. URLs without a port work as before. If your
+tasks use FTP URLs with other ports, add entries with those ports.
+
 ### `.netrc` and the env credentials together
 
 With a `.netrc` file, the filer used to ignore `TESK_FTP_USERNAME` and
