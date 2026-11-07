@@ -34,8 +34,11 @@ def run_executor(
 ) -> None:
     """Run an executor job to completion.
 
-    Exits (`exit_cancelled`) if the job doesn't complete; a job with the
-    status `Error` is deleted first.
+    Exits (`exit_cancelled`) if the job doesn't complete. A job that failed
+    is kept, so that the TESK API reports the executor's state
+    (`EXECUTOR_ERROR`) and logs. Executor jobs aren't retried
+    (`backoffLimit: 0`), unless the job or `EXECUTOR_BACKOFF_LIMIT` sets a
+    limit; that limit also covers pods that are evicted.
 
     Args:
         executor: The manifest of the executor job.
@@ -46,10 +49,14 @@ def run_executor(
     jobname = executor["metadata"]["name"]
     spec = executor["spec"]["template"]["spec"]
 
+    # A failed executor isn't retried, unless configured: a retry could hide
+    # the failure and its logs
     if os.environ.get("EXECUTOR_BACKOFF_LIMIT") is not None:
         executor["spec"].update(
             {"backoffLimit": int(os.environ["EXECUTOR_BACKOFF_LIMIT"])}
         )
+    if executor["spec"].get("backoffLimit") is None:
+        executor["spec"]["backoffLimit"] = 0
 
     if "restartPolicy" not in spec and "restart_policy" in spec:
         spec["restartPolicy"] = spec["restart_policy"]
@@ -88,8 +95,6 @@ def run_executor(
 
     status = job.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
     if status != "Complete":
-        if status == "Error":
-            job.delete()
         exit_cancelled("Got status " + status)
 
 
@@ -312,7 +317,11 @@ def newParser() -> argparse.ArgumentParser:
 
     parser.add_argument("-p", "--poll-interval", help="Job polling interval", default=5)
     parser.add_argument(
-        "-pt", "--pod-timeout", type=int, help="Pod creation timeout", default=240
+        "-pt",
+        "--pod-timeout",
+        type=int,
+        help="Seconds after which a pod that can't pull its image fails its job",
+        default=240,
     )
     parser.add_argument(
         "-fn",
