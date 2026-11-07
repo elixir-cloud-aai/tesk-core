@@ -12,6 +12,14 @@ The filer uploads a directory over a single FTP connection; before, it
 connected and logged in again for each file and subdirectory, which FTP
 servers that limit connections or logins could refuse. Nothing to change.
 
+### Filers run only when they have something to stage
+
+The taskmaster runs the inputs filer (`<task>-inputs-filer`) only for tasks
+with inputs, and the outputs filer (`<task>-outputs-filer`) only for tasks
+with outputs; before, both ran for every task with inputs, outputs or
+volumes. Tasks have fewer jobs and pods, and start and end sooner. Nothing
+to change, unless your own tools expect both filer jobs of a task.
+
 ### PVCs of failed and cancelled tasks are deleted
 
 The taskmaster used to delete a task's PVC only after the outputs were

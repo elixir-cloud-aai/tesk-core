@@ -6,8 +6,8 @@ Kubernetes:
 
 - The [taskmaster](taskmaster.md) runs one task: for each task that the TESK
   API accepts, it runs as a Kubernetes job of its own, creates the task's
-  volume, has the filer stage the inputs, runs the executors one after
-  another, has the filer stage the outputs, and cleans up.
+  volume, has the filer stage the inputs (if any), runs the executors one
+  after another, has the filer stage the outputs (if any), and cleans up.
 - The [filer](filer.md) stages a task's files: it downloads the inputs onto
   the task's volume before the executors run, and uploads the outputs after
   them, over HTTP(S), FTP, S3, or a shared volume (`file:`).
