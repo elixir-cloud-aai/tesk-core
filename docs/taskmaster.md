@@ -33,10 +33,11 @@ The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
 storage only once no pod refers to it: until the task's jobs, and so their
 pods, are deleted, the PVC stays `Terminating`, as after a task that
-completed. Neither the taskmaster nor the TESK API deletes the jobs (see
-elixir-cloud-aai/TESK#123). To keep the PVCs of tasks that don't complete,
-e.g. to inspect their files, set `KEEP_FAILED_PVC` to `true`; then delete
-them yourself. Tasks that complete delete their PVC either way.
+completed. The jobs stay until they are deleted, by hand or after a TTL
+(see [Deleting finished tasks](#deleting-finished-tasks)). To keep the PVCs
+of tasks that don't complete, e.g. to inspect their files, set
+`KEEP_FAILED_PVC` to `true`; then delete them yourself. Tasks that
+complete delete their PVC either way.
 
 An error deleting the PVC is logged, also a request that times out (after
 5 seconds to connect or 30 seconds to answer, per attempt of the Kubernetes
@@ -142,6 +143,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
 | `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests (not FTP or S3), in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
+| `TASK_TTL_SECONDS` | Seconds after which Kubernetes deletes the taskmaster's finished job, and with it the task's jobs (`ttlSecondsAfterFinished`; see [Deleting finished tasks](#deleting-finished-tasks)), from 0 to 2147483647; unset or empty keeps them. Other values log an error and set no TTL. |
 | `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
 | `TESK_FTP_HOSTS` | Hosts that the filer sends the FTP credentials to, passed on to the filer with them (see [Filer](filer.md#ftp)). |
@@ -150,3 +152,43 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 
 The taskmaster also mounts the secret `aws-secret` into the filer, if it
 exists, for S3 (see [Filer](filer.md#s3)).
+
+## Deleting finished tasks
+
+The filer and executor jobs that the taskmaster creates are owned by the
+taskmaster's job (`ownerReferences`): when that job is deleted, Kubernetes
+deletes them and their pods too. The taskmaster takes the job's name and
+UID from its pod's labels (`batch.kubernetes.io/job-name` and
+`batch.kubernetes.io/controller-uid`, or `job-name` and `controller-uid`
+before Kubernetes 1.27); without them (e.g. outside a pod), the jobs get no
+owner. The references don't block the owner's deletion
+(`blockOwnerDeletion` isn't set), so they need no permission beyond
+creating jobs. To delete a task by hand, delete its taskmaster's job with
+`kubectl delete job <task>`, or through the API with the propagation
+policy `Background` or `Foreground`: a `batch/v1` job deleted through the
+API without a policy leaves the jobs it owns behind.
+
+By default, nothing deletes the jobs. With `TASK_TTL_SECONDS` set to a
+whole number of seconds, the taskmaster sets `ttlSecondsAfterFinished` on
+its own job when it starts, also for a task that is cancelled before it
+runs. Kubernetes then deletes the job that many seconds after it finished
+(completed or failed), and with it the task's jobs and pods. This needs
+`patch` on `jobs`; an error is logged, and the task runs without a TTL.
+
+Some objects of a task aren't owned by its job, and stay:
+
+- the ConfigMap with the task's JSON that the TESK API creates for the
+  taskmaster (named after the task);
+- a PVC that `KEEP_FAILED_PVC` keeps;
+- the PVC of a task whose taskmaster failed unexpectedly (see
+  [What it does](#what-it-does)).
+
+TESK keeps no database: the TESK API reads tasks from their jobs. A task
+whose jobs are deleted is gone: it no longer shows in `ListTasks`, and
+`GetTask` doesn't find it. Pick a TTL long enough for the clients of the
+TESK API (e.g. workflow engines) to read the final state and logs of their
+tasks: hours rather than seconds. With `0`, a task disappears as soon as it
+finishes. While Kubernetes deletes a task's jobs, which can take a moment,
+the TESK API can report a task that completed as `SYSTEM_ERROR`, once some
+of its executor jobs are gone; a long TTL makes it unlikely that clients
+still read the task then.

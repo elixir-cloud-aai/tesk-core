@@ -6,6 +6,25 @@ to the filer.
 
 ## Unreleased
 
+### Finished tasks can be deleted after a TTL
+
+The taskmaster's job now owns the task's filer and executor jobs
+(`ownerReferences`), so deleting it deletes them and their pods too. The
+new setting `TASK_TTL_SECONDS` lets Kubernetes delete the taskmaster's job
+that many seconds after it finished (see
+[Taskmaster](taskmaster.md#deleting-finished-tasks)). It is unset by
+default: nothing is deleted, as before. Deleted tasks disappear from the
+TESK API (`ListTasks`, `GetTask`), as TESK keeps no database.
+
+The taskmaster takes its job's name and UID from its pod's labels, and sets
+the TTL with `patch` on `jobs`, which the role of TESK's Helm chart already
+grants (`charts/tesk/templates/common/taskmaster-rbac.yaml`); deployments
+with their own role must grant it too. Without it, the taskmaster logs an
+error and runs the task without a TTL. Jobs of tasks that started before
+the upgrade have no owner, and stay. The task's ConfigMap, and PVCs that
+are kept, aren't deleted with the jobs; pick a TTL of hours rather than
+seconds (see the linked section).
+
 ### One FTP connection per uploaded directory
 
 The filer uploads a directory over a single FTP connection; before, it
