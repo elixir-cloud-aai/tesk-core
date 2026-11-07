@@ -478,6 +478,16 @@ def main() -> None:
     logger = newLogger(loglevel)
     logger.debug("Starting taskmaster")
 
+    # Load kubernetes config file
+    if args.localKubeConfig:
+        config.load_kube_config()
+    else:
+        config.load_incluster_config()
+
+    # Before the task is read, so that a taskmaster that fails on it gets its
+    # TTL too, and before any job is created, also for a task cancelled now
+    init_own_job()
+
     # Get input JSON
     if args.file is None:
         data = json.loads(args.json)
@@ -490,16 +500,6 @@ def main() -> None:
     else:
         with open(args.file) as fh:
             data = json.load(fh)
-
-    # Load kubernetes config file
-    if args.localKubeConfig:
-        config.load_kube_config()
-    else:
-        config.load_incluster_config()
-
-    # Before any job is created, and also for a task cancelled now, so that
-    # its job gets its TTL
-    init_own_job()
 
     # Known before the claim is created, so that a task cancelled now also
     # deletes the claim that an earlier attempt of this pod left behind
@@ -727,7 +727,12 @@ def task_ttl_seconds() -> int | None:
     value = raw.strip()
     if not value:
         return None
-    if value.isascii() and value.isdigit() and int(value) <= max_task_ttl:
+    if (
+        value.isascii()
+        and value.isdigit()
+        and len(value) <= len(str(max_task_ttl))
+        and int(value) <= max_task_ttl
+    ):
         return int(value)
     logger.error(
         "Ignoring %s=%r: not a whole number of seconds from 0 to %d; no TTL",
@@ -777,8 +782,9 @@ def init_own_job() -> None:
 def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Job:
     """Describe a job of the task, owned by the taskmaster's job.
 
-    Adds the owner references of `init_own_job` to those of the manifest,
-    if it doesn't have them yet (the filer's manifest is reused).
+    Sets the owner references of `init_own_job` as the manifest's only
+    ones, so that no other owner keeps the job when the taskmaster's job is
+    deleted (the TESK API sets none).
 
     Args:
         body: The manifest of the job, changed in place.
@@ -789,11 +795,7 @@ def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Jo
         The job, not created yet.
     """
     if owner_references:
-        refs = body["metadata"]["ownerReferences"] = (
-            body["metadata"].get("ownerReferences") or []
-        )
-        uids = {ref.get("uid") for ref in refs}
-        refs.extend(ref for ref in owner_references if ref["uid"] not in uids)
+        body["metadata"]["ownerReferences"] = list(owner_references)
     return Job(body, name, args.namespace if namespace is None else namespace)
 
 

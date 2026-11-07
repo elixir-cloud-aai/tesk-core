@@ -100,7 +100,11 @@ def test_task_ttl_seconds_unset(
     assert not caplog.records
 
 
-@pytest.mark.parametrize("value", ["-1", "abc", "1.5", "1e3", "2147483648", "٣"])
+@pytest.mark.parametrize(
+    "value",
+    # The last has more digits than `int` converts by default
+    ["-1", "abc", "1.5", "1e3", "2147483648", "٣", "00000000001", "9" * 5000],
+)
 def test_task_ttl_seconds_invalid(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -231,7 +235,7 @@ def test_init_own_job_patch_error(
 
 
 def test_new_job_owner_references(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that new jobs get the owner references, after any they have.
+    """Test that new jobs get the owner references, as their only ones.
 
     Args:
         monkeypatch: The fixture that restores the module state afterwards.
@@ -242,10 +246,10 @@ def test_new_job_owner_references(monkeypatch: pytest.MonkeyPatch) -> None:
     job = new_job({"metadata": {"ownerReferences": [other]}}, "task-1234-ex-00")
     bare = new_job({"metadata": {}}, "task-1234-ex-01")
 
-    assert job.body["metadata"]["ownerReferences"] == [other, OWNER]
+    assert job.body["metadata"]["ownerReferences"] == [OWNER]
     # A manifest that is reused (as the filer's) gets the owner once
     again = new_job(job.body, "task-1234-ex-00")
-    assert again.body["metadata"]["ownerReferences"] == [other, OWNER]
+    assert again.body["metadata"]["ownerReferences"] == [OWNER]
     assert bare.body["metadata"]["ownerReferences"] == [OWNER]
     assert job.namespace == "tesk"
     assert job.name == "task-1234-ex-00"
@@ -329,3 +333,29 @@ def test_main_sets_ttl_before_cancel_check(
     mock_api.return_value.patch_namespaced_job.assert_called_once()
     assert taskmaster.owner_references == [OWNER]
     mock_run_task.assert_not_called()
+
+
+@patch("tesk_core.taskmaster.config.load_incluster_config")
+@patch("tesk_core.taskmaster.client.BatchV1Api")
+def test_main_sets_ttl_before_reading_task(
+    mock_api: MagicMock,
+    mock_config: MagicMock,
+    labels_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a taskmaster that fails on its task still sets its TTL.
+
+    Args:
+        mock_api: The mocked batch API.
+        mock_config: The mocked loading of the Kubernetes configuration.
+        labels_file: The pod labels file.
+        monkeypatch: The fixture that sets the environment.
+    """
+    labels_file.write_text(POD_LABELS)
+    monkeypatch.setenv(taskmaster.task_ttl_env, "60")
+    monkeypatch.setattr("sys.argv", ["taskmaster", "-n", "tesk", "not JSON"])
+
+    with pytest.raises(json.JSONDecodeError):
+        taskmaster.main()
+
+    mock_api.return_value.patch_namespaced_job.assert_called_once()
