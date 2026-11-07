@@ -12,7 +12,7 @@ from kubernetes.client.rest import ApiException
 import pytest
 
 from tesk_core import taskmaster
-from tesk_core.job import FAIL_DEADLINE, Job
+from tesk_core.job import FAIL_DEADLINE, Job, cannot_start
 
 START_TIME = datetime.datetime.now(timezone.utc)
 RESOURCES = Path(__file__).parent / "resources"
@@ -150,6 +150,7 @@ def list_namespaced_pod_error_ImagePullBackOff(diff_time: int = 10) -> MockObjec
         The list with the pending pod.
     """
     return_value = {
+        "metadata": {"name": "task-1000-ex-00-pod"},
         "status": {
             "conditions": [],
             "container_statuses": [
@@ -189,7 +190,7 @@ def list_namespaced_pod_error_ImagePullBackOff(diff_time: int = 10) -> MockObjec
             "qos_class": "BestEffort",
             "reason": None,
             "start_time": START_TIME - datetime.timedelta(minutes=diff_time),
-        }
+        },
     }
     return MockObject({"items": [MockObject(return_value)]})
 
@@ -204,6 +205,7 @@ def list_namespaced_pod_pending_unknown_error(diff_time: int = 5) -> MockObject:
         The list with the pending pod.
     """
     return_value = {
+        "metadata": {"name": "task-1000-ex-00-pod"},
         "status": {
             "conditions": [],
             "container_statuses": [
@@ -240,7 +242,7 @@ def list_namespaced_pod_pending_unknown_error(diff_time: int = 5) -> MockObject:
             "qos_class": "BestEffort",
             "reason": None,
             "start_time": START_TIME - datetime.timedelta(minutes=diff_time),
-        }
+        },
     }
     return MockObject({"items": [MockObject(return_value)]})
 
@@ -661,10 +663,13 @@ def test_get_status_pod_timeout_patch_error(
     mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
     job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
     job.timeout = 50
-    status, _ = job.get_status(False)
+    status, all_running = job.get_status(False)
     assert status == expected
     assert job.failing_since is None
     assert mock_delete_namespaced_job.called == deleted
+    if expected == "Running":
+        job.get_status(all_running)
+        assert mock_patch_namespaced_job.call_count == 2
 
 
 @patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
@@ -738,3 +743,273 @@ def test_delete(mock_delete_namespaced_job: MagicMock, data: dict[str, Any]) -> 
     args, kwargs = mock_delete_namespaced_job.call_args
     assert args == ("task-ex-00", taskmaster.args.namespace)
     assert kwargs["body"].propagation_policy == "Background"
+
+
+def pending_pod(
+    reason: str | None,
+    minutes: int = 10,
+    started: bool = True,
+    init: bool = False,
+    phase: str = "Pending",
+    created: bool = True,
+) -> MockObject:
+    """Mock listing a pending pod whose container waits.
+
+    Args:
+        reason: Why the container waits; `None` for a pod without container
+            statuses (e.g., one that isn't scheduled yet).
+        minutes: The minutes since the pod was created (and started).
+        started: Whether the pod has a start time.
+        init: Whether the waiting container is an init container.
+        phase: The phase of the pod.
+        created: Whether the pod has a creation time.
+
+    Returns:
+        The list with the pending pod.
+    """
+    since = START_TIME - datetime.timedelta(minutes=minutes)
+    statuses = (
+        None
+        if reason is None
+        else [MockObject({"state": {"waiting": {"reason": reason, "message": "mock"}}})]
+    )
+    status = {
+        "phase": phase,
+        "start_time": since if started else None,
+        "container_statuses": None if init else statuses,
+        "init_container_statuses": statuses if init else None,
+    }
+    pod = MockObject(
+        {
+            "metadata": {
+                "name": "pod",
+                "creation_timestamp": since if created else None,
+            },
+            "status": status,
+        }
+    )
+    return MockObject({"items": [pod]})
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "ErrImagePull",
+        "ImagePullBackOff",
+        "InvalidImageName",
+        "CreateContainerConfigError",
+    ],
+)
+@pytest.mark.parametrize("started", [True, False])
+@pytest.mark.parametrize("init", [False, True])
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_pod_cannot_start(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+    reason: str,
+    started: bool,
+    init: bool,
+) -> None:
+    """Test that pods that can't start fail their job after the timeout.
+
+    Whether or not they have a start time, and for init containers too.
+    """
+    mock_list_namespaced_pod.return_value = pending_pod(reason, 10, started, init)
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    assert job.get_status(False) == ("Running", False)
+    mock_patch_namespaced_job.assert_called_once_with(
+        "task-ex-00",
+        taskmaster.args.namespace,
+        {"spec": {"activeDeadlineSeconds": 1}},
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "minutes"),
+    [
+        (None, 10),  # Not scheduled yet: queued
+        ("ContainerCreating", 10),  # E.g., pulling a large image
+        ("ErrImagePull", 0),  # Within the timeout
+    ],
+)
+@pytest.mark.parametrize("started", [True, False])
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_pod_pending(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+    reason: str | None,
+    minutes: int,
+    started: bool,
+) -> None:
+    """Test that pods that may still start keep the job running."""
+    mock_list_namespaced_pod.return_value = pending_pod(reason, minutes, started)
+    executor = data["executors"][0]
+    job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
+    job.timeout = 50
+    assert job.get_status(False) == ("Running", False)
+    mock_patch_namespaced_job.assert_not_called()
+
+
+def test_cannot_start_without_state() -> None:
+    """Test that containers without a state are not taken as unable to start."""
+    pod = MockObject(
+        {
+            "status": {
+                "init_container_statuses": None,
+                "container_statuses": [MockObject({"state": None})],
+            }
+        }
+    )
+    assert cannot_start(pod) is None
+
+
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_pods_running(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that the pods are no longer checked once none is pending."""
+    mock_list_namespaced_pod.return_value = pending_pod("ErrImagePull", phase="Running")
+    executor = data["executors"][0]
+    job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
+    job.timeout = 50
+    assert job.get_status(False) == ("Running", True)
+
+
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_pod_without_times(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a pending pod without start and creation time keeps waiting."""
+    mock_list_namespaced_pod.return_value = pending_pod(
+        "ErrImagePull", started=False, created=False
+    )
+    executor = data["executors"][0]
+    job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
+    job.timeout = 50
+    assert job.get_status(False) == ("Running", False)
+    mock_patch_namespaced_job.assert_not_called()
+
+
+@pytest.mark.parametrize("reason", ["ErrImagePull", "ImagePullBackOff"])
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_unscheduled_then_cannot_start(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+    reason: str,
+) -> None:
+    """Test that a pod is checked again after it was waiting to be scheduled.
+
+    Not at the next poll, but after `pod_check_interval`.
+    """
+    mock_list_namespaced_pod.side_effect = [
+        pending_pod(None, started=False),
+        pending_pod(reason),
+    ]
+    executor = data["executors"][0]
+    job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
+    job.timeout = 50
+    status, all_running = job.get_status(False)
+    assert (status, all_running) == ("Running", False)
+    assert job.get_status(all_running) == ("Running", False)
+    assert mock_list_namespaced_pod.call_count == 1
+    mock_patch_namespaced_job.assert_not_called()
+    job.next_pod_check = datetime.datetime.now(timezone.utc)
+    job.get_status(all_running)
+    assert mock_list_namespaced_pod.call_count == 2
+    mock_patch_namespaced_job.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("init_reason", "reason", "expected"),
+    [
+        ("PodInitializing", "ErrImagePull", "ErrImagePull"),
+        ("ImagePullBackOff", "PodInitializing", "ImagePullBackOff"),
+        ("PodInitializing", "ContainerCreating", None),
+    ],
+)
+def test_cannot_start_init_and_main_containers(
+    init_reason: str, reason: str, expected: str | None
+) -> None:
+    """Test that init and main containers are both checked, init ones first."""
+
+    def status(waiting_reason: str) -> MockObject:
+        return MockObject({"state": {"waiting": {"reason": waiting_reason}}})
+
+    pod = MockObject(
+        {
+            "status": {
+                "init_container_statuses": [status("Completed"), status(init_reason)],
+                "container_statuses": [status(reason)],
+            }
+        }
+    )
+    waiting = cannot_start(pod)
+    assert (waiting.reason if waiting is not None else None) == expected
+
+
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_replacement_pod_cannot_start(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that pods are checked again once a pod of the job failed.
+
+    A retry or a replacement of an evicted pod can't start either.
+    """
+    running = job_with_conditions(None)
+    retried = job_with_conditions(None)
+    retried.__dict__["status"].__dict__["failed"] = 1
+    mock_read_namespaced_job.side_effect = [running, running, retried]
+    mock_list_namespaced_pod.side_effect = [
+        pending_pod("ErrImagePull", phase="Running"),
+        pending_pod("ErrImagePull"),
+    ]
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    status, all_running = job.get_status(False)
+    assert (status, all_running) == ("Running", True)
+    assert job.get_status(all_running) == ("Running", True)
+    assert mock_list_namespaced_pod.call_count == 1
+    job.get_status(all_running)
+    assert mock_list_namespaced_pod.call_count == 2
+    mock_patch_namespaced_job.assert_called_once()

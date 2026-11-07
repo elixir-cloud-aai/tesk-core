@@ -31,8 +31,20 @@ A job counts as failed when Kubernetes sets its condition `Failed`, or
 complete with `Complete` or `SuccessCriteriaMet`. Other conditions, e.g.
 `Suspended`, leave the job running.
 
-If a pod of a job can't pull its image (`ImagePullBackOff`) for longer than
-`--pod-timeout`, the taskmaster fails the job: it sets the job's
+A pending pod whose containers can't start fails its job after
+`--pod-timeout` seconds. That covers an image that can't be pulled
+(`ErrImagePull`, `ImagePullBackOff`, `InvalidImageName`) and a broken
+container configuration (`CreateContainerConfigError`, e.g. a missing secret
+or ConfigMap), for init containers too. The timeout is measured from the
+pod's start, or from its creation if it hasn't started. The taskmaster checks
+the pods only once the job has been active for longer than `--pod-timeout`,
+then at most once a minute, and stops checking once none of them is pending.
+When a pod of the job fails, it checks again, so that a retry or the
+replacement of an evicted pod that can't start times out too. A
+pull error that comes after the pod has waited longer than `--pod-timeout`,
+e.g. after a long pull of a large image, fails the job at the next check.
+
+To fail the job, the taskmaster sets its
 `activeDeadlineSeconds` to 1 second, so that Kubernetes deletes the job's
 active pods and marks the job `Failed` with the reason `DeadlineExceeded`
 (the pod's events show why it couldn't start). The taskmaster then handles it
@@ -41,7 +53,9 @@ Kubernetes hasn't marked the job within another `--pod-timeout`, the
 taskmaster stops anyway and keeps the job. If the Kubernetes API rejects the
 change (e.g., the taskmaster's role lacks `patch` on jobs), the taskmaster
 deletes the job, as earlier releases did, and stops; after other errors, it
-tries again at the next poll. Pods that stay pending for other reasons don't time out.
+tries again at the next poll. Pods that are pending for other reasons, e.g.
+waiting to be scheduled or pulling a large image, are queued and keep
+waiting.
 
 Executor jobs aren't retried (`backoffLimit: 0`) unless
 `EXECUTOR_BACKOFF_LIMIT` (or the job) sets a limit, so that the state and logs
@@ -70,7 +84,7 @@ development and debugging.
 | `-fn`, `--filer-name` | `eu.gcr.io/tes-wes/filer` | Image of the filer, without its tag. |
 | `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
 | `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
-| `-pt`, `--pod-timeout` | `240` | Seconds after which a pod that can't pull its image fails its job (see above). |
+| `-pt`, `--pod-timeout` | `240` | Seconds after which a pending pod that can't start fails its job (see above). |
 | `-d`, `--debug` | off | Debug logging, also of the filer. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
