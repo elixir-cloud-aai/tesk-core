@@ -48,7 +48,7 @@ def test_ftp_upload_dir(mocker: MockerFixture, tmp_path: Path, ftpserver: Any) -
     mocker.patch("ftplib.FTP.pwd", side_effect=conn.pwd)
     mocker.patch("ftplib.FTP.cwd", side_effect=conn.cwd)
     mocker.patch("ftplib.FTP.mkd", side_effect=conn.mkd)
-    mock_storbinary = mocker.patch("ftplib.FTP.storbinary")
+    mock_storbinary = mocker.patch("ftplib.FTP.storbinary", side_effect=conn.storbinary)
 
     ftp_obj = FTPTransput(
         str(tmp_path / "dir1"),
@@ -69,6 +69,10 @@ def test_ftp_upload_dir(mocker: MockerFixture, tmp_path: Path, ftpserver: Any) -
             mock.call("STOR /" + "/dir1/dir2/file4.txt", mock.ANY),
         ]
     )
+    home = Path(ftpserver.server_home)
+    assert (home / "dir1" / "file1").read_text() == "this is random"
+    assert (home / "dir1" / "dir2" / "file2").read_text() == "not really"
+    assert (home / "dir1" / "dir2" / "file4.txt").read_text() == "took me a while"
 
 
 def test_ftp_download_dir(
@@ -110,7 +114,7 @@ def test_ftp_download_dir(
 
     ftp_obj = FTPTransput(
         str(tmp_path / "downloads"),
-        "ftp://" + login_dict["host"],
+        "ftp://" + login_dict["host"] + "/remote1",
         Type.Directory,
         ftp_conn=conn,
     )
@@ -128,9 +132,10 @@ def test_ftp_download_dir(
         ]
     )
 
-    assert (tmp_path / "downloads/remote1/file1").exists()
-    assert (tmp_path / "downloads/remote1/remote2/file2").exists()
-    assert (tmp_path / "downloads/remote1/remote2/file3").exists()
+    downloads = tmp_path / "downloads"
+    assert (downloads / "file1").read_text() == "this is random"
+    assert (downloads / "remote2/file2").read_text() == "not really"
+    assert (downloads / "remote2/file3").read_text() == "took me a while"
 
 
 def test_ftp_make_dirs_error(

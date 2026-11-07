@@ -3,7 +3,6 @@
 import os
 from pathlib import Path
 from typing import IO
-from unittest import mock
 
 from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
@@ -24,18 +23,16 @@ resp = Response()
 resp._content = b'{ "foo" : "bar" }'
 
 
-def test_download_file(mocker: MockerFixture) -> None:
+def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
     """Test that a file gets properly downloaded."""
     resp.status_code = SUCCESS
-    http_obj = HTTPTransput(PATH_DOWN, URL, FTYPE)
-    mocker.patch("requests.get", return_value=resp)
+    path = tmp_path / PATH_DOWN
+    http_obj = HTTPTransput(str(path), URL, FTYPE)
+    mock_get = mocker.patch("requests.get", return_value=resp)
 
-    with mock.patch(
-        "builtins.open", mock.mock_open(read_data=resp._content), create=False
-    ):
-        assert http_obj.download_file() == 0
-        with open(PATH_DOWN, "rb") as fh:
-            assert fh.read() == resp._content
+    assert http_obj.download_file() == 0
+    mock_get.assert_called_once_with(URL)
+    assert path.read_bytes() == resp._content
 
 
 def test_download_file_error(
@@ -54,9 +51,16 @@ def test_upload_file(mocker: MockerFixture) -> None:
     """Test that a file gets properly uploaded."""
     resp.status_code = SUCCESS
     http_obj = HTTPTransput(PATH_UP, URL, FTYPE)
-    mocker.patch("requests.put", return_value=resp)
+    uploads: dict[str, bytes] = {}
+
+    def mock_put(url: str, data: bytes | IO[bytes]) -> Response:
+        uploads[url] = data if isinstance(data, bytes) else data.read()
+        return resp
+
+    mocker.patch("requests.put", side_effect=mock_put)
 
     assert http_obj.upload_file() == 0
+    assert uploads == {URL: Path(PATH_UP).read_bytes()}
 
 
 def test_upload_file_error(

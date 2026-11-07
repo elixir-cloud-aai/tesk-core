@@ -129,6 +129,7 @@ def test_pvc_creation(
 ) -> None:
     """Test that the PVC volume is created successfully."""
     assert isinstance(init_pvc(data, filer), PVC)
+    mock_pvc_create.assert_called_once_with()
 
 
 @patch("kubernetes.client.CoreV1Api.read_namespaced_persistent_volume_claim")
@@ -207,8 +208,10 @@ def test_run_executor_complete(
 
 @patch("tesk_core.taskmaster.logger")
 def test_generate_mount(mock_logger: MagicMock, data: dict[str, Any], pvc: PVC) -> None:
-    """Test that the volume mounts are generated as a list."""
-    assert isinstance(generate_mounts(data, pvc), list)
+    """Test that the task's volumes are mounted from the claim."""
+    assert generate_mounts(data, pvc) == [
+        {"name": "task-volume", "mountPath": "/some/volume", "subPath": "dir0"}
+    ]
 
 
 @patch("tesk_core.taskmaster.logger")
