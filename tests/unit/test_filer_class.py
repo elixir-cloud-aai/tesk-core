@@ -141,11 +141,10 @@ def test_set_ftp_passes_hosts() -> None:
     f = Filer("name", {"a": 1})
     f.set_ftp("user", "pass")
 
-    assert f.getEnv()[-3:] == [
-        {"name": "TESK_FTP_USERNAME", "value": "user"},
-        {"name": "TESK_FTP_PASSWORD", "value": "pass"},
-        {"name": "TESK_FTP_HOSTS", "value": "ftp.example.org,[::1]:2121"},
-    ]
+    variables = {var["name"]: var["value"] for var in f.getEnv()}
+    assert variables["TESK_FTP_USERNAME"] == "user"
+    assert variables["TESK_FTP_PASSWORD"] == "pass"  # noqa: S105
+    assert variables["TESK_FTP_HOSTS"] == "ftp.example.org,[::1]:2121"
 
 
 @patch.dict(os.environ, clear=True)

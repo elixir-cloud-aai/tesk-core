@@ -493,8 +493,8 @@ def split_host_port(netloc: str) -> tuple[str, int | None] | None:
         port, or `None` if there is none; `None` if the network location
         has no host or an invalid port.
     """
-    parts = urlsplit("//" + netloc)
     try:
+        parts = urlsplit("//" + netloc)
         port = parts.port
     except ValueError:
         return None
@@ -525,7 +525,7 @@ def ftp_host_allowed(netloc: str, hosts: str) -> bool:
     host, port = target
     for raw_entry in hosts.split(","):
         entry = raw_entry.strip()
-        if not entry or set(entry) & set("@/?#"):
+        if not ftp_host_entry_valid(entry):
             continue
         allowed = split_host_port(entry)
         if allowed is None or allowed[0] != host:
@@ -533,6 +533,39 @@ def ftp_host_allowed(netloc: str, hosts: str) -> bool:
         if allowed[1] is None or allowed[1] == (port or ftplib.FTP_PORT):
             return True
     return False
+
+
+def ftp_host_entry_valid(entry: str) -> bool:
+    """Check whether an entry of `TESK_FTP_HOSTS` is `host` or `host:port`.
+
+    Args:
+        entry: The entry, without surrounding spaces.
+
+    Returns:
+        Whether the entry is valid; invalid entries match nothing.
+    """
+    # No user information, path, query or fragment, which `urlsplit` would
+    # split off
+    if not entry or any(char in entry for char in "@/?#"):
+        return False
+    return split_host_port(entry) is not None
+
+
+@functools.cache
+def log_invalid_ftp_hosts(count: int) -> None:
+    """Log, once per process, that entries of `TESK_FTP_HOSTS` are invalid.
+
+    The entries aren't logged, in case one contains credentials.
+
+    Args:
+        count: The number of invalid entries.
+    """
+    logging.error(
+        "%s has %d invalid entries, which match no host: use host or "
+        "host:port, separated by commas.",
+        FTP_HOSTS_ENV,
+        count,
+    )
 
 
 @functools.cache
@@ -569,11 +602,14 @@ def ftp_env_credentials(netloc: str) -> tuple[str, str] | None:
     if not hosts.strip():
         log_missing_ftp_hosts()
         return None
+    entries = [entry.strip() for entry in hosts.split(",") if entry.strip()]
+    invalid = sum(not ftp_host_entry_valid(entry) for entry in entries)
+    if invalid:
+        log_invalid_ftp_hosts(invalid)
     if not ftp_host_allowed(netloc, hosts):
-        target = split_host_port(netloc)
         logging.debug(
             "FTP host %s is not in %s; logging in anonymously",
-            target[0] if target else "(invalid)",
+            netloc.rpartition("@")[2],
             FTP_HOSTS_ENV,
         )
         return None

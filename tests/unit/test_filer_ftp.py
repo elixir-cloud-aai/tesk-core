@@ -20,6 +20,7 @@ from tesk_core.filer import (
     ftp_login,
     ftp_make_dirs,
     ftp_upload_file,
+    log_invalid_ftp_hosts,
     log_missing_ftp_hosts,
 )
 
@@ -34,8 +35,10 @@ def _reset_missing_hosts_log() -> Iterator[None]:
         Nothing; resets before and after the test.
     """
     log_missing_ftp_hosts.cache_clear()
+    log_invalid_ftp_hosts.cache_clear()
     yield
     log_missing_ftp_hosts.cache_clear()
+    log_invalid_ftp_hosts.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -80,6 +83,12 @@ def test_ftp_host_allowed(hosts: str, netloc: str) -> None:
         ("", "ftp.example.org"),
         (" , ", "ftp.example.org"),
         ("ftp.example.org", ""),
+        ("[::1", "[::1]"),
+        ("host]", "host"),
+        ("[ftp.example.org]", "ftp.example.org"),
+        ("\uff03x", "x"),
+        ("ftp://ftp.example.org", "ftp.example.org"),
+        ("ftp.example.org", "[::1"),
     ],
 )
 def test_ftp_host_not_allowed(hosts: str, netloc: str) -> None:
@@ -159,6 +168,29 @@ def test_ftp_login_env_credentials_empty_hosts(mocker: MockerFixture) -> None:
     with mock.patch.dict("os.environ", env, clear=True):
         ftp_login(conn, "ftp.example.org", None)
     conn.login.assert_called_once_with()
+
+
+def test_ftp_login_invalid_hosts(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that invalid entries are logged once, without their text.
+
+    Valid entries still match.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp://u:secret@h, [::1, ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+        ftp_login(conn, "ftp.example.org", None)
+    assert conn.login.call_args_list == [mock.call("test", "test_pass")] * 2
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "2 invalid entries" in errors[0].getMessage()
+    assert "secret" not in caplog.text
 
 
 def test_ftp_login_without_credentials(

@@ -271,21 +271,20 @@ def test_ftp_download_dir_keeps_empty_dirs(
     assert (tmp_path / "local" / "dir2" / "file").read_text() == "content"
 
 
-@pytest.mark.parametrize(("hosts", "logged_in"), [("LOCALHOST", True), ("", False)])
-def test_ftp_login_env_credentials(
-    tmp_path: Path, ftpserver: Any, hosts: str, logged_in: bool
-) -> None:
+@pytest.mark.parametrize("hosts", ["LOCALHOST", "localhost:21", ""])
+def test_ftp_login_env_credentials(tmp_path: Path, ftpserver: Any, hosts: str) -> None:
     """Test that the env credentials are sent only to listed hosts.
 
-    The local FTP server has an account and an anonymous user with separate
-    home directories; an upload shows which one the filer logged in as.
+    The local FTP server has an account that may upload, and a read-only
+    anonymous user with another home directory: an upload shows which one
+    the filer logged in as.
 
     Args:
         tmp_path: The temporary directory of the test.
         ftpserver: The local FTP server, from `pytest-localftpserver`, which
             ships no type information.
-        hosts: The value of `TESK_FTP_HOSTS`.
-        logged_in: Whether the filer logs in to the account.
+        hosts: The value of `TESK_FTP_HOSTS`; only the first lists the
+            server's host and port.
     """
     login = ftpserver.get_login_data()
     # The server is shared by the tests of the session
@@ -293,20 +292,24 @@ def test_ftp_login_env_credentials(
     target.unlink(missing_ok=True)
     source = tmp_path / "probe.txt"
     source.write_text("probe")
-    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
-    conn.connect(host="localhost", port=login["port"])
     env = {
         "TESK_FTP_USERNAME": login["user"],
         "TESK_FTP_PASSWORD": login["passwd"],
         "TESK_FTP_HOSTS": hosts,
     }
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
+    conn.connect(host="localhost", port=login["port"])
     try:
         with mock.patch.dict("os.environ", env, clear=True):
             ftp_login(conn, f"localhost:{login['port']}", None)
         with source.open("rb") as file:
-            conn.storbinary("STOR probe.txt", file)
-    except ftplib.error_perm:
-        pass
+            if hosts == "LOCALHOST":
+                conn.storbinary("STOR probe.txt", file)
+            else:
+                with pytest.raises(ftplib.error_perm):
+                    conn.storbinary("STOR probe.txt", file)
     finally:
         conn.close()
-    assert target.exists() is logged_in
+        uploaded = target.exists()
+        target.unlink(missing_ok=True)
+    assert uploaded is (hosts == "LOCALHOST")

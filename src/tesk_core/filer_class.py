@@ -184,8 +184,8 @@ class Filer:
     def set_ftp(self, user: str | None, pw: str | None) -> None:
         """Pass FTP credentials to the filer.
 
-        With them, the hosts they may be sent to, `TESK_FTP_HOSTS`, from the
-        taskmaster's environment, if set.
+        Also passes `TESK_FTP_HOSTS`, the hosts that the filer may send them
+        to, from the taskmaster's environment, if it is set there.
 
         Args:
             user: The FTP user name.

@@ -52,7 +52,8 @@ the URL's host, or anonymously if it has none for that host. Without a
 `.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`
 if both are set and the URL's host is in `TESK_FTP_HOSTS`, and otherwise
 anonymously. If the server refuses the credentials, the filer logs in
-anonymously. TESK's Helm chart sets the three variables (see
+anonymously. TESK's Helm chart sets the credentials from a Kubernetes
+secret (`ftp.classicFtpSecret`) and `TESK_FTP_HOSTS` from `ftp.hosts` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 
@@ -66,7 +67,13 @@ separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
 - An entry without a port matches the host on any port; one with a port
   matches only that port (`ftp.example.org:21` also matches URLs without
   a port).
-- Entries with user information, a path or an invalid port match nothing.
+- Entries with user information, a path or an invalid port match nothing;
+  the filer logs an error, once per run, with their number (not their
+  text).
+
+The filer can't connect to FTP URLs with a port yet
+([#89](https://github.com/elixir-cloud-aai/tesk-core/issues/89)); entries
+with a port are for when it can.
 
 If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
 `TESK_FTP_HOSTS` is not (or is empty), the credentials are sent to no host:
