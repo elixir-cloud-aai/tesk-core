@@ -2,10 +2,10 @@ from io import StringIO
 import logging
 import os
 import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from assertThrows import AssertThrowsMixin
 import fsspec
 
 from tesk_core.exception import FileProtocolDisabled, InvalidHostPath, UnknownProtocol
@@ -23,6 +23,7 @@ from tesk_core.filer import (
 )
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath
+from tests.unit.assertThrows import AssertThrowsMixin
 
 
 def getTree(rootDir):
@@ -153,13 +154,11 @@ class FilerTest(unittest.TestCase, AssertThrowsMixin):
         )
 
     def test_copyDir(self):
-        baseDir = "tests/resources/copyDirTest/"
-        src = os.path.join(baseDir, "src")
+        src = os.path.join(os.path.dirname(__file__), "resources/copyDirTest/src")
+        baseDir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, baseDir)
         dst1 = os.path.join(baseDir, "dst1")
         dst2 = os.path.join(baseDir, "dst2")
-
-        rmDir(dst1)
-        rmDir(dst2)
 
         self.assertTrue(os.path.exists(src))  # src should exist
         self.assertFalse(os.path.exists(dst1))  # dst1 shouldn't

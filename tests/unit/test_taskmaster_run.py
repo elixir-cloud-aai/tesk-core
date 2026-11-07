@@ -1,6 +1,7 @@
 from argparse import Namespace
 import json
 import logging
+import os
 import unittest
 from unittest.mock import patch
 
@@ -15,7 +16,7 @@ def pvcDeleteMock(self):
     print("[mock] Deleting PVC...")
 
 
-def jobRunToCompletionMock(job, b, c):
+def jobRunToCompletionMock(job, b, c, d):
     print('[mock] Creating job "{}"...'.format(job.name))
     return "Complete"
 
@@ -34,10 +35,12 @@ class ParserTest(unittest.TestCase):
             Namespace(
                 debug=False,
                 file=None,
+                filer_name="eu.gcr.io/tes-wes/filer",
                 filer_version="v0.1.9",
                 json="json",
                 namespace="default",
                 poll_interval=5,
+                pod_timeout=240,
                 state_file="/tmp/.teskstate",
                 localKubeConfig=False,
                 pull_policy_always=False,
@@ -57,10 +60,12 @@ class ParserTest(unittest.TestCase):
             Namespace(
                 debug=False,
                 file=None,
+                filer_name="eu.gcr.io/tes-wes/filer",
                 filer_version="v0.1.9",
                 json="json",
                 namespace="default",
                 poll_interval=5,
+                pod_timeout=240,
                 state_file="/tmp/.teskstate",
                 localKubeConfig=True,
                 pull_policy_always=False,
@@ -78,7 +83,9 @@ class ParserTest(unittest.TestCase):
 
     @patch(
         "tesk_core.taskmaster.args",
-        Namespace(debug=True, namespace="default", pull_policy_always=True),
+        Namespace(
+            debug=True, namespace="default", pull_policy_always=True, pod_timeout=240
+        ),
     )
     @patch("tesk_core.taskmaster.logger", newLogger(logging.DEBUG))
     @patch("tesk_core.taskmaster.PVC.create", pvcCreateMock)
@@ -86,10 +93,12 @@ class ParserTest(unittest.TestCase):
     @patch("tesk_core.taskmaster.Job.run_to_completion", jobRunToCompletionMock)
     def test_run_task(self):
 
-        with open("tests/resources/inputFile.json") as fh:
+        with open(
+            os.path.join(os.path.dirname(__file__), "resources/inputFile.json")
+        ) as fh:
             data = json.load(fh)
 
-        run_task(data, "filer_version")
+        run_task(data, "filer_name", "filer_version")
 
 
 if __name__ == "__main__":

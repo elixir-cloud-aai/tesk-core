@@ -9,6 +9,8 @@ import pytest
 
 from tesk_core.filer_s3 import S3Transput
 
+RESOURCES_SRC = os.path.join(os.path.dirname(__file__), "resources/copyDirTest/src")
+
 
 @pytest.fixture()
 def moto_boto():
@@ -168,7 +170,7 @@ def test_s3_upload_file_content_type(moto_boto, filename, url, expected_content,
 @pytest.mark.parametrize(
     "path, url, ftype,expected",
     [
-        ("tests", "s3://tesk/folder1/folder2", "DIRECTORY", 0),
+        (RESOURCES_SRC, "s3://tesk/folder1/folder2", "DIRECTORY", 0),
         ("/home/user/filer_test_new/", "s3://tesk/folder1/folder2", "DIRECTORY", 1),
     ],
 )
@@ -187,9 +189,9 @@ def test_s3_upload_directory(path, url, ftype, expected, moto_boto, caplog):
         Checking if the file was uploaded, if the object is found load() method will return None
         otherwise an exception will be raised.
         """
-        assert client.Object("tesk", "folder1/folder2/test_filer.py").load() is None
+        assert client.Object("tesk", "folder1/folder2/a/1.txt").load() is None
         head = client.meta.client.head_object(
-            Bucket=trans.bucket, Key="folder1/folder2/test_filer.py"
+            Bucket=trans.bucket, Key="folder1/folder2/a/1.txt"
         )
         assert head["ContentType"].startswith("text/")
 

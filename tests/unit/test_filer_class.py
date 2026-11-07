@@ -34,6 +34,8 @@ class FilerClassTest_env(unittest.TestCase):
                 {"name": "HOST_BASE_PATH", "value": "/home/tfga/workspace/cwl-tes"},
                 {"name": "CONTAINER_BASE_PATH", "value": "/transfer"},
                 {"name": "AWS_CONFIG_FILE", "value": "/aws/config"},
+                {"name": "AWS_REQUEST_CHECKSUM_CALCULATION", "value": "WHEN_REQUIRED"},
+                {"name": "AWS_RESPONSE_CHECKSUM_VALIDATION", "value": "WHEN_REQUIRED"},
                 {"name": "AWS_SHARED_CREDENTIALS_FILE", "value": "/aws/credentials"},
             ],
         )
