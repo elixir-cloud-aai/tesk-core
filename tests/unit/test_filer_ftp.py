@@ -92,6 +92,10 @@ def test_ftp_host_allowed(hosts: str, netloc: str) -> None:
         ("ftp example.org", "ftp example.org"),
         ("h\x00", "h\x00"),
         ("ftp.example.org:0", "ftp.example.org:0"),
+        ("ftp.example.org:", "ftp.example.org:2121"),
+        ("[::1]:", "[::1]:2121"),
+        ("\tftp.example.org", "ftp.example.org"),
+        ("ftp.example.org\n", "ftp.example.org"),
     ],
 )
 def test_ftp_host_not_allowed(hosts: str, netloc: str) -> None:
@@ -163,17 +167,25 @@ def test_ftp_login_env_credentials_without_hosts(
     assert "test_pass" not in caplog.text
 
 
-def test_ftp_login_env_credentials_empty_hosts(mocker: MockerFixture) -> None:
-    """Test that an empty `TESK_FTP_HOSTS` lists no hosts.
+@pytest.mark.parametrize("hosts", ["", " ", ",", " , ,"])
+def test_ftp_login_env_credentials_empty_hosts(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture, hosts: str
+) -> None:
+    """Test that a `TESK_FTP_HOSTS` without entries counts as missing.
 
     Args:
         mocker: The mocker fixture.
+        caplog: The log capture fixture.
+        hosts: The value of `TESK_FTP_HOSTS`.
     """
     conn = mocker.MagicMock()
-    env = {**CREDENTIALS, "TESK_FTP_HOSTS": " "}
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": hosts}
     with mock.patch.dict("os.environ", env, clear=True):
         ftp_login(conn, "ftp.example.org", None)
     conn.login.assert_called_once_with()
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "lists no hosts" in errors[0].getMessage()
 
 
 def test_ftp_login_invalid_hosts(

@@ -67,8 +67,9 @@ separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
 - An entry without a port matches the host on any port; one with a port
   matches only that port (`ftp.example.org:21` also matches URLs without
   a port).
-- Entries with user information, a path, spaces or an invalid port (or
-  port 0) match nothing;
+- Entries with user information, a path, whitespace or control characters
+  inside, or an empty, invalid or zero port (e.g. `ftp.example.org:`)
+  match nothing;
   the filer logs an error, once per run, with their number (not their
   text).
 
@@ -77,7 +78,8 @@ The filer can't connect to FTP URLs with a port yet
 with a port are for when it can.
 
 If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
-`TESK_FTP_HOSTS` is not (or is empty), the credentials are sent to no host:
+`TESK_FTP_HOSTS` is not (or has no entries), the credentials are sent to no
+host:
 the filer logs in anonymously and logs an error, once per run, that says to
 set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain neither
 the credentials nor the user information of URLs.
