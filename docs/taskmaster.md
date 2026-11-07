@@ -78,6 +78,44 @@ tries again at the next poll. Pods that are pending for other reasons, e.g.
 waiting to be scheduled or pulling a large image, are queued and keep
 waiting.
 
+By default, a pod that the scheduler can't place waits forever, e.g. one
+that asks for more CPU or memory than any node has: the task stays
+`QUEUED`. With `TESK_MAX_QUEUE_SECONDS`, such a pod (its condition
+`PodScheduled` is `False` with the reason `Unschedulable`) ends the task
+once it has waited that many seconds since its creation. The taskmaster
+logs an error with the job's name and the scheduler's message, e.g.
+`Pod '...' of job 'task-1234-ex-00' wasn't scheduled within 3600 s: 0/3
+nodes are available: 3 Insufficient cpu.`, and stops. The TESK API then
+reports `SYSTEM_ERROR`:
+
+- An executor's job is deleted, as its executor never ran: the task lacks
+  an executor, which gives `SYSTEM_ERROR` rather than `EXECUTOR_ERROR`. This
+  needs a TESK API release that derives the task state from all jobs of a
+  task ([tesk-api#104](https://github.com/elixir-cloud-aai/tesk-api/issues/104));
+  TESK API 1.1 and earlier report a task whose later executor was deleted
+  as `COMPLETE`, so don't set `TESK_MAX_QUEUE_SECONDS` with them.
+- If a pod of the executor's job ran or failed before (e.g. a retry, with
+  `EXECUTOR_BACKOFF_LIMIT`, whose new pod can't be scheduled), the job is
+  failed and kept instead, with the logs of the pods that ran: the TESK API
+  reports `EXECUTOR_ERROR`.
+- A filer's job is failed and kept, as for pods that can't start; a failed
+  filer gives `SYSTEM_ERROR`.
+
+If the Kubernetes API rejects the deletion, the job is failed and kept
+instead; after other errors, including a request that times out after 30
+seconds, the taskmaster tries again at the next poll, before anything else.
+
+The pods are checked once the job has been active for longer than the
+shorter of the max queue time and `--pod-timeout`, then at most once a
+minute: with `TESK_MAX_QUEUE_SECONDS=600` and `--pod-timeout 240`, from
+240 seconds on. So a task can end up to about a minute later than the max
+queue time.
+
+The max queue time covers the pods of the task's jobs only, not the
+taskmaster's own pod: a task whose taskmaster can't be scheduled waits as
+before. Neither does it cover pods that are never created, e.g. because a
+`ResourceQuota` of the namespace is used up.
+
 Executor jobs aren't retried (`backoffLimit: 0`) unless
 `EXECUTOR_BACKOFF_LIMIT` (or the job) sets a limit, so that the state and logs
 are those of the executor's only run. The limit also covers pods that
@@ -143,6 +181,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
 | `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests (not FTP or S3), in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
+| `TESK_MAX_QUEUE_SECONDS` | Seconds after which a pod that the scheduler can't place ends the task with `SYSTEM_ERROR` (see [What it does](#what-it-does)), from 1 to 2147483647; unset or empty waits forever. Other values log an error and wait forever. |
 | `TASK_TTL_SECONDS` | Seconds after which Kubernetes deletes the taskmaster's finished job, and with it the task's jobs (`ttlSecondsAfterFinished`; see [Deleting finished tasks](#deleting-finished-tasks)), from 0 to 2147483647; unset or empty keeps them. Other values log an error and set no TTL. |
 | `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
