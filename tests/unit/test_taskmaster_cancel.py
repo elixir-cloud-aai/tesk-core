@@ -30,6 +30,7 @@ def labels_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """
     monkeypatch.setattr(taskmaster, "args", Namespace(namespace="tesk"))
     monkeypatch.setattr(taskmaster, "batch_api", None)
+    monkeypatch.setattr(taskmaster, "job_read_error_logged", False)
     path = tmp_path / "labels"
     monkeypatch.setattr(taskmaster, "pod_labels_file", str(path))
     return path
@@ -157,6 +158,29 @@ def test_check_cancelled_connection_error(
         assert not check_cancelled()
 
     assert "Can't read job 'task-1234'" in caplog.text
+
+
+@patch("tesk_core.taskmaster.client.BatchV1Api")
+def test_check_cancelled_error_logged_once(
+    mock_api: MagicMock, labels_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a lasting error is logged at `ERROR` once, then at `DEBUG`.
+
+    Without `--debug`, the taskmaster logs only errors.
+    """
+    labels_file.write_text(POD_LABELS)
+    mock_api.return_value.read_namespaced_job.side_effect = ApiException(
+        status=403, reason="Forbidden"
+    )
+
+    with caplog.at_level(logging.DEBUG, logger=taskmaster.logger.name):
+        check_cancelled()
+        check_cancelled()
+
+    levels = [
+        record.levelno for record in caplog.records if "Can't read" in record.message
+    ]
+    assert levels == [logging.ERROR, logging.DEBUG]
 
 
 @patch("tesk_core.taskmaster.client.BatchV1Api")

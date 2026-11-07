@@ -15,8 +15,9 @@ reads the cancel label of its own job from the Kubernetes API, and stops
 before it creates any job. This needs `get` on `jobs` for the taskmaster's
 service account, which the role of TESK's Helm chart grants
 (`charts/tesk/templates/common/taskmaster-rbac.yaml`); deployments with their own
-role must grant it too. Without it, the taskmaster logs a warning at every
-poll and stops only on the pod's label, as before. Only the label
+role must grant it too. Without it, the taskmaster logs an error ("Can't read
+job ... to check for cancellation") and stops only on the pod's label, as
+before. Only the label
 `task-status: Cancelled` cancels a task now, not any label with the value
 `Cancelled`; the TESK API sets this one.
 

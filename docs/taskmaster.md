@@ -78,8 +78,8 @@ deletes that job, also one that it is failing, and stops. Reading the job
 adds one `get` request per poll, which needs `get` on `jobs` for the
 taskmaster's service account (granted by the role of TESK's Helm chart,
 `charts/tesk/templates/common/taskmaster-rbac.yaml`). If the taskmaster
-can't read its job, also if the job doesn't exist, it logs a warning and
-checks again at the next poll. Without `/podinfo/labels` (e.g. when run by
+can't read its job, also if the job doesn't exist, it logs an error (once;
+later ones only with `--debug`) and checks again at the next poll. Without `/podinfo/labels` (e.g. when run by
 hand), it doesn't check for cancellation at all. If the taskmaster is
 interrupted (`SIGINT`), it deletes the jobs it created.
 
