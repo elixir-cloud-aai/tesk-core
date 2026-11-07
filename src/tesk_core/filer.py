@@ -572,7 +572,8 @@ def log_invalid_ftp_hosts(count: int) -> None:
 @functools.cache
 def log_missing_ftp_hosts() -> None:
     """Log, once per process, that the env FTP credentials are not used."""
-    logging.error(
+    # Names the variables, not their values (semgrep: false positive)
+    logging.error(  # nosemgrep
         "TESK_FTP_USERNAME and TESK_FTP_PASSWORD are set, but %s is not: "
         "the credentials are not sent to any FTP host, and the filer logs "
         "in anonymously. Set %s to the hosts of the FTP account, or use a "
