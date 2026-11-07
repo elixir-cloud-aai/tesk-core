@@ -663,10 +663,13 @@ def test_get_status_pod_timeout_patch_error(
     mock_list_namespaced_pod.return_value = list_namespaced_pod_error_ImagePullBackOff()
     job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
     job.timeout = 50
-    status, _ = job.get_status(False)
+    status, all_running = job.get_status(False)
     assert status == expected
     assert job.failing_since is None
     assert mock_delete_namespaced_job.called == deleted
+    if expected == "Running":
+        job.get_status(all_running)
+        assert mock_patch_namespaced_job.call_count == 2
 
 
 @patch("kubernetes.client.CoreV1Api.list_namespaced_pod")

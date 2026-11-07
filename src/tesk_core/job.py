@@ -209,6 +209,7 @@ class Job:
                 )
             ).items
             is_all_pods_runnning = True
+            failed = False
             for pod in pods:
                 if pod.status.phase != "Pending":
                     continue
@@ -228,8 +229,11 @@ class Job:
                         waiting,
                     )
                     self.status = self.fail()
+                    failed = True
                     break
-            if not is_all_pods_runnning:
+            # Not after trying to fail the job: after an error, the next poll
+            # tries again
+            if not is_all_pods_runnning and not failed:
                 self.next_pod_check = now + timedelta(seconds=self.pod_check_interval)
 
         return self.status, is_all_pods_runnning
