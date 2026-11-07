@@ -143,7 +143,7 @@ class S3Transput(Transput):
         logging.debug("Guessed Content-Type: %s for file: %s", content_type, self.path)
         try:
             # Pass ContentType via ExtraArgs so the object is uploaded with the
-            # right MIME type
+            # right MIME type. `bucket_obj` is set on entering the context
             self.bucket_obj.upload_file(  # type: ignore[union-attr]
                 Filename=self.path,
                 Key=self.file_path,
@@ -239,6 +239,7 @@ class S3Transput(Transput):
             0 on success, otherwise 1.
         """
         try:
+            # `bucket_obj` is set on entering the context
             self.bucket_obj.download_file(  # type: ignore[union-attr]
                 Filename=file_name, Key=key
             )

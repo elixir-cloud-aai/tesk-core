@@ -1,4 +1,6 @@
 [build-system]
+# The dependency group `build-system` lists the same requirements, which the
+# image builds install from the lock
 requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
@@ -64,6 +66,14 @@ docs = [
     "mkdocs-material>=9.7.7,<10",
     "pymdown-extensions>=12.3,<13",
 ]
+
+[dependency-groups]
+# The build requirements (the same as `build-system.requires`), locked in
+# `uv.lock` with their hashes, so that the image builds install them
+# hash-checked instead of downloading them into an isolated build
+# environment (`containers/`); Dependabot updates them with the other locked
+# packages
+build-system = ["setuptools>=77", "setuptools-scm>=8"]
 
 [project.scripts]
 filer = "tesk_core.filer:main"

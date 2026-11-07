@@ -135,7 +135,7 @@ def dirname(iodata: dict[str, Any]) -> str:
     if iodata["type"] == "FILE":
         # strip filename from path
         r = "(.*)/"
-        # Paths without `/` raise `AttributeError`, as before
+        # Paths without `/` don't match and raise `AttributeError`, as before
         dirname: str = re.match(r, iodata["path"]).group(1)  # type: ignore[union-attr]
         logger.debug("dirname of %sis: %s", iodata["path"], dirname)
     elif iodata["type"] == "DIRECTORY":
@@ -287,8 +287,8 @@ def run_task(
         )
         if status != "Complete":
             exit_cancelled("Got status " + status)
-        else:
-            pvc.delete()  # type: ignore[union-attr]
+        elif pvc is not None:
+            pvc.delete()
 
 
 def newParser() -> argparse.ArgumentParser:
@@ -330,8 +330,8 @@ def newParser() -> argparse.ArgumentParser:
         "-s",
         "--state-file",
         help="State file for state.py script",
-        # Not used by the taskmaster
-        default="/tmp/.teskstate",  # noqa: S108
+        # Not used by the taskmaster; only a default path
+        default="/tmp/.teskstate",  # noqa: S108 -- unused default, see above
     )
     parser.add_argument("-d", "--debug", help="Set debug mode", action="store_true")
     parser.add_argument(
@@ -378,9 +378,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # The option is not applied: the jobs are polled every 5 seconds
+    # `--poll-interval` is not applied: the jobs are polled every 5 seconds
     # (`poll_interval` of the module)
-    poll_interval = args.poll_interval  # noqa: F841
 
     loglevel = logging.ERROR
     if args.debug:

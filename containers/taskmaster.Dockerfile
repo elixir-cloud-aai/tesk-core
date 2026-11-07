@@ -19,14 +19,24 @@ COPY . .
 # The package version; by default derived from Git (`setuptools_scm`), set
 # by the release workflow to the release tag's
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
-# The runtime dependencies (`project.dependencies`) at the versions of
+# The runtime dependencies (`project.dependencies`) and the build
+# requirements (dependency group `build-system`) at the versions of
 # `uv.lock`, with their hashes (`--frozen`: CI checks that the lock matches
-# `pyproject.toml`)
+# `pyproject.toml`). The build requirements are installed hash-checked, as
+# wheels only, into a virtual environment of their own, and the wheel is
+# built with them, without an isolated build environment (which would be
+# filled with downloads that aren't hash-checked) and offline
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
   export UV_NO_CACHE=1 UV_PYTHON_DOWNLOADS=never \
   && uv export --frozen --no-dev --no-emit-project \
     --output-file /tmp/requirements.txt \
-  && uv build --wheel --python /usr/bin/python3 --out-dir /tmp/dist
+  && uv export --frozen --only-group build-system --no-emit-project \
+    --output-file /tmp/build-requirements.txt \
+  && uv venv --python /usr/bin/python3 /tmp/build-env \
+  && uv pip install --python /tmp/build-env --require-hashes \
+    --only-binary :all: --no-deps -r /tmp/build-requirements.txt \
+  && uv build --wheel --offline --no-build-isolation \
+    --python /tmp/build-env/bin/python --out-dir /tmp/dist
 
 # Install: the locked requirements, checked against their hashes, as wheels
 # only and without resolving anything else, then the package without its

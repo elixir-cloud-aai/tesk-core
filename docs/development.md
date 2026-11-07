@@ -132,8 +132,9 @@ After the first release of this workflow, drop `fail: "false"` in
 Dependabot (`.github/dependabot.yml`) opens grouped pull requests to `dev`
 once a month for the dependencies in `pyproject.toml` and `uv.lock` (the
 docs' dependencies in pull requests of their own), the actions in the
-workflows, the images in `containers/` and the pre-commit hooks. `.github/CODEOWNERS` names the code owners,
-who are requested for review on every pull request. `CITATION.cff` holds the
+workflows, the images in `containers/` and the pre-commit hooks.
+`.github/CODEOWNERS` names the code owners, who are requested for review on
+every pull request. `CITATION.cff` holds the
 citation metadata, with the version and date of the latest release; CI
 validates it.
 

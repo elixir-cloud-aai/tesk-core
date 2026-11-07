@@ -75,7 +75,7 @@ class HTTPTransput(Transput):
         """
         try:
             # No timeout, as before; transfers of large files can take long
-            req = requests.get(self.url)  # noqa: S113
+            req = requests.get(self.url)  # noqa: S113 -- see above
         except requests.exceptions.RequestException as err:
             return self._request_failed(err)
 
@@ -103,7 +103,7 @@ class HTTPTransput(Transput):
             data = file if os.fstat(file.fileno()).st_size > 0 else b""
             try:
                 # No timeout, as before; uploads of large files can take long
-                req = requests.put(self.url, data=data)  # noqa: S113
+                req = requests.put(self.url, data=data)  # noqa: S113 -- see above
             except requests.exceptions.RequestException as err:
                 return self._request_failed(err)
 
@@ -308,7 +308,9 @@ class FTPTransput(Transput):
 
         self.connection_owner = ftp_conn is None
         # FTP is a protocol of TES tasks' URLs, insecure or not
-        self.ftp_connection = FTP() if ftp_conn is None else ftp_conn  # noqa: S321
+        self.ftp_connection = (
+            FTP() if ftp_conn is None else ftp_conn  # noqa: S321 -- see above
+        )
 
     def __enter__(self) -> "FTPTransput":
         """Connect and log in, unless the connection is reused.
@@ -397,7 +399,7 @@ class FTPTransput(Transput):
 
         for line in lines:
             matches = ftp_command.match(line)
-            # Lines that don't match raise `AttributeError`, as before
+            # Lines that don't match (`None`) raise `AttributeError`, as before
             dirbit = matches.group("dir")  # type: ignore[union-attr]
             name = matches.group("name")  # type: ignore[union-attr]
 
@@ -600,6 +602,7 @@ def subfolders_in(whole_path: str) -> list[str]:
     return subfolders
 
 
+# Returns an error code at each step that can fail
 def ftp_make_dirs(ftp_connection: FTP, path: str) -> int:  # noqa: PLR0911
     """Create a remote directory and its parents, unless it exists.
 

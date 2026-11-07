@@ -4,7 +4,7 @@ import logging
 
 import pytest
 from requests import Response
-from requests.exceptions import ConnectionError  # pylint: disable=redefined-builtin
+from requests.exceptions import ConnectionError
 
 from tesk_core.filer import FTPTransput, HTTPTransput, Type, process_file
 from tesk_core.transput import url_for_log

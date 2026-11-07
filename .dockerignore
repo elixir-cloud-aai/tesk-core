@@ -1,9 +1,13 @@
-.coverage
-.pytest_cache/
-.tox/
-.eggs/
-tesk-core/containers/
-# Secrets never go into the images
+# Only what the image builds need (allowlist): the package's sources and
+# metadata, the lock, and the Git metadata for the version
+# (`setuptools_scm`). Secrets never go into the images
+*
+!.git
+!src/
+!LICENSE
+!README.md
+!pyproject.toml
+!uv.lock
 .env
 .env.*
-!.env.example
+**/__pycache__/
