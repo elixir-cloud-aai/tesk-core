@@ -1,8 +1,11 @@
 """Tests for 'filer.py' FTP functionalities using 'pytest'."""
 
 import ftplib
+import netrc
 import os
+from pathlib import Path
 from unittest import mock
+from unittest.mock import MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -29,6 +32,52 @@ def test_ftp_login(mocker: MockerFixture) -> None:
     ):
         ftp_login(conn, "", None)
         mock_login.assert_called_with("test", "test_pass")
+
+
+@pytest.fixture
+def netrc_file(tmp_path: Path) -> netrc.netrc:
+    """A `.netrc` file with credentials for `ftp.example.org` only."""
+    path = tmp_path / ".netrc"
+    path.write_text("machine ftp.example.org login netrc_user password netrc_pass\n")
+    path.chmod(0o600)
+    return netrc.netrc(str(path))
+
+
+@pytest.mark.parametrize("netloc", ["ftp.example.org", "ftp.example.org:2121"])
+def test_ftp_login_netrc_entry(
+    netrc_file: netrc.netrc, monkeypatch: pytest.MonkeyPatch, netloc: str
+) -> None:
+    """Test that the `.netrc` entry for the host wins over the environment.
+
+    The port of the URL, if any, isn't part of the host.
+    """
+    monkeypatch.setenv("TESK_FTP_USERNAME", "env_user")
+    monkeypatch.setenv("TESK_FTP_PASSWORD", "env_pass")
+    conn = MagicMock()
+    ftp_login(conn, netloc, netrc_file)
+    conn.login.assert_called_once_with("netrc_user", "netrc_pass")
+
+
+def test_ftp_login_netrc_without_entry(
+    netrc_file: netrc.netrc, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that the environment's credentials are used without an entry."""
+    monkeypatch.setenv("TESK_FTP_USERNAME", "env_user")
+    monkeypatch.setenv("TESK_FTP_PASSWORD", "env_pass")
+    conn = MagicMock()
+    ftp_login(conn, "other.example.org", netrc_file)
+    conn.login.assert_called_once_with("env_user", "env_pass")
+
+
+def test_ftp_login_anonymous(
+    netrc_file: netrc.netrc, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that the login is anonymous without any credentials."""
+    monkeypatch.delenv("TESK_FTP_USERNAME", raising=False)
+    monkeypatch.delenv("TESK_FTP_PASSWORD", raising=False)
+    conn = MagicMock()
+    ftp_login(conn, "other.example.org", netrc_file)
+    conn.login.assert_called_once_with()
 
 
 def test_ftp_upload_file_error(

@@ -441,9 +441,10 @@ class FTPTransput(Transput):
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
     """Log in to an FTP server.
 
-    With the credentials for the host in `.netrc`, if it was read;
-    otherwise with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are
-    set. Without credentials, or if they are refused, anonymously.
+    With the credentials for the host in `.netrc`, if it was read and has
+    an entry for the host (without the port); otherwise with
+    `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set. Without
+    credentials, or if they are refused, anonymously.
 
     Args:
         ftp_connection: The connection.
@@ -452,10 +453,11 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     """
     user = None
     password: str | None = None
+    creds = None
     if netrc_file is not None:
-        creds = netrc_file.authenticators(netloc)
-        if creds:
-            user, _, password = creds
+        creds = netrc_file.authenticators(urlparse(f"//{netloc}").hostname or netloc)
+    if creds:
+        user, _, password = creds
     elif "TESK_FTP_USERNAME" in os.environ and "TESK_FTP_PASSWORD" in os.environ:
         user = os.environ["TESK_FTP_USERNAME"]
         password = os.environ["TESK_FTP_PASSWORD"]
