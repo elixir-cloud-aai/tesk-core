@@ -67,6 +67,25 @@ def test_ftp_login_netrc_entry(
     conn.login.assert_called_once_with("netrc_user", "netrc_pass")
 
 
+def test_ftp_login_netrc_entry_with_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that an entry for the host and port wins over the host's.
+
+    The `default` entry is used only without an entry for either.
+    """
+    monkeypatch.delenv("TESK_FTP_USERNAME", raising=False)
+    path = tmp_path / ".netrc"
+    path.write_text(
+        "machine ftp.example.org:2121 login port_user password port_pass\n"
+        "default login default_user password default_pass\n"
+    )
+    path.chmod(0o600)
+    conn = MagicMock()
+    ftp_login(conn, "user@ftp.example.org:2121", netrc.netrc(str(path)))
+    conn.login.assert_called_once_with("port_user", "port_pass")
+
+
 def test_ftp_login_netrc_without_entry(
     netrc_file: netrc.netrc, monkeypatch: pytest.MonkeyPatch
 ) -> None:

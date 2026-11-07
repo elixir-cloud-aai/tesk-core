@@ -46,8 +46,10 @@ reads for the URL's host.
 
 The filer logs in with the first credentials it finds:
 
-1. The entry for the URL's host in a mounted `.netrc` file (host names
-   match as written, including case), or its `default` entry.
+1. The entry in a mounted `.netrc` file for the URL's host and port (e.g.
+   `machine ftp.example.org:2121`) or for its host (`machine
+   ftp.example.org`), matched as written, including case; otherwise its
+   `default` entry.
 2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set.
 3. Anonymously.
 

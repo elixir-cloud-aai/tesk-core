@@ -473,7 +473,10 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     password: str | None = None
     creds = None
     if netrc_file is not None:
-        creds = netrc_file.authenticators(netloc_host(netloc))
+        # An entry for the host and port, as before; then one for the host,
+        # or the `default` entry
+        creds = netrc_file.hosts.get(netloc.rpartition("@")[2])
+        creds = creds or netrc_file.authenticators(netloc_host(netloc))
     if creds:
         user, _, password = creds
     elif "TESK_FTP_USERNAME" in os.environ and "TESK_FTP_PASSWORD" in os.environ:
