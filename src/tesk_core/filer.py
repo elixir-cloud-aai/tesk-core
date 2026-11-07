@@ -332,11 +332,13 @@ class FTPTransput(Transput):
         Returns:
             0 on success, otherwise 1.
         """
+        # The source first, so that a missing one creates nothing
+        entries = os.listdir(self.path)
         if ftp_make_dirs(self.ftp_connection, self.url_path):
             logging.error("Unable to create remote directory %s", url_for_log(self.url))
             return 1
 
-        for file in os.listdir(self.path):
+        for file in entries:
             file_path = self.path + "/" + file
             file_url = self.url + "/" + file
 
@@ -390,8 +392,13 @@ class FTPTransput(Transput):
         logging.debug(
             "Processing ftp dir: %s target: %s", url_for_log(self.url), self.path
         )
-        os.makedirs(self.path, exist_ok=True)
+        # The source first, so that a missing one creates nothing
         self.ftp_connection.cwd(self.url_path)
+        try:
+            os.makedirs(self.path, exist_ok=True)
+        except OSError:
+            logging.exception("Unable to create local directory %s", self.path)
+            return 1
 
         # This is horrible and I'm sorry but it works flawlessly.
         # Credit to Chris Haas for writing this

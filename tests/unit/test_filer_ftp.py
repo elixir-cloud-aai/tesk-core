@@ -102,3 +102,44 @@ def test_ftp_upload_dir_make_dirs_error(
     )
     assert transfer.upload_dir() == 1
     assert "Unable to create remote directory" in caplog.text
+
+
+def test_ftp_upload_dir_missing_source(mocker: MockerFixture, tmp_path: Path) -> None:
+    """Test that a missing source creates no remote directory."""
+    make_dirs = mocker.patch("tesk_core.filer.ftp_make_dirs", return_value=0)
+    transfer = FTPTransput(
+        str(tmp_path / "missing"),
+        "ftp://ftp.example.org/dir",
+        Type.Directory,
+        MagicMock(),
+    )
+    with pytest.raises(FileNotFoundError):
+        transfer.upload_dir()
+    make_dirs.assert_not_called()
+
+
+def test_ftp_download_dir_missing_source(tmp_path: Path) -> None:
+    """Test that a remote directory that can't be entered creates no local one."""
+    conn = MagicMock()
+    conn.cwd.side_effect = ftplib.error_perm("550 No such directory")  # noqa: S321 -- an error, no connection
+    transfer = FTPTransput(
+        str(tmp_path / "local"), "ftp://ftp.example.org/dir", Type.Directory, conn
+    )
+    with pytest.raises(ftplib.error_perm):
+        transfer.download_dir()
+    assert not (tmp_path / "local").exists()
+
+
+def test_ftp_download_dir_local_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a local directory that can't be created fails the download."""
+    (tmp_path / "local").write_text("a file, not a directory")
+    transfer = FTPTransput(
+        str(tmp_path / "local"),
+        "ftp://ftp.example.org/dir",
+        Type.Directory,
+        MagicMock(),
+    )
+    assert transfer.download_dir() == 1
+    assert "Unable to create local directory" in caplog.text
