@@ -230,25 +230,6 @@ def test_ftp_login_without_credentials(
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
-def test_ftp_login_netrc(
-    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Test that `.netrc` credentials are used without `TESK_FTP_HOSTS`.
-
-    Args:
-        mocker: The mocker fixture.
-        caplog: The log capture fixture.
-    """
-    conn = mocker.MagicMock()
-    netrc_file = mocker.MagicMock()
-    netrc_file.hosts = {}
-    netrc_file.authenticators.return_value = ("nuser", None, "npass")
-    with mock.patch.dict("os.environ", CREDENTIALS, clear=True):
-        ftp_login(conn, "ftp.example.org", netrc_file)
-    conn.login.assert_called_once_with("nuser", "npass")
-    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
-
-
 @pytest.fixture
 def netrc_file(tmp_path: Path) -> netrc.netrc:
     """Read a `.netrc` file with credentials for `FTP.example.org` only.
@@ -285,6 +266,22 @@ def test_ftp_login_netrc_entry(netrc_file: netrc.netrc, netloc: str) -> None:
     conn.login.assert_called_once_with("netrc_user", "netrc_pass")
 
 
+def test_ftp_login_netrc_without_hosts(
+    netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a `.netrc` entry is used, without errors, without hosts.
+
+    Args:
+        netrc_file: The `.netrc` file.
+        caplog: The log capture fixture.
+    """
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", CREDENTIALS, clear=True):
+        ftp_login(conn, "FTP.example.org", netrc_file)
+    conn.login.assert_called_once_with("netrc_user", "netrc_pass")
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
 @pytest.mark.parametrize(
     ("netloc", "host"),
     [
@@ -302,6 +299,41 @@ def test_netloc_host(netloc: str, host: str) -> None:
         host: The expected host.
     """
     assert netloc_host(netloc) == host
+
+
+def test_ftp_login_netrc_case(netrc_file: netrc.netrc) -> None:
+    """Test that `.netrc` entries match hosts as written, including case.
+
+    The allowlist ignores case, so a listed host gets the env credentials.
+
+    Args:
+        netrc_file: The `.netrc` file, with an entry for `FTP.example.org`.
+    """
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", CREDENTIALS, clear=True):
+        ftp_login(conn, "ftp.example.org", netrc_file)
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "FTP.EXAMPLE.ORG"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", netrc_file)
+    assert conn.login.call_args_list == [mock.call(), mock.call("test", "test_pass")]
+
+
+def test_ftp_login_netrc_default_wins(tmp_path: Path) -> None:
+    """Test that the `default` entry wins over the env credentials.
+
+    Also for a host in `TESK_FTP_HOSTS`.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+    """
+    path = tmp_path / ".netrc"
+    path.write_text("default login default_user password default_pass\n")
+    path.chmod(0o600)
+    conn = MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", netrc.netrc(str(path)))
+    conn.login.assert_called_once_with("default_user", "default_pass")
 
 
 def test_ftp_login_netrc_entry_with_port(tmp_path: Path) -> None:
@@ -371,8 +403,9 @@ def test_ftp_login_netrc_without_entry_other_host(
     conn.login.assert_called_once_with()
 
 
+@pytest.mark.parametrize("hosts", [None, "other.example.org"])
 def test_ftp_login_empty_username(
-    netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture
+    netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture, hosts: str | None
 ) -> None:
     """Test that an empty `TESK_FTP_USERNAME` counts as no credentials.
 
@@ -383,9 +416,12 @@ def test_ftp_login_empty_username(
     Args:
         netrc_file: The `.netrc` file.
         caplog: The log capture fixture.
+        hosts: The value of `TESK_FTP_HOSTS`, or `None` if it is unset.
     """
     conn = MagicMock()
-    env = {"TESK_FTP_USERNAME": "", "TESK_FTP_PASSWORD": ""}
+    env = {"TESK_FTP_USERNAME": "", "TESK_FTP_PASSWORD": "secret"}
+    if hosts is not None:
+        env["TESK_FTP_HOSTS"] = hosts
     with mock.patch.dict("os.environ", env, clear=True):
         ftp_login(conn, "other.example.org", netrc_file)
         ftp_login(conn, "other.example.org", None)

@@ -605,8 +605,9 @@ def ftp_env_credentials(netloc: str) -> tuple[str, str] | None:
     """Get the env FTP credentials, if they may be sent to the URL's host.
 
     `TESK_FTP_USERNAME` (if not empty) and `TESK_FTP_PASSWORD` are sent
-    only to the hosts in `TESK_FTP_HOSTS` (see `ftp_host_allowed`). Without entries in
-    `TESK_FTP_HOSTS`, they are sent nowhere, and an error is logged once.
+    only to the hosts in `TESK_FTP_HOSTS` (see `ftp_host_allowed`). Without
+    entries in `TESK_FTP_HOSTS`, they are sent nowhere, and an error is
+    logged once.
 
     Args:
         netloc: The network location of the URL.
@@ -673,7 +674,7 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     """
     user = None
     password: str | None = None
-    creds = None
+    creds: tuple[str, str | None, str | None] | None = None
     if netrc_file is not None:
         # An entry for the host and port, as before; then one for the host,
         # or the `default` entry

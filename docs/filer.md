@@ -50,9 +50,10 @@ a single path component (empty, `.`, `..`, or with `/` or `\`).
 The filer logs in with the first credentials it finds:
 
 1. The entry in a mounted `.netrc` file for the URL's host and port (e.g.
-   `machine ftp.example.org:2121`) or for its host (`machine
-   ftp.example.org`), matched as written, including case; otherwise its
-   `default` entry.
+   `machine ftp.example.org:2121`, for when the filer can connect to URLs
+   with a port; see below) or for its host (`machine ftp.example.org`),
+   matched as written, including case; otherwise its `default` entry, if it
+   has one, for any host.
 2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set (the user
    name not empty) and the URL's host is in `TESK_FTP_HOSTS` (see below).
 3. Anonymously.

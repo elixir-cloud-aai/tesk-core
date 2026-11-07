@@ -32,6 +32,13 @@ change.
 With a `.netrc` file, the filer used to ignore `TESK_FTP_USERNAME` and
 `TESK_FTP_PASSWORD`, and logged in anonymously to hosts without an entry.
 Now it uses them for hosts without an entry that are in `TESK_FTP_HOSTS`
-(see [Filer](filer.md#ftp)). An entry for the host and port, or for the host,
-still wins, then the `default` entry. No change is needed, unless you
-listed hosts in `TESK_FTP_HOSTS` that must still be accessed anonymously.
+(see [Filer](filer.md#ftp)). Entries of the `.netrc` file still win: one
+for the host and port or for the host, and also a `default` entry, which
+applies to every host. No change is needed, unless you listed hosts in
+`TESK_FTP_HOSTS` that must still be accessed anonymously.
+
+If the env credentials are set as well, but `TESK_FTP_HOSTS` is not, the
+filer now logs an error about `TESK_FTP_HOSTS` when it logs in to a host
+without an entry. Set `TESK_FTP_HOSTS`, or remove the env credentials if
+the `.netrc` file has all you need. An empty `TESK_FTP_USERNAME` counts as
+no credentials, with or without `.netrc`.
