@@ -14,7 +14,9 @@ import re
 import sys
 from typing import Any, NoReturn
 
-from kubernetes import config
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
+from urllib3.exceptions import HTTPError
 
 from tesk_core.filer_class import Filer
 from tesk_core.job import Job
@@ -24,6 +26,25 @@ created_jobs: list[Job] = []
 created_pvc: PVC | None = None
 poll_interval = 5
 task_volume_basename = "task-volume"
+# The labels of the taskmaster's pod (Downward API volume of the TESK API's
+# taskmaster job)
+pod_labels_file = "/podinfo/labels"
+# The label and value with which the TESK API cancels a task
+cancel_label = "task-status"
+cancel_value = "Cancelled"
+# The labels with the name of the job that created a pod: the first since
+# Kubernetes 1.27, the second also before
+job_name_labels = ("batch.kubernetes.io/job-name", "job-name")
+# Reads the taskmaster's job; created at the first check, after the
+# Kubernetes configuration is loaded, and reused at every poll
+batch_api: client.BatchV1Api | None = None
+# Whether an error reading the job was logged at `ERROR` (shown without
+# `--debug`); later ones are logged at `DEBUG`, not at every poll
+job_read_error_logged = False
+# Seconds to connect to and to wait for the Kubernetes API when reading the
+# job, per attempt (the client tries up to 4 times), so that a stalled API
+# server can't block the cancellation check for long
+job_read_timeout = (5, 10)
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -270,7 +291,11 @@ def run_task(
 
         pvc = init_pvc(data, filer)
 
+    # A job that completes between two polls isn't checked for cancellation:
+    # check before each next job, so that a cancelled task starts no more
     for executor in data["executors"]:
+        if check_cancelled():
+            exit_cancelled("Cancelled before executor " + executor["metadata"]["name"])
         run_executor(executor, args.namespace, pvc)
 
     # run executors
@@ -278,6 +303,8 @@ def run_task(
 
     # upload files and delete pvc
     if data["volumes"] or data["inputs"] or data["outputs"]:
+        if check_cancelled():
+            exit_cancelled("Cancelled before the outputs filer")
         filerjob = Job(
             filer.get_spec("outputs", args.debug),
             task_name + "-outputs-filer",
@@ -443,28 +470,96 @@ def exit_cancelled(reason: str = "Unknown reason") -> NoReturn:
     sys.exit(0)
 
 
+def read_pod_labels() -> dict[str, str]:
+    """Read the labels of the taskmaster's pod.
+
+    The Downward API writes them as one `key="value"` line per label.
+
+    Returns:
+        The labels, or none if there is no labels file (e.g. outside a pod).
+    """
+    if not os.path.exists(pod_labels_file):
+        return {}
+
+    labels = {}
+    with open(pod_labels_file) as fh:
+        for line in fh.read().splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                labels[key] = value.strip('"')
+    return labels
+
+
+def log_job_read_error(job_name: str, ex: Exception) -> None:
+    """Log that the taskmaster's job can't be read.
+
+    The first error is logged at `ERROR`, so that it shows without
+    `--debug`; later ones at `DEBUG`, so that a lasting error (e.g. a role
+    without `get` on `jobs`) isn't logged at every poll.
+
+    Args:
+        job_name: The name of the taskmaster's job.
+        ex: The error.
+    """
+    global job_read_error_logged  # noqa: PLW0603 -- once per run
+    level = logging.DEBUG if job_read_error_logged else logging.ERROR
+    job_read_error_logged = True
+    reason = f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else str(ex)
+    logger.log(
+        level, "Can't read job '%s' to check for cancellation: %s", job_name, reason
+    )
+
+
+def is_job_cancelled(job_name: str) -> bool:
+    """Tell whether the TESK API labelled the taskmaster's job as cancelled.
+
+    An error reading the job (also when it doesn't exist) is logged (see
+    `log_job_read_error`), and
+    counts as not cancelled: the job is read again at the next check. A
+    missing job doesn't stop the taskmaster, so that a wrong namespace can't
+    cancel every task.
+
+    Args:
+        job_name: The name of the taskmaster's job.
+
+    Returns:
+        Whether the job has the cancel label.
+    """
+    global batch_api  # noqa: PLW0603 -- one client for all polls
+    if batch_api is None:
+        batch_api = client.BatchV1Api()
+    try:
+        job = batch_api.read_namespaced_job(
+            job_name, args.namespace, _request_timeout=job_read_timeout
+        )
+    except (ApiException, HTTPError) as ex:
+        log_job_read_error(job_name, ex)
+        return False
+    job_labels = job.metadata.labels or {}
+    cancelled: bool = job_labels.get(cancel_label) == cancel_value
+    return cancelled
+
+
 def check_cancelled() -> bool:
     """Tell whether the task was cancelled.
 
-    The TESK API labels the taskmaster's pod; the labels are mounted as
-    `/podinfo/labels` (Downward API).
+    The TESK API labels the taskmaster's job and, if it runs, its pod. The
+    pod's labels are mounted as `pod_labels_file` (Downward API). A pod that
+    was pending or not created yet when the task was cancelled has no label,
+    so the job's label is read from the Kubernetes API as well.
 
     Returns:
-        Whether a label has the value `"Cancelled"`.
+        Whether the pod or the job has the cancel label.
     """
-    labelInfoFile = "/podinfo/labels"
+    labels = read_pod_labels()
+    logger.debug("Got pod labels: %s", labels)
+    if labels.get(cancel_label) == cancel_value:
+        return True
 
-    if not os.path.exists(labelInfoFile):
+    job_name = next((labels[key] for key in job_name_labels if key in labels), None)
+    if job_name is None:
         return False
-
-    with open(labelInfoFile) as fh:
-        for line in fh.readlines():
-            _, label = line.split("=")
-            logging.debug("Got label: %s", label)
-            if label == '"Cancelled"':
-                return True
-
-    return False
+    return is_job_cancelled(job_name)
 
 
 if __name__ == "__main__":
