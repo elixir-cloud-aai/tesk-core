@@ -324,11 +324,18 @@ class FTPTransput(Transput):
         return self
 
     def upload_dir(self) -> int:
-        """Upload the files below the directory, recursively.
+        """Upload the directory and everything below it, recursively.
+
+        Creates the remote directory and its parents, so that empty
+        directories are kept.
 
         Returns:
             0 on success, otherwise 1.
         """
+        if ftp_make_dirs(self.ftp_connection, self.url_path):
+            logging.error("Unable to create remote directory %s", url_for_log(self.url))
+            return 1
+
         for file in os.listdir(self.path):
             file_path = self.path + "/" + file
             file_url = self.url + "/" + file
@@ -346,8 +353,7 @@ class FTPTransput(Transput):
 
             logging.debug('Uploading %s\t"%s"', ftype.value, file_path)
 
-            # We recurse into new transputs, ending with files which are uploaded
-            # Downside is nothing happens with empty dirs.
+            # Recurse into new transfers, ending with files, which are uploaded
             with FTPTransput(file_path, file_url, ftype) as transfer:
                 if transfer.upload():
                     return 1
@@ -373,7 +379,10 @@ class FTPTransput(Transput):
         return ftp_upload_file(self.ftp_connection, self.path, self.url_path)
 
     def download_dir(self) -> int:
-        """Download the files below the directory, recursively.
+        """Download the directory and everything below it, recursively.
+
+        Creates the local directory and its parents, so that empty
+        directories are kept.
 
         Returns:
             0 on success, otherwise 1.
@@ -381,6 +390,7 @@ class FTPTransput(Transput):
         logging.debug(
             "Processing ftp dir: %s target: %s", url_for_log(self.url), self.path
         )
+        os.makedirs(self.path, exist_ok=True)
         self.ftp_connection.cwd(self.url_path)
 
         # This is horrible and I'm sorry but it works flawlessly.
@@ -408,8 +418,8 @@ class FTPTransput(Transput):
 
             ftype = Type.Directory if dirbit == "d" else Type.File
 
-            # We recurse into new transputs, ending with files which are downloaded
-            # Downside is nothing happens with empty dirs.
+            # Recurse into new transfers, ending with files, which are
+            # downloaded
             with FTPTransput(
                 file_path, file_url, ftype, self.ftp_connection
             ) as transfer:

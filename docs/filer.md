@@ -27,7 +27,7 @@ writes to `path`. The scheme of the URL selects the protocol.
 | Scheme | Inputs | Outputs |
 |---|---|---|
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
-| `ftp` | Files and directories (not empty ones) | Files and directories (not empty ones; creating the remote directories) |
+| `ftp` | Files and directories, including empty ones | Files and directories, including empty ones (creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
 | `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
 
