@@ -50,7 +50,8 @@ Pending pods now time out (`--pod-timeout`) for more reasons than
 `CreateContainerConfigError`, for init containers too, and also before the
 pod has started (measured from its creation). Their job fails and is kept,
 as described below. Pods that are pending for other reasons, e.g. waiting to
-be scheduled, still wait. No change is needed.
+be scheduled, still wait; the taskmaster checks their pods once a minute.
+No change is needed.
 
 ### Failed jobs are kept
 

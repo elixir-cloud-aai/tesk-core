@@ -38,7 +38,10 @@ container configuration (`CreateContainerConfigError`, e.g. a missing secret
 or ConfigMap), for init containers too. The timeout is measured from the
 pod's start, or from its creation if it hasn't started. The taskmaster checks
 the pods only once the job has been active for longer than `--pod-timeout`,
-and stops checking once none of them is pending.
+then at most once a minute, and stops checking once none of them is pending;
+pods that the job creates later (retries, replaced pods) aren't checked. A
+pull error that comes after the pod has waited longer than `--pod-timeout`,
+e.g. after a long pull of a large image, fails the job at the next check.
 
 To fail the job, the taskmaster sets its
 `activeDeadlineSeconds` to 1 second, so that Kubernetes deletes the job's

@@ -1,7 +1,7 @@
 """Kubernetes jobs of a task: its executors and filers."""
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import time
 from typing import Any
@@ -18,6 +18,9 @@ JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
 # Active deadline that fails a job (`Job.fail`), in seconds
 FAIL_DEADLINE = 1
+# Seconds between checks of a job's pending pods, so that queued tasks
+# don't list their pods on every poll
+POD_CHECK_INTERVAL = 60
 # Reasons why containers of a pending pod wait that don't resolve by
 # waiting; pods that wait for other reasons (e.g., to be scheduled, or while
 # a large image is pulled) are queued and keep waiting
@@ -65,6 +68,9 @@ class Job:
             `CANNOT_START_REASONS`) fail the job.
         failing_since: When the job was failed (`fail`), to wait for
             Kubernetes to mark it `Failed`; `None` before.
+        pod_check_interval: Seconds between checks of pending pods.
+        next_pod_check: When pending pods are checked next; `None` before
+            the first check.
         body: The manifest of the job.
     """
 
@@ -85,6 +91,8 @@ class Job:
         self.cv1 = client.CoreV1Api()
         self.timeout = 240
         self.failing_since: datetime | None = None
+        self.pod_check_interval = POD_CHECK_INTERVAL
+        self.next_pod_check: datetime | None = None
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -138,7 +146,8 @@ class Job:
 
         A pending pod that can't start (see `CANNOT_START_REASONS`) for
         longer than `timeout`, counted from its start or, if it hasn't
-        started, its creation, fails the job (`fail`); the job runs until
+        started, its creation, fails the job (`fail`). Pending pods are
+        checked at most every `pod_check_interval` seconds. The job runs until
         Kubernetes marks it `Failed`, for at most another `timeout`; then it
         counts as `Failed`, and is kept.
 
@@ -188,7 +197,12 @@ class Job:
             job_duration = (
                 datetime.now(timezone.utc) - job.status.start_time
             ).total_seconds()
-        if job_duration > self.timeout and not is_all_pods_runnning:
+        now = datetime.now(timezone.utc)
+        if (
+            job_duration > self.timeout
+            and not is_all_pods_runnning
+            and (self.next_pod_check is None or now >= self.next_pod_check)
+        ):
             pods = (
                 self.cv1.list_namespaced_pod(
                     self.namespace, label_selector=f"job-name={self.name}"
@@ -207,9 +221,16 @@ class Job:
                 delta = (datetime.now(timezone.utc) - since).total_seconds()
                 waiting = cannot_start(pod)
                 if delta > self.timeout and waiting is not None:
-                    logging.info(waiting)
+                    logging.info(
+                        "Pod '%s' of job '%s' can't start: %s",
+                        pod.metadata.name,
+                        self.name,
+                        waiting,
+                    )
                     self.status = self.fail()
                     break
+            if not is_all_pods_runnning:
+                self.next_pod_check = now + timedelta(seconds=self.pod_check_interval)
 
         return self.status, is_all_pods_runnning
 

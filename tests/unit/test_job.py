@@ -150,6 +150,7 @@ def list_namespaced_pod_error_ImagePullBackOff(diff_time: int = 10) -> MockObjec
         The list with the pending pod.
     """
     return_value = {
+        "metadata": {"name": "task-1000-ex-00-pod"},
         "status": {
             "conditions": [],
             "container_statuses": [
@@ -189,7 +190,7 @@ def list_namespaced_pod_error_ImagePullBackOff(diff_time: int = 10) -> MockObjec
             "qos_class": "BestEffort",
             "reason": None,
             "start_time": START_TIME - datetime.timedelta(minutes=diff_time),
-        }
+        },
     }
     return MockObject({"items": [MockObject(return_value)]})
 
@@ -204,6 +205,7 @@ def list_namespaced_pod_pending_unknown_error(diff_time: int = 5) -> MockObject:
         The list with the pending pod.
     """
     return_value = {
+        "metadata": {"name": "task-1000-ex-00-pod"},
         "status": {
             "conditions": [],
             "container_statuses": [
@@ -240,7 +242,7 @@ def list_namespaced_pod_pending_unknown_error(diff_time: int = 5) -> MockObject:
             "qos_class": "BestEffort",
             "reason": None,
             "start_time": START_TIME - datetime.timedelta(minutes=diff_time),
-        }
+        },
     }
     return MockObject({"items": [MockObject(return_value)]})
 
@@ -776,7 +778,10 @@ def pending_pod(
     }
     pod = MockObject(
         {
-            "metadata": {"creation_timestamp": since if created else None},
+            "metadata": {
+                "name": "pod",
+                "creation_timestamp": since if created else None,
+            },
             "status": status,
         }
     )
@@ -925,7 +930,10 @@ def test_get_status_unscheduled_then_cannot_start(
     data: dict[str, Any],
     reason: str,
 ) -> None:
-    """Test that a pod is checked again after it was waiting to be scheduled."""
+    """Test that a pod is checked again after it was waiting to be scheduled.
+
+    Not at the next poll, but after `pod_check_interval`.
+    """
     mock_list_namespaced_pod.side_effect = [
         pending_pod(None, started=False),
         pending_pod(reason),
@@ -935,6 +943,38 @@ def test_get_status_unscheduled_then_cannot_start(
     job.timeout = 50
     status, all_running = job.get_status(False)
     assert (status, all_running) == ("Running", False)
+    assert job.get_status(all_running) == ("Running", False)
+    assert mock_list_namespaced_pod.call_count == 1
     mock_patch_namespaced_job.assert_not_called()
+    job.next_pod_check = datetime.datetime.now(timezone.utc)
     job.get_status(all_running)
+    assert mock_list_namespaced_pod.call_count == 2
     mock_patch_namespaced_job.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("init_reason", "reason", "expected"),
+    [
+        ("PodInitializing", "ErrImagePull", "ErrImagePull"),
+        ("ImagePullBackOff", "PodInitializing", "ImagePullBackOff"),
+        ("PodInitializing", "ContainerCreating", None),
+    ],
+)
+def test_cannot_start_init_and_main_containers(
+    init_reason: str, reason: str, expected: str | None
+) -> None:
+    """Test that init and main containers are both checked, init ones first."""
+
+    def status(waiting_reason: str) -> MockObject:
+        return MockObject({"state": {"waiting": {"reason": waiting_reason}}})
+
+    pod = MockObject(
+        {
+            "status": {
+                "init_container_statuses": [status("Completed"), status(init_reason)],
+                "container_statuses": [status(reason)],
+            }
+        }
+    )
+    waiting = cannot_start(pod)
+    assert (waiting.reason if waiting is not None else None) == expected
