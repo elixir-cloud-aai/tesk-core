@@ -31,9 +31,12 @@ A pending pod whose containers can't start fails its job after
 (`ErrImagePull`, `ImagePullBackOff`, `InvalidImageName`) and a broken
 container configuration (`CreateContainerConfigError`, e.g. a missing secret
 or ConfigMap). The timeout is measured from the pod's start, or from its
-creation if it hasn't started. The taskmaster then deletes the executor's
-job (status `Error`). Pods that are pending for other reasons, e.g. waiting
-to be scheduled or pulling a large image, are queued and keep waiting.
+creation if it hasn't started; the taskmaster checks the pods only once the
+job has been active for longer than `--pod-timeout`, and stops checking once
+none of them is pending. It then deletes an executor's job (status
+`Error`); a filer's job is kept. Pods that are pending for other reasons,
+e.g. waiting to be scheduled or pulling a large image, are queued and keep
+waiting.
 
 To cancel a task, the TESK API labels the
 taskmaster's pod: the taskmaster reads its labels from `/podinfo/labels` (a
