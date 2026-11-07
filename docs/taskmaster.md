@@ -94,7 +94,7 @@ reports `SYSTEM_ERROR`:
   task ([tesk-api#104](https://github.com/elixir-cloud-aai/tesk-api/issues/104));
   TESK API 1.1 and earlier report a task whose later executor was deleted
   as `COMPLETE`, so don't set `TESK_MAX_QUEUE_SECONDS` with them.
-- If a pod of the executor's job failed before (e.g. a retry, with
+- If a pod of the executor's job ran or failed before (e.g. a retry, with
   `EXECUTOR_BACKOFF_LIMIT`, whose new pod can't be scheduled), the job is
   failed and kept instead, with the logs of the pods that ran: the TESK API
   reports `EXECUTOR_ERROR`.
@@ -102,7 +102,8 @@ reports `SYSTEM_ERROR`:
   filer gives `SYSTEM_ERROR`.
 
 If the Kubernetes API rejects the deletion, the job is failed and kept
-instead; after other errors, the taskmaster tries again at the next poll.
+instead; after other errors, including a request that times out after 30
+seconds, the taskmaster tries again at the next poll, before anything else.
 
 The pods are checked once the job has been active for longer than the
 shorter of the max queue time and `--pod-timeout`, then at most once a

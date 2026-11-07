@@ -8,6 +8,7 @@ from typing import Any
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+from urllib3.exceptions import HTTPError
 
 from tesk_core.Util import pprint
 
@@ -18,6 +19,12 @@ JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
 # Active deadline that fails a job (`Job.fail`), in seconds
 FAIL_DEADLINE = 1
+# Seconds to connect to and to wait for the Kubernetes API when deleting a
+# job whose pod wasn't scheduled in time, so that a stalled API server can't
+# block the taskmaster; the next poll tries again
+DELETE_TIMEOUT = (5, 30)
+# Why a job whose pod wasn't scheduled in time is failed, for the log
+UNSCHEDULED_REASON = "its pod wasn't scheduled in time"
 # Seconds between checks of a job's pending pods, so that queued tasks
 # don't list their pods on every poll
 POD_CHECK_INTERVAL = 60
@@ -197,14 +204,12 @@ class Job:
             The status (`Running`, `Complete` or `Failed`) and whether all
             pods of the job are running.
         """
-        try:
-            job = self.bv1.read_namespaced_job(self.name, self.namespace)
-        except ApiException as ex:
-            # A deletion that failed with a server error may have happened
-            if self.deleting and ex.status == 404:
-                self.status = "Failed"
-                return self.status, is_all_pods_runnning
-            raise
+        # A deletion of `end_unschedulable` that failed is tried again first,
+        # whatever the job and its pods do meanwhile
+        if self.deleting:
+            self.status = self.delete_unscheduled()
+            return self.status, is_all_pods_runnning
+        job = self.bv1.read_namespaced_job(self.name, self.namespace)
         self.status = "Running"
         # Only conditions with the status "True" count. `FailureTarget`
         # (Kubernetes 1.31+) comes before `Failed`, `SuccessCriteriaMet`
@@ -264,6 +269,9 @@ class Job:
             ).items
             is_all_pods_runnning = True
             failed = False
+            # Whether a pod of the job ran (or runs), so that its container
+            # ran and its logs are kept
+            ran = any(pod.status.phase != "Pending" for pod in pods)
             for pod in pods:
                 if pod.status.phase != "Pending":
                     continue
@@ -287,7 +295,7 @@ class Job:
                         self.max_queue,
                         scheduling,
                     )
-                    self.status = self.end_unschedulable()
+                    self.status = self.end_unschedulable(ran=ran)
                     failed = True
                     break
                 waiting = cannot_start(pod)
@@ -308,30 +316,47 @@ class Job:
 
         return self.status, is_all_pods_runnning
 
-    def end_unschedulable(self) -> str:
+    def end_unschedulable(self, ran: bool = False) -> str:
         """End the job, as its pod can't be scheduled in time.
 
-        Deletes it if `delete_unschedulable` and none of its pods failed
-        before (so its container never ran); otherwise, or if the Kubernetes
-        API rejects the deletion (a client error), fails it (`fail`), which
-        keeps the logs of pods that ran. After other errors, the next poll
-        tries again, so that the job can't run after the task stopped.
+        Deletes it (`delete_unscheduled`) if `delete_unschedulable` and none
+        of its pods ran or failed before (so its container never ran);
+        otherwise fails it (`fail`), which keeps the logs of pods that ran.
+
+        Args:
+            ran: Whether a pod of the job ran, or runs.
+
+        Returns:
+            The job's status, as `delete_unscheduled` or `fail`.
+        """
+        if not self.delete_unschedulable or self.failed_pods or ran:
+            return self.fail(UNSCHEDULED_REASON)
+        return self.delete_unscheduled()
+
+    def delete_unscheduled(self) -> str:
+        """Delete the job whose pod wasn't scheduled in time.
+
+        If the Kubernetes API rejects the deletion (a client error), fails
+        the job instead (`fail`). After other errors, including a request
+        that times out (`DELETE_TIMEOUT`), the next poll tries again
+        (`deleting`), so that the job can't run after the task stopped.
 
         Returns:
             The job's status: `Failed` once deleted (or already gone),
             `Running` to try again, otherwise as `fail`.
         """
-        reason = "its pod wasn't scheduled in time"
-        if not self.delete_unschedulable or self.failed_pods:
-            return self.fail(reason)
         try:
-            self.delete()
+            self.delete(request_timeout=DELETE_TIMEOUT)
         except ApiException as ex:
             if ex.status == 404:
                 return "Failed"
             if ex.status is not None and 400 <= ex.status < 500:
-                return self.fail(reason)
+                return self.fail(UNSCHEDULED_REASON)
             logging.warning("Can't delete job '%s' (%s) yet", self.name, ex.status)
+            self.deleting = True
+            return "Running"
+        except HTTPError as ex:
+            logging.warning("Can't delete job '%s' (%s) yet", self.name, ex)
             self.deleting = True
             return "Running"
         return "Failed"
@@ -379,15 +404,21 @@ class Job:
         except ApiException as ex:
             logging.error("Can't delete job '%s' (%s)", self.name, ex.status)
 
-    def delete(self) -> None:
+    def delete(self, request_timeout: tuple[float, float] | None = None) -> None:
         """Delete the job and, in the background, its pods.
 
-        Only on cancellation, on an interrupt of the taskmaster, and if the
-        Kubernetes API rejects failing it (`fail`).
+        Only on cancellation, on an interrupt of the taskmaster, if the
+        Kubernetes API rejects failing it (`fail`), and for an executor whose
+        pod wasn't scheduled in time (`delete_unscheduled`).
+
+        Args:
+            request_timeout: Seconds to connect and to wait for the
+                Kubernetes API, per attempt; none by default.
         """
         logging.info("Deleting job '%s'", self.name)
         self.bv1.delete_namespaced_job(
             self.name,
             self.namespace,
             body=client.V1DeleteOptions(propagation_policy="Background"),
+            _request_timeout=request_timeout,
         )
