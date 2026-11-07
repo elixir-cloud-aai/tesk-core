@@ -45,6 +45,10 @@ job_read_error_logged = False
 # job, per attempt (the client tries up to 4 times), so that a stalled API
 # server can't block the cancellation check for long
 job_read_timeout = (5, 10)
+# Seconds to connect to and to wait for the Kubernetes API when deleting the
+# claim, per attempt, so that a stalled API server can't keep the taskmaster
+# from ending
+pvc_delete_timeout = (5, 30)
 # The setting that keeps the claim of a task that doesn't complete (`true`)
 keep_failed_pvc_env = "KEEP_FAILED_PVC"
 # Set by `main`
@@ -531,7 +535,7 @@ def delete_created_pvc(*, keep_failed: bool = True) -> None:
     # Forgotten first, so that it isn't deleted twice
     created_pvc = None
     try:
-        pvc.delete()
+        pvc.delete(request_timeout=pvc_delete_timeout)
     except ApiException as ex:
         if ex.status != 404:
             logger.error("Can't delete PVC '%s': %s %s", pvc.name, ex.status, ex.reason)

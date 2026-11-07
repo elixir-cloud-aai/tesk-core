@@ -103,9 +103,17 @@ class PVC:
             logging.debug(ex.body)
             raise ApiException(ex.status, ex.reason) from ex
 
-    def delete(self) -> None:
-        """Delete the claim."""
+    def delete(self, request_timeout: tuple[float, float] | None = None) -> None:
+        """Delete the claim.
+
+        Args:
+            request_timeout: Seconds to connect to and to wait for the
+                Kubernetes API, per attempt; none waits as long as it takes.
+        """
         cv1 = client.CoreV1Api()
+        kwargs: dict[str, Any] = {}
+        if request_timeout is not None:
+            kwargs["_request_timeout"] = request_timeout
         cv1.delete_namespaced_persistent_volume_claim(
-            self.name, self.namespace, body=client.V1DeleteOptions()
+            self.name, self.namespace, body=client.V1DeleteOptions(), **kwargs
         )

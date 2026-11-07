@@ -56,6 +56,22 @@ def data() -> dict[str, Any]:
     return task
 
 
+def assert_deleted_task_pvc(mock_delete: MagicMock, namespace: str = "default") -> None:
+    """Assert that the task's claim was deleted once, with the timeout.
+
+    Args:
+        mock_delete: The mocked deletion of the claim, autospecced, so that
+            it gets the claim.
+        namespace: The namespace of the claim.
+    """
+    mock_delete.assert_called_once()
+    deleted = mock_delete.call_args.args[0]
+    assert (deleted.name, deleted.namespace) == ("task-1000-pvc", namespace)
+    assert mock_delete.call_args.kwargs == {
+        "request_timeout": taskmaster.pvc_delete_timeout
+    }
+
+
 def statuses(*names: str, status: str = "Failed") -> Callable[..., str]:
     """Mock `Job.run_to_completion` with a status per job name.
 
@@ -78,7 +94,7 @@ def statuses(*names: str, status: str = "Failed") -> Callable[..., str]:
     "failing_job",
     ["task-1000-inputs-filer", "task-1000-ex-00", "task-1000-outputs-filer"],
 )
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 def test_failed_job_deletes_pvc(
     mock_create: MagicMock,
@@ -103,12 +119,12 @@ def test_failed_job_deletes_pvc(
         run_task(data, "filer_name", "filer_version")
 
     assert exit_info.value.code == 0
-    mock_delete.assert_called_once_with()
+    assert_deleted_task_pvc(mock_delete)
     assert taskmaster.created_pvc is None
 
 
 @patch("tesk_core.taskmaster.check_cancelled")
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 @patch.object(Job, "run_to_completion", statuses())
 def test_cancelled_task_deletes_pvc(
@@ -131,14 +147,14 @@ def test_cancelled_task_deletes_pvc(
     with pytest.raises(SystemExit):
         run_task(data, "filer_name", "filer_version")
 
-    mock_delete.assert_called_once_with()
+    assert_deleted_task_pvc(mock_delete)
     assert [job.name for job in taskmaster.created_jobs] == [
         "task-1000-inputs-filer",
         "task-1000-ex-00",
     ]
 
 
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 @patch.object(Job, "run_to_completion", statuses())
 def test_completed_task_ignores_keep_failed_pvc(
@@ -159,11 +175,11 @@ def test_completed_task_ignores_keep_failed_pvc(
 
     run_task(data, "filer_name", "filer_version")
 
-    mock_delete.assert_called_once_with()
+    assert_deleted_task_pvc(mock_delete)
     assert taskmaster.created_pvc is None
 
 
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 @patch.object(Job, "run_to_completion", statuses())
 def test_completed_task_delete_error_is_logged(
@@ -223,15 +239,13 @@ def test_cancelled_during_init_deletes_pvc(
     ):
         taskmaster.main()
 
-    mock_delete.assert_called_once()
     # The claim that `init_pvc` creates
-    deleted = mock_delete.call_args.args[0]
-    assert (deleted.name, deleted.namespace) == ("task-1000-pvc", "tesk")
+    assert_deleted_task_pvc(mock_delete, namespace="tesk")
     mock_run_task.assert_not_called()
 
 
 @pytest.mark.parametrize("value", ["true", "TRUE", " True "])
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
 @patch.object(Job, "run_to_completion", statuses("task-1000-ex-00"))
 def test_keep_failed_pvc(
@@ -342,7 +356,7 @@ def test_missing_pvc_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
     assert "Can't delete PVC" not in caplog.text
 
 
-@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 def test_exit_without_pvc(mock_delete: MagicMock) -> None:
     """Test that a taskmaster without a claim (yet) deletes none.
 
@@ -353,3 +367,21 @@ def test_exit_without_pvc(mock_delete: MagicMock) -> None:
         exit_cancelled("Cancelled during init")
 
     mock_delete.assert_not_called()
+
+
+@patch("tesk_core.pvc.client")
+def test_pvc_delete_timeout(mock_client: MagicMock) -> None:
+    """Test that `PVC.delete` passes the request timeout, if any.
+
+    Args:
+        mock_client: The mocked Kubernetes client.
+    """
+    pvc = PVC("task-1000-pvc", 1, "tesk")
+    api = mock_client.CoreV1Api.return_value
+
+    pvc.delete()
+    pvc.delete(request_timeout=(5, 30))
+
+    first, second = api.delete_namespaced_persistent_volume_claim.call_args_list
+    assert "_request_timeout" not in first.kwargs
+    assert second.kwargs["_request_timeout"] == (5, 30)

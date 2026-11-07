@@ -35,7 +35,9 @@ elixir-cloud-aai/TESK#123). To keep the PVCs of tasks that don't complete,
 e.g. to inspect their files, set `KEEP_FAILED_PVC` to `true`; then delete
 them yourself. Tasks that complete delete their PVC either way.
 
-An error deleting the PVC is logged; the taskmaster goes on as it would
+An error deleting the PVC is logged, also a request that times out (after
+5 seconds to connect or 30 seconds to answer, per attempt of the Kubernetes
+client); the taskmaster goes on as it would
 (e.g. stops, or ends a completed task). An unexpected error of the
 taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
 reuses it; if every retry fails, the PVC is left behind. An interrupt
