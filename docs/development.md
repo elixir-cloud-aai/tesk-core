@@ -21,7 +21,9 @@ docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:
 docker build --file containers/filer.Dockerfile --tag tesk-core-filer:local .
 ```
 
-Without the Git history, set the version with `--build-arg
+Without the Git history (e.g., from a source archive or a Git worktree,
+whose `.git` points outside the build context), the images report version
+`0.0.0.dev0`; set the version with `--build-arg
 SETUPTOOLS_SCM_PRETEND_VERSION=<version>`, as the release workflow does.
 
 To try them in a TESK deployment, push them to a registry that the cluster
