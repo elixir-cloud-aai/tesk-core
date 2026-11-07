@@ -701,3 +701,29 @@ def test_get_status_unscheduled_then_cannot_start(
     status, all_running = job.get_status(False)
     assert (status, all_running) == ("Running", False)
     assert job.get_status(all_running)[0] == "PodTimeout"
+
+
+@patch(
+    "kubernetes.client.BatchV1Api.read_namespaced_job",
+    side_effect=read_namespaced_job_error,
+)
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_unscheduled_then_image_pull_back_off(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a pod found unscheduled first gives `PodTimeout`, not `Error`.
+
+    The earlier check stopped at the unscheduled pod and never found the
+    `ImagePullBackOff`, so the job is kept.
+    """
+    mock_list_namespaced_pod.side_effect = [
+        pending_pod(None, started=False),
+        pending_pod("ImagePullBackOff"),
+    ]
+    executor = data["executors"][0]
+    job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
+    job.timeout = 50
+    _, all_running = job.get_status(False)
+    assert job.get_status(all_running)[0] == "PodTimeout"

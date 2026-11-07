@@ -35,8 +35,9 @@ creation if it hasn't started; the taskmaster checks the pods only once the
 job has been active for longer than `--pod-timeout`, and stops checking once
 none of them is pending. It deletes an executor's job only if the pod has
 started and its first container can't pull its image (`ImagePullBackOff`,
-status `Error`); in the other cases (status `PodTimeout`), and for filers,
-it keeps the job. Pods that are pending for other reasons,
+status `Error`), and no earlier check found the job's pending pods all
+unstarted; in the other cases (status `PodTimeout`), and for filers, it
+keeps the job. Pods that are pending for other reasons,
 e.g. waiting to be scheduled or pulling a large image, are queued and keep
 waiting.
 

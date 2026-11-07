@@ -46,22 +46,26 @@ def cannot_start(pod: client.V1Pod) -> client.V1ContainerStateWaiting | None:
     return None
 
 
-def pod_timeout_status(pod: client.V1Pod) -> str:
+def pod_timeout_status(pod: client.V1Pod, legacy_check: bool) -> str:
     """Get the status of a job whose pending pod can't start.
 
     Args:
         pod: The pod, after the timeout.
+        legacy_check: Whether the earlier pod check, which covered only
+            started pods, would still have run.
 
     Returns:
         `Error` for a started pod whose first container can't pull its image
-        (`ImagePullBackOff`), the only case that timed out before, and whose
-        executor job is deleted; otherwise `PodTimeout`, and the job is kept.
+        (`ImagePullBackOff`), if the earlier check would have found it: the
+        only case that timed out before, and whose executor job is deleted.
+        Otherwise `PodTimeout`, and the job is kept.
     """
     statuses = pod.status.container_statuses or []
     state = statuses[0].state if statuses else None
     waiting = state.waiting if state is not None else None
     if (
-        pod.status.start_time is not None
+        legacy_check
+        and pod.status.start_time is not None
         and waiting is not None
         and waiting.reason == "ImagePullBackOff"
     ):
@@ -100,6 +104,9 @@ class Job:
         self.bv1 = client.BatchV1Api()
         self.cv1 = client.CoreV1Api()
         self.timeout = 240
+        # Whether the earlier pod check, which stopped once no pending pod
+        # had started, would have stopped
+        self.legacy_check_stopped = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -191,6 +198,11 @@ class Job:
                     )
                 ).items
                 is_all_pods_runnning = True
+                if not any(
+                    pod.status.phase == "Pending" and pod.status.start_time
+                    for pod in pods
+                ):
+                    self.legacy_check_stopped = True
                 for pod in pods:
                     if pod.status.phase != "Pending":
                         continue
@@ -202,7 +214,8 @@ class Job:
                     waiting = cannot_start(pod)
                     if delta > self.timeout and waiting is not None:
                         logging.info(waiting)
-                        return pod_timeout_status(pod), is_all_pods_runnning
+                        status = pod_timeout_status(pod, not self.legacy_check_stopped)
+                        return status, is_all_pods_runnning
 
         return self.status, is_all_pods_runnning
 
