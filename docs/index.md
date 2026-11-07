@@ -31,5 +31,6 @@ TESK documentation.
 - [Taskmaster](taskmaster.md): what it does, its options and environment
   variables.
 - [Filer](filer.md): protocols, credentials, and environment variables.
+- [Upgrading](upgrading.md): changes that operators must act on.
 - [Development](development.md): building the images, tests, lint, CI, and
   these docs.

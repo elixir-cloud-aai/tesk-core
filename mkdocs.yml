@@ -65,4 +65,5 @@ nav:
   - Home: index.md
   - Taskmaster: taskmaster.md
   - Filer: filer.md
+  - Upgrading: upgrading.md
   - Development: development.md

@@ -11,6 +11,7 @@ from pytest_mock import MockerFixture
 from tesk_core.filer import (
     FTPTransput,
     Type,
+    ftp_login,
     ftp_make_dirs,
 )
 
@@ -162,16 +163,24 @@ def test_ftp_make_dirs_error(
 
 
 @pytest.mark.parametrize("user_info", ["", "someone@"])
+@pytest.mark.parametrize(
+    ("hosts", "listed"),
+    [("{host}:{port}", True), ("{host}", True), ("{host}:21", False)],
+)
 def test_ftp_download_file_with_port(
     tmp_path: Path,
     ftpserver: Any,
     monkeypatch: pytest.MonkeyPatch,
     user_info: str,
+    hosts: str,
+    listed: bool,
 ) -> None:
     """Test that a file is downloaded from a URL with a port.
 
-    With and without user information in the URL; the credentials come from
-    the environment.
+    With and without user information in the URL. The credentials come from
+    the environment, for the host and port in `TESK_FTP_HOSTS`; for another
+    port, the filer logs in anonymously, and the anonymous user doesn't see
+    the file.
 
     Args:
         tmp_path: The temporary directory of the test.
@@ -179,18 +188,25 @@ def test_ftp_download_file_with_port(
             ships no type information.
         monkeypatch: The fixture that sets the environment.
         user_info: User information in the URL.
+        hosts: `TESK_FTP_HOSTS`, with placeholders for the server's host and
+            port.
+        listed: Whether `TESK_FTP_HOSTS` lists the server's host and port.
     """
     login = ftpserver.get_login_data()
     monkeypatch.setenv("HOME", str(tmp_path))  # No `.netrc`
     monkeypatch.setenv("TESK_FTP_USERNAME", login["user"])
     monkeypatch.setenv("TESK_FTP_PASSWORD", login["passwd"])
+    monkeypatch.setenv(
+        "TESK_FTP_HOSTS", hosts.format(host=login["host"], port=login["port"])
+    )
     (Path(ftpserver.server_home) / "port.txt").write_text("content")
     url = f"ftp://{user_info}{login['host']}:{login['port']}/port.txt"
 
     with FTPTransput(str(tmp_path / "port.txt"), url, Type.File) as transfer:
-        assert transfer.download_file() == 0
+        assert (transfer.download_file() == 0) is listed
 
-    assert (tmp_path / "port.txt").read_text() == "content"
+    if listed:
+        assert (tmp_path / "port.txt").read_text() == "content"
 
 
 @pytest.fixture
@@ -300,3 +316,47 @@ def test_ftp_download_dir_keeps_empty_dirs(
     assert (tmp_path / "local" / "empty").is_dir()
     assert (tmp_path / "local" / "dir2" / "empty").is_dir()
     assert (tmp_path / "local" / "dir2" / "file").read_text() == "content"
+
+
+@pytest.mark.parametrize("hosts", ["LOCALHOST", "localhost:21", ""])
+def test_ftp_login_env_credentials(tmp_path: Path, ftpserver: Any, hosts: str) -> None:
+    """Test that the env credentials are sent only to listed hosts.
+
+    The local FTP server has an account that may upload, and a read-only
+    anonymous user with another home directory: an upload shows which one
+    the filer logged in as.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+        hosts: The value of `TESK_FTP_HOSTS`; only the first lists the
+            server's host and port.
+    """
+    login = ftpserver.get_login_data()
+    # The server is shared by the tests of the session
+    target = Path(ftpserver.server_home) / "probe.txt"
+    target.unlink(missing_ok=True)
+    source = tmp_path / "probe.txt"
+    source.write_text("probe")
+    env = {
+        "TESK_FTP_USERNAME": login["user"],
+        "TESK_FTP_PASSWORD": login["passwd"],
+        "TESK_FTP_HOSTS": hosts,
+    }
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
+    conn.connect(host="localhost", port=login["port"])
+    try:
+        with mock.patch.dict("os.environ", env, clear=True):
+            ftp_login(conn, f"localhost:{login['port']}", None)
+        with source.open("rb") as file:
+            if hosts == "LOCALHOST":
+                conn.storbinary("STOR probe.txt", file)
+            else:
+                with pytest.raises(ftplib.error_perm):
+                    conn.storbinary("STOR probe.txt", file)
+    finally:
+        conn.close()
+        uploaded = target.exists()
+        target.unlink(missing_ok=True)
+    assert uploaded is (hosts == "LOCALHOST")

@@ -264,6 +264,12 @@ class TestFiler:
         assert newTransput("file", "/home/tfga/workspace/") == FileTransput
         assert newTransput("s3", "/home/tfga/workspace/") == S3Transput
         assert newTransput("http", "s3.aws.com") == HTTPTransput
+        # Only `s3://` URLs go over S3; host names that contain "s3", e.g.
+        # virtual-hosted or path-style S3 endpoints, stay HTTP (issue #45)
+        assert newTransput("https", "mys3data.s3.amazonaws.com") == HTTPTransput
+        assert newTransput("https", "s3.eu-west-1.amazonaws.com") == HTTPTransput
+        assert newTransput("https", "s3bucket.example.org") == HTTPTransput
+        assert newTransput("s3", "mys3data") == S3Transput
 
         with pytest.raises(UnknownProtocol) as excinfo:
             newTransput("svn", "example.com")
