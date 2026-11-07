@@ -68,20 +68,25 @@ Kubernetes would also restart failed containers within the pod.
 
 To cancel a task, the TESK API labels the taskmaster's job and, if it runs,
 its pod with `task-status: Cancelled`. The taskmaster checks for this label
-before it creates the first job and while it polls: on its pod, through
-`/podinfo/labels` (a Kubernetes downward API volume), and on its job, read
-from the Kubernetes API (the job's name is in the pod's `job-name` label). A
-task that was cancelled while its taskmaster's pod was pending, or before the
-pod existed, has the label only on its job; its taskmaster stops before it
-creates any job. When the taskmaster finds the label while a job runs, it
-deletes that job, also one that it is failing, and stops. Reading the job
-adds one `get` request per poll, which needs `get` on `jobs` for the
-taskmaster's service account (granted by the role of TESK's Helm chart,
-`charts/tesk/templates/common/taskmaster-rbac.yaml`). If the taskmaster
-can't read its job, also if the job doesn't exist, it logs an error (once;
-later ones only with `--debug`) and checks again at the next poll. Without `/podinfo/labels` (e.g. when run by
-hand), it doesn't check for cancellation at all. If the taskmaster is
-interrupted (`SIGINT`), it deletes the jobs it created.
+before it creates the first job, before each executor and the outputs
+filer, and while it polls: on its pod, through `/podinfo/labels` (a
+Kubernetes downward API volume), and on its job, read from the Kubernetes
+API (the job's name is in the pod's `job-name` label). A task that was
+cancelled while its taskmaster's pod was pending, or before the pod existed,
+has the label only on its job; its taskmaster stops before it creates any
+job. When the taskmaster finds the label while a job runs, it deletes that
+job, also one that it is failing, and stops; when it finds it between jobs,
+it starts no other job.
+
+Reading the job adds one `get` request per check, which needs `get` on
+`jobs` for the taskmaster's service account (granted by the role of TESK's
+Helm chart, `charts/tesk/templates/common/taskmaster-rbac.yaml`). The
+request times out after 5 seconds to connect and 10 seconds to answer. If
+the taskmaster can't read its job, also if the job doesn't exist, it logs an
+error (once; later ones only with `--debug`) and checks again at the next
+poll. Without `/podinfo/labels` (e.g. when run by hand), it doesn't check
+for cancellation at all. If the taskmaster is interrupted (`SIGINT`), it
+deletes the jobs it created.
 
 ## Options
 

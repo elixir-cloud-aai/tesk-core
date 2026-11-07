@@ -41,6 +41,9 @@ batch_api: client.BatchV1Api | None = None
 # Whether an error reading the job was logged at `ERROR` (shown without
 # `--debug`); later ones are logged at `DEBUG`, not at every poll
 job_read_error_logged = False
+# Seconds to connect to and to wait for the Kubernetes API when reading the
+# job, so that a stalled API server can't block the cancellation check
+job_read_timeout = (5, 10)
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -287,7 +290,11 @@ def run_task(
 
         pvc = init_pvc(data, filer)
 
+    # A job that completes between two polls isn't checked for cancellation:
+    # check before each next job, so that a cancelled task starts no more
     for executor in data["executors"]:
+        if check_cancelled():
+            exit_cancelled("Cancelled before executor " + executor["metadata"]["name"])
         run_executor(executor, args.namespace, pvc)
 
     # run executors
@@ -295,6 +302,8 @@ def run_task(
 
     # upload files and delete pvc
     if data["volumes"] or data["inputs"] or data["outputs"]:
+        if check_cancelled():
+            exit_cancelled("Cancelled before the outputs filer")
         filerjob = Job(
             filer.get_spec("outputs", args.debug),
             task_name + "-outputs-filer",
@@ -519,7 +528,9 @@ def is_job_cancelled(job_name: str) -> bool:
     if batch_api is None:
         batch_api = client.BatchV1Api()
     try:
-        job = batch_api.read_namespaced_job(job_name, args.namespace)
+        job = batch_api.read_namespaced_job(
+            job_name, args.namespace, _request_timeout=job_read_timeout
+        )
     except (ApiException, HTTPError) as ex:
         log_job_read_error(job_name, ex)
         return False

@@ -3,6 +3,7 @@
 from argparse import Namespace
 import logging
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from kubernetes.client.rest import ApiException
@@ -10,11 +11,13 @@ import pytest
 from urllib3.exceptions import MaxRetryError
 
 from tesk_core import taskmaster
-from tesk_core.taskmaster import check_cancelled, main, read_pod_labels
+from tesk_core.taskmaster import check_cancelled, main, read_pod_labels, run_task
 
 # As the Downward API writes them: one `key="value"` per line, sorted by key,
-# without a newline after the last line
-POD_LABELS = 'batch.kubernetes.io/job-name="task-1234"\njob-name="task-1234"'
+# without a newline after the last line; only the label of Kubernetes 1.27+
+# with the job's name, as `test_check_cancelled_older_job_name_label` tests
+# the older one
+POD_LABELS = 'batch.kubernetes.io/job-name="task-1234"\napp="tesk"'
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +31,9 @@ def labels_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     Returns:
         The path of the labels file, which doesn't exist yet.
     """
-    monkeypatch.setattr(taskmaster, "args", Namespace(namespace="tesk"))
+    monkeypatch.setattr(
+        taskmaster, "args", Namespace(namespace="tesk", pull_policy_always=False)
+    )
     monkeypatch.setattr(taskmaster, "batch_api", None)
     monkeypatch.setattr(taskmaster, "job_read_error_logged", False)
     path = tmp_path / "labels"
@@ -65,7 +70,7 @@ def test_check_cancelled_job_label(mock_api: MagicMock, labels_file: Path) -> No
 
     assert check_cancelled()
     mock_api.return_value.read_namespaced_job.assert_called_once_with(
-        "task-1234", "tesk"
+        "task-1234", "tesk", _request_timeout=taskmaster.job_read_timeout
     )
 
 
@@ -104,7 +109,7 @@ def test_check_cancelled_older_job_name_label(
 
     assert check_cancelled()
     mock_api.return_value.read_namespaced_job.assert_called_once_with(
-        "task-1234", "tesk"
+        "task-1234", "tesk", _request_timeout=taskmaster.job_read_timeout
     )
 
 
@@ -241,3 +246,67 @@ def test_main_cancelled_before_start(
 
     assert exc_info.value.code == 0
     mock_run_task.assert_not_called()
+
+
+def executors_task(count: int, outputs: bool = False) -> dict[str, Any]:
+    """Make a task with executors only, and outputs if asked.
+
+    Args:
+        count: The number of executors.
+        outputs: Whether the task has an output (and so an outputs filer).
+
+    Returns:
+        The task, as the taskmaster gets it.
+    """
+    return {
+        "executors": [
+            {
+                "metadata": {
+                    "name": f"task-1234-ex-{index:02d}",
+                    "labels": {"taskmaster-name": "task-1234"},
+                }
+            }
+            for index in range(count)
+        ],
+        "volumes": [],
+        "inputs": [],
+        "outputs": [{"path": "/out", "url": "s3://bucket/out"}] if outputs else [],
+    }
+
+
+@patch("tesk_core.taskmaster.run_executor")
+@patch("tesk_core.taskmaster.check_cancelled", side_effect=[False, True])
+def test_run_task_cancelled_between_executors(
+    mock_check_cancelled: MagicMock, mock_run_executor: MagicMock
+) -> None:
+    """Test that a task cancelled while an executor ended starts no other.
+
+    An executor job that completes between two polls isn't checked for
+    cancellation while it runs.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        run_task(executors_task(2), "filer", "v0")
+
+    assert exc_info.value.code == 0
+    mock_run_executor.assert_called_once()
+
+
+@patch("tesk_core.taskmaster.Job")
+@patch("tesk_core.taskmaster.init_pvc")
+@patch("tesk_core.taskmaster.Filer")
+@patch("tesk_core.taskmaster.run_executor")
+@patch("tesk_core.taskmaster.check_cancelled", side_effect=[False, True])
+def test_run_task_cancelled_before_outputs(
+    mock_check_cancelled: MagicMock,
+    mock_run_executor: MagicMock,
+    mock_filer: MagicMock,
+    mock_init_pvc: MagicMock,
+    mock_job: MagicMock,
+) -> None:
+    """Test that a task cancelled after its last executor uploads nothing."""
+    with pytest.raises(SystemExit) as exc_info:
+        run_task(executors_task(1, outputs=True), "filer", "v0")
+
+    assert exc_info.value.code == 0
+    mock_run_executor.assert_called_once()
+    mock_job.assert_not_called()
