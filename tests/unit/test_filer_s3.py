@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import boto3
@@ -11,6 +12,7 @@ from moto import mock_s3
 from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
 
+from tesk_core.filer import process_file
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.transput import Type
 
@@ -299,3 +301,75 @@ def test_extract_url_from_environ_variable() -> None:
         # mock_file.assert_called_once_with(
         #     os.environ["AWS_CONFIG_FILE"], encoding=None
         # )
+
+
+# Bucket names that contain "s3", which older versions of the filer took
+# apart when they parsed the bucket from the host name (issue #45)
+S3_IN_BUCKET_NAMES = ["mys3data", "s3bucket", "my-s3-bucket", "data-s3", "s3.s3data"]
+
+
+@pytest.mark.parametrize("bucket", S3_IN_BUCKET_NAMES)
+@pytest.mark.parametrize(
+    "key, ftype",
+    [("folder/file.txt", Type.File), ("s3/folder1/folder2", Type.Directory)],
+)
+def test_get_bucket_name_and_file_path_with_s3_in_bucket_name(
+    bucket: str, key: str, ftype: Type
+) -> None:
+    """Test that bucket names containing `s3` are kept as they are."""
+    trans = S3Transput("/home/user/filer_test/file.txt", f"s3://{bucket}/{key}", ftype)
+    assert (trans.bucket, trans.file_path) == (bucket, key)
+
+
+@pytest.fixture
+def moto_s3_in_bucket_names() -> Iterator[None]:
+    """Mock S3 with one empty bucket per name of `S3_IN_BUCKET_NAMES`.
+
+    Yields:
+        Nothing, while the mock is active.
+    """
+    with mock_s3():
+        client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
+        for bucket in S3_IN_BUCKET_NAMES:
+            client.create_bucket(Bucket=bucket)
+        yield
+
+
+@pytest.mark.parametrize("bucket", S3_IN_BUCKET_NAMES)
+def test_process_file_output_to_bucket_with_s3_in_name(
+    moto_s3_in_bucket_names: None, bucket: str, tmp_path: Path
+) -> None:
+    """Test that an output file lands in a bucket whose name contains `s3`."""
+    path = tmp_path / "file.txt"
+    path.write_text("content")
+    filedata = {
+        "path": str(path),
+        "url": f"s3://{bucket}/out/file.txt",
+        "type": Type.File.value,
+    }
+    assert process_file("outputs", filedata) == 0
+    client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
+    assert [obj.key for obj in client.Bucket(bucket).objects.all()] == ["out/file.txt"]
+
+
+@pytest.mark.parametrize("bucket", S3_IN_BUCKET_NAMES)
+def test_process_file_output_dir_to_bucket_with_s3_in_name(
+    moto_s3_in_bucket_names: None, bucket: str
+) -> None:
+    """Test that an output directory lands in a bucket whose name has `s3`.
+
+    The directory upload builds a new URL per entry from the output's URL,
+    so this also covers the URLs of the nested transfers.
+    """
+    filedata = {
+        "path": RESOURCES_SRC,
+        "url": f"s3://{bucket}/out",
+        "type": Type.Directory.value,
+    }
+    assert process_file("outputs", filedata) == 0
+    client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
+    assert sorted(obj.key for obj in client.Bucket(bucket).objects.all()) == [
+        "out/3.txt",
+        "out/a/1.txt",
+        "out/a/2.txt",
+    ]
