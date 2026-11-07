@@ -1,5 +1,6 @@
 """Tests for the timeout of the filer's HTTP requests and its log messages."""
 
+import argparse
 from collections.abc import Iterator
 import json
 import logging
@@ -8,11 +9,13 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from kubernetes.client.rest import ApiException
 import pytest
 from pytest_mock import MockerFixture
 import requests
 from requests import Response
 
+from tesk_core import taskmaster
 from tesk_core.filer import (
     HTTP_TIMEOUT_DEFAULT,
     HTTP_TIMEOUT_ENV,
@@ -22,6 +25,7 @@ from tesk_core.filer import (
     log_invalid_http_timeout,
 )
 from tesk_core.filer_class import Filer
+from tesk_core.pvc import PVC
 from tesk_core.transput import BODY_LOG_LIMIT, body_for_log, redact_urls
 from tesk_core.Util import pprint
 
@@ -119,7 +123,7 @@ def test_upload_passes_timeout(mocker: MockerFixture, tmp_path: Path) -> None:
     put = mocker.patch("requests.put", return_value=_response(200))
     with mock.patch.dict(os.environ, {HTTP_TIMEOUT_ENV: "7"}):
         assert HTTPTransput(str(path), URL, Type.File).upload_file() == 0
-    assert put.call_args.kwargs["timeout"] == 7.0
+    put.assert_called_once_with(URL, data=mock.ANY, timeout=7.0)
 
 
 @pytest.mark.parametrize("method", ["get", "put"])
@@ -294,3 +298,98 @@ def test_pprint_redacts_job_manifest() -> None:
     assert "/transfer" in logged
     # The manifest itself is unchanged
     assert json.dumps(body) == original
+
+
+def test_pprint_json_input_url_fields() -> None:
+    """Test that `url` fields of the task are stripped whole.
+
+    Also URLs that the text pattern can't delimit, e.g., with spaces.
+    """
+    task = {"inputs": [{"url": "https://h.example.org/p?x=a b&sig=SECRETSIG"}]}
+    env = {"name": "JSON_INPUT", "value": json.dumps(task)}
+    logged = pprint({"env": [env], "url": "ftp://u:pw@h.example.org/d?q=1"})
+    assert "SECRETSIG" not in logged
+    assert "pw" not in logged
+    assert "q=1" not in logged
+    assert "https://h.example.org/p" in logged
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"name": ["x"], "value": 1},
+        {"name": "JSON_INPUT", "value": "not json https://h/p?q=SECRET"},
+        {"url": None},
+        {"url": "http://[bad/x?q=SECRET"},
+    ],
+)
+def test_pprint_odd_data(data: dict[str, Any]) -> None:
+    """Test that odd data is redacted without errors.
+
+    Args:
+        data: The data.
+    """
+    assert "SECRET" not in pprint(data)
+
+
+def test_body_for_log_escaped_slashes() -> None:
+    """Test that secrets are redacted also as JSON with escaped slashes."""
+    url = "https://example.org/a?sig=abc%2Fdef%2Bghi"
+    assert "abc" not in body_for_log('{"msg":"bad sig abc\\/def+ghi"}', url)
+
+
+def test_executor_spec_logged_redacted(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that executor manifests reach the debug log only redacted.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    kube = mocker.patch("tesk_core.job.client")
+    create = kube.BatchV1Api.return_value.create_namespaced_job
+    create.side_effect = ApiException(status=500)
+    mocker.patch.object(taskmaster, "args", argparse.Namespace(pod_timeout=1))
+    mocker.patch.object(taskmaster, "created_jobs", [])
+    executor: dict[str, Any] = {
+        "metadata": {"name": "task-ex-00"},
+        "spec": {
+            "template": {
+                "spec": {"containers": [{"command": ["curl", URL], "resources": {}}]}
+            }
+        },
+    }
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(ApiException):
+        taskmaster.run_executor(executor, "ns")
+    create.assert_called_once()
+    assert "https://example.org/bucket/a.txt" in caplog.text
+    assert SIGNATURE not in caplog.text
+
+
+def test_pvc_spec_logged_redacted(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the PVC manifest reaches the debug log redacted.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    pprint_mock = mocker.patch("tesk_core.pvc.pprint", return_value="redacted")
+    claim = PVC.__new__(PVC)
+    claim.spec = {"metadata": {"annotations": {"u": URL}}}
+    claim.namespace = "ns"
+    claim.cv1 = mocker.MagicMock()
+    caplog.set_level(logging.DEBUG)
+    claim.create()
+    pprint_mock.assert_called_once_with(claim.spec)
+    assert SIGNATURE not in caplog.text
+
+
+@mock.patch.dict(os.environ, {HTTP_TIMEOUT_ENV: ""})
+def test_filer_passes_empty_timeout() -> None:
+    """Test that an empty timeout is passed as is; the filer ignores it."""
+    variables = {var["name"]: var["value"] for var in Filer("n", {}).getEnv()}
+    assert variables[HTTP_TIMEOUT_ENV] == ""

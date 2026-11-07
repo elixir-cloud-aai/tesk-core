@@ -86,6 +86,8 @@ def body_for_log(text: str, url: str, limit: int = BODY_LOG_LIMIT) -> str:
     raw = [parts.username or "", parts.password or ""]
     raw += [pair.partition("=")[2] for pair in parts.query.split("&")]
     secrets = set(raw) | {unquote_plus(value) for value in raw}
+    # Also as JSON with escaped slashes, as some servers write it
+    secrets |= {value.replace("/", "\\/") for value in secrets}
     for secret in sorted(secrets, key=len, reverse=True):
         if len(secret) >= MIN_SECRET_LENGTH:
             text = text.replace(secret, "<redacted>")

@@ -32,7 +32,9 @@ change.
 The filer's HTTP(S) requests now time out after 300 seconds without
 progress (connecting, or waiting for the next part of a response or
 upload); before, they could wait forever. Large files still work: the
-timeout doesn't limit the whole transfer. To change it, set
+timeout doesn't limit the whole transfer. For uploads, it also covers the
+time a server takes to answer after the last byte (e.g., to check a large
+file): raise it for such servers. To change it, set
 `FILER_HTTP_TIMEOUT` (seconds) in the taskmaster's environment, e.g. with
 TESK's Helm chart. Slow servers that take longer than that to start a
 response now fail the transfer.

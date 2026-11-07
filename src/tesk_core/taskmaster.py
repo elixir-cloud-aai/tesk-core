@@ -88,8 +88,8 @@ def run_executor(
             ]
         )
     logger.debug("Created job: %s", jobname)
+    # `Job.run_to_completion` logs the manifest, redacted
     job = Job(executor, jobname, namespace)
-    logger.debug("Job spec: %s", job.body)
 
     created_jobs.append(job)
 
