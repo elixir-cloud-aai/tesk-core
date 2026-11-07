@@ -32,7 +32,7 @@ dynamic = ["version"]
 dependencies = [
     # 3.x and 2.x are the supported major versions of boto3 and urllib3
     "boto3>=1.28,<2",
-    "kubernetes>=35.0.0,<36",
+    "kubernetes>=35.0.0,<38",
     "requests>=2.32.4,<3",
     "urllib3>=2.6.0,<3",
 ]
