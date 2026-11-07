@@ -6,6 +6,22 @@ to the filer.
 
 ## Unreleased
 
+### Finished tasks can be deleted after a TTL
+
+The taskmaster's job now owns the task's filer and executor jobs
+(`ownerReferences`), so deleting it deletes them and their pods too. The
+new setting `TASK_TTL_SECONDS` lets Kubernetes delete the taskmaster's job
+that many seconds after it finished (see
+[Taskmaster](taskmaster.md#deleting-finished-tasks)). It is unset by
+default: nothing is deleted, as before. Deleted tasks disappear from the
+TESK API (`ListTasks`, `GetTask`), as TESK keeps no database.
+
+The taskmaster reads its own job for this, with `get` on `jobs`, and sets
+the TTL with `patch` on `jobs`, which the role of TESK's Helm chart already
+grants; deployments with their own role must grant them too. Without them,
+it logs an error and runs the task as before. Jobs of tasks that started
+before the upgrade have no owner, and stay.
+
 ### Filers run only when they have something to stage
 
 The taskmaster runs the inputs filer (`<task>-inputs-filer`) only for tasks

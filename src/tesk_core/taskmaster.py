@@ -52,6 +52,14 @@ job_read_timeout = (5, 10)
 pvc_delete_timeout = (5, 30)
 # The setting that keeps the claim of a task that doesn't complete (`true`)
 keep_failed_pvc_env = "KEEP_FAILED_PVC"
+# The setting with the seconds after which Kubernetes deletes the
+# taskmaster's finished job, and with it the task's jobs; unset, no TTL
+task_ttl_env = "TASK_TTL_SECONDS"
+# The largest TTL that Kubernetes accepts (an int32)
+max_task_ttl = 2**31 - 1
+# References to the taskmaster's job, which owns the jobs that it creates;
+# set by `init_own_job`, none if the job can't be read
+owner_references: list[dict[str, str]] = []
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -117,7 +125,7 @@ def run_executor(
         )
     logger.debug("Created job: %s", jobname)
     # `Job.run_to_completion` logs the manifest, redacted
-    job = Job(executor, jobname, namespace)
+    job = new_job(executor, jobname, namespace)
 
     created_jobs.append(job)
 
@@ -271,7 +279,7 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     if not data["inputs"]:
         return pvc
 
-    filerjob = Job(
+    filerjob = new_job(
         filer.get_spec("inputs", args.debug),
         task_name + "-inputs-filer",
         args.namespace,
@@ -349,7 +357,7 @@ def run_task(
 
     # upload the outputs, if any
     if data["outputs"]:
-        filerjob = Job(
+        filerjob = new_job(
             filer.get_spec("outputs", args.debug),
             task_name + "-outputs-filer",
             args.namespace,
@@ -486,6 +494,10 @@ def main() -> None:
         config.load_kube_config()
     else:
         config.load_incluster_config()
+
+    # Before any job is created, and also for a task cancelled now, so that
+    # its job gets its TTL
+    init_own_job()
 
     # Known before the claim is created, so that a task cancelled now also
     # deletes the claim that an earlier attempt of this pod left behind
@@ -626,11 +638,8 @@ def is_job_cancelled(job_name: str) -> bool:
     Returns:
         Whether the job has the cancel label.
     """
-    global batch_api  # noqa: PLW0603 -- one client for all polls
-    if batch_api is None:
-        batch_api = client.BatchV1Api()
     try:
-        job = batch_api.read_namespaced_job(
+        job = get_batch_api().read_namespaced_job(
             job_name, args.namespace, _request_timeout=job_read_timeout
         )
     except (ApiException, HTTPError) as ex:
@@ -657,10 +666,138 @@ def check_cancelled() -> bool:
     if labels.get(cancel_label) == cancel_value:
         return True
 
-    job_name = next((labels[key] for key in job_name_labels if key in labels), None)
+    job_name = own_job_name(labels)
     if job_name is None:
         return False
     return is_job_cancelled(job_name)
+
+
+def get_batch_api() -> client.BatchV1Api:
+    """Get the client that reads and patches the taskmaster's job.
+
+    Created at the first call, after the Kubernetes configuration is loaded,
+    and reused by later calls.
+
+    Returns:
+        The client.
+    """
+    global batch_api  # noqa: PLW0603 -- one client for all polls
+    if batch_api is None:
+        batch_api = client.BatchV1Api()
+    return batch_api
+
+
+def own_job_name(labels: dict[str, str]) -> str | None:
+    """Get the name of the taskmaster's job from the labels of its pod.
+
+    Args:
+        labels: The labels of the taskmaster's pod (`read_pod_labels`).
+
+    Returns:
+        The name, or none if no label has it (e.g. outside a pod).
+    """
+    return next((labels[key] for key in job_name_labels if key in labels), None)
+
+
+def task_ttl_seconds() -> int | None:
+    """Get the TTL of the taskmaster's job from `TASK_TTL_SECONDS`.
+
+    Returns:
+        The seconds after which Kubernetes deletes the finished job: a whole
+        number from 0 to `max_task_ttl`. None if the setting is unset or
+        empty, or invalid, which is logged.
+    """
+    raw = os.environ.get(task_ttl_env, "")
+    value = raw.strip()
+    if not value:
+        return None
+    if value.isascii() and value.isdigit() and int(value) <= max_task_ttl:
+        return int(value)
+    logger.error(
+        "Ignoring %s=%r: not a whole number of seconds from 0 to %d; no TTL",
+        task_ttl_env,
+        raw,
+        max_task_ttl,
+    )
+    return None
+
+
+def init_own_job() -> None:
+    """Make the taskmaster's job own the task's jobs, and set its TTL.
+
+    Reads the taskmaster's job, so that the jobs that the taskmaster creates
+    (`new_job`) get an owner reference to it: Kubernetes deletes them, and
+    their pods, with it. With `TASK_TTL_SECONDS`, sets the job's
+    `ttlSecondsAfterFinished`, so that Kubernetes deletes it that many
+    seconds after it finished. Errors are logged, not raised: the task runs
+    without owner references or TTL, as before.
+    """
+    global owner_references  # noqa: PLW0603 -- module state of the run
+    ttl = task_ttl_seconds()
+    job_name = own_job_name(read_pod_labels())
+    if job_name is None:
+        logger.debug("No job name in the pod's labels; jobs get no owner")
+        return
+
+    api = get_batch_api()
+    try:
+        job = api.read_namespaced_job(
+            job_name, args.namespace, _request_timeout=job_read_timeout
+        )
+    except (ApiException, HTTPError) as ex:
+        logger.error(
+            "Can't read job '%s'; the task's jobs get no owner and no TTL: %s",
+            job_name,
+            f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else ex,
+        )
+        return
+    owner_references = [
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "name": job.metadata.name,
+            "uid": job.metadata.uid,
+        }
+    ]
+
+    if ttl is None:
+        return
+    try:
+        api.patch_namespaced_job(
+            job_name,
+            args.namespace,
+            {"spec": {"ttlSecondsAfterFinished": ttl}},
+            _request_timeout=job_read_timeout,
+        )
+    except (ApiException, HTTPError) as ex:
+        logger.error(
+            "Can't set the TTL of job '%s': %s",
+            job_name,
+            f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else ex,
+        )
+
+
+def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Job:
+    """Describe a job of the task, owned by the taskmaster's job.
+
+    Adds the owner references of `init_own_job` to those of the manifest,
+    if it doesn't have them yet (the filer's manifest is reused).
+
+    Args:
+        body: The manifest of the job, changed in place.
+        name: Name of the job.
+        namespace: Namespace of the job; that of the taskmaster if none.
+
+    Returns:
+        The job, not created yet.
+    """
+    if owner_references:
+        refs = body["metadata"]["ownerReferences"] = (
+            body["metadata"].get("ownerReferences") or []
+        )
+        uids = {ref.get("uid") for ref in refs}
+        refs.extend(ref for ref in owner_references if ref["uid"] not in uids)
+    return Job(body, name, args.namespace if namespace is None else namespace)
 
 
 if __name__ == "__main__":
