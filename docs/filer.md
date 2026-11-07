@@ -15,8 +15,9 @@ in the environment variable `JSON_INPUT`). The filer processes the entries of
 `inputs` or `outputs` one after another, and stops with exit code 1 at the
 first that fails. `-d` turns on debug logging. The filer's own log messages
 show URLs without their query strings (e.g. the parameters of a presigned
-URL) and user info (`user:password@`); response bodies logged on errors are
-shown as received.
+URL) and user info (`user:password@`). Response bodies of HTTP errors are
+logged in the same way, with the query values and user info of the request
+redacted wherever they appear, and cut after 1000 characters.
 
 Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
@@ -36,9 +37,16 @@ writes to `path`. The scheme of the URL selects the protocol.
 Inputs are downloaded with `GET`. Outputs are uploaded with `PUT`, as bytes,
 streamed from disk: a directory is uploaded file by file (stopping at the
 first that fails), each to the directory's URL plus the escaped file name
-(the query of the URL, e.g. a token of a presigned URL, is kept). Any status other than 2xx fails the
-transfer, as does a request error (e.g. a failed connection), which is logged
-with its type. Credentials can come from a `.netrc` file (see
+(the query of the URL, e.g. a token of a presigned URL, is kept). Any status
+other than 2xx fails the transfer, as does a request error (e.g. a failed
+connection or a timeout), which is logged with its type.
+
+Requests time out after `FILER_HTTP_TIMEOUT` seconds (default 300) without
+progress: when connecting, and between the parts of a response or upload,
+not for the whole transfer, so large files work. The taskmaster passes the
+variable on from its own environment; an empty value counts as unset, and an
+invalid one (not a positive number) is logged once and replaced by the
+default. Credentials can come from a `.netrc` file (see
 [Credentials from `.netrc`](#credentials-from-netrc)), which `requests`
 reads for the URL's host.
 

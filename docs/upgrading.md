@@ -27,6 +27,20 @@ upgrade:
 Deployments without these credentials, or with a `.netrc` file, need no
 change.
 
+### HTTP(S) timeout
+
+The filer's HTTP(S) requests now time out after 300 seconds without
+progress (connecting, or waiting for the next part of a response or
+upload); before, they could wait forever. Large files still work: the
+timeout doesn't limit the whole transfer. To change it, set
+`FILER_HTTP_TIMEOUT` (seconds) in the taskmaster's environment, e.g. with
+TESK's Helm chart. Slow servers that take longer than that to start a
+response now fail the transfer.
+
+Also, HTTP error bodies in the filer's log are cut after 1000 characters,
+and job manifests in the taskmaster's debug log show URLs without queries
+and user info, and no FTP credentials.
+
 ### FTP URLs with a port
 
 The filer now connects to FTP URLs with a port (e.g.

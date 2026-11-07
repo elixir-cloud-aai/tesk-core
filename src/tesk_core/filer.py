@@ -14,6 +14,7 @@ from glob import glob
 import gzip
 import json
 import logging
+import math
 import netrc
 import os
 import re
@@ -27,7 +28,7 @@ import requests
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, getPath
-from tesk_core.transput import Transput, Type, url_for_log
+from tesk_core.transput import Transput, Type, body_for_log, url_for_log
 
 
 def http_join(url: str, name: str) -> str:
@@ -50,8 +51,65 @@ def http_join(url: str, name: str) -> str:
     return urlunsplit(parts._replace(path=path))
 
 
+# Seconds that the filer waits to connect to an HTTP(S) server, and for each
+# read from it: not a limit on the whole transfer, so large files work
+HTTP_TIMEOUT_ENV = "FILER_HTTP_TIMEOUT"
+HTTP_TIMEOUT_DEFAULT = 300.0
+
+
+@functools.cache
+def log_invalid_http_timeout() -> None:
+    """Log, once per process, that the HTTP timeout is invalid."""
+    logging.error(
+        "%s must be a positive number of seconds; using %g",
+        HTTP_TIMEOUT_ENV,
+        HTTP_TIMEOUT_DEFAULT,
+    )
+
+
+def http_timeout() -> float:
+    """Get the timeout of HTTP(S) requests.
+
+    From `FILER_HTTP_TIMEOUT`, in seconds, for connecting and for each read;
+    the default if it is unset, empty or invalid (logged once).
+
+    Returns:
+        The timeout, in seconds.
+    """
+    value = os.environ.get(HTTP_TIMEOUT_ENV, "").strip()
+    if not value:
+        return HTTP_TIMEOUT_DEFAULT
+    try:
+        timeout = float(value)
+    except ValueError:
+        timeout = math.nan
+    if not math.isfinite(timeout) or timeout <= 0:
+        log_invalid_http_timeout()
+        return HTTP_TIMEOUT_DEFAULT
+    return timeout
+
+
 class HTTPTransput(Transput):
     """Transfer of an input or output over HTTP(S)."""
+
+    def _status_ok(self, req: requests.Response) -> bool:
+        """Check the status of a response, and log it if it isn't 2xx.
+
+        The body of an error is logged prepared by `body_for_log`.
+
+        Args:
+            req: The response.
+
+        Returns:
+            Whether the status is 2xx.
+        """
+        if req.status_code < 200 or req.status_code >= 300:
+            logging.error("Got status code: %d", req.status_code)
+            if req.text:
+                logging.error("Response body: %s", body_for_log(req.text, self.url))
+            return False
+        logging.debug("OK, got status code: %d", req.status_code)
+        return True
 
     def _request_failed(self, err: Exception) -> int:
         """Log a failed request.
@@ -75,16 +133,12 @@ class HTTPTransput(Transput):
             0 on success, otherwise 1.
         """
         try:
-            # No timeout, as before; transfers of large files can take long
-            req = requests.get(self.url)  # noqa: S113 -- see above
+            req = requests.get(self.url, timeout=http_timeout())
         except requests.exceptions.RequestException as err:
             return self._request_failed(err)
 
-        if req.status_code < 200 or req.status_code >= 300:
-            logging.error("Got status code: %d", req.status_code)
-            logging.error(req.text)
+        if not self._status_ok(req):
             return 1
-        logging.debug("OK, got status code: %d", req.status_code)
 
         with open(self.path, "wb") as file:
             file.write(req.content)
@@ -103,17 +157,12 @@ class HTTPTransput(Transput):
         with open(self.path, "rb") as file:
             data = file if os.fstat(file.fileno()).st_size > 0 else b""
             try:
-                # No timeout, as before; uploads of large files can take long
-                req = requests.put(self.url, data=data)  # noqa: S113 -- see above
+                req = requests.put(self.url, data=data, timeout=http_timeout())
             except requests.exceptions.RequestException as err:
                 return self._request_failed(err)
 
-        if req.status_code < 200 or req.status_code >= 300:
-            logging.error("Got status code: %d", req.status_code)
-            logging.error(req.text)
+        if not self._status_ok(req):
             return 1
-        logging.debug("OK, got status code: %d", req.status_code)
-
         return 0
 
     def upload_dir(self) -> int:

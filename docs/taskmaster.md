@@ -71,7 +71,7 @@ development and debugging.
 | `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
 | `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
 | `-pt`, `--pod-timeout` | `240` | Seconds after which a pod that can't pull its image fails its job (see above). |
-| `-d`, `--debug` | off | Debug logging, also of the filer. |
+| `-d`, `--debug` | off | Debug logging, also of the filer. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
 
@@ -89,6 +89,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 |---|---|
 | `EXECUTOR_BACKOFF_LIMIT` | Retries of each executor's job (`backoffLimit`); 0 if unset, unless the TESK API sets a limit in the job. |
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
+| `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests, in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
 | `TESK_FTP_HOSTS` | Hosts that the filer sends the FTP credentials to, passed on to the filer with them (see [Filer](filer.md#ftp)). |

@@ -4,9 +4,10 @@ import enum
 import logging
 import netrc
 import os
+import re
 from types import TracebackType
 from typing import Literal
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote_plus, urlparse, urlsplit, urlunsplit
 
 
 def url_for_log(url: str) -> str:
@@ -24,6 +25,73 @@ def url_for_log(url: str) -> str:
     parts = urlsplit(url)
     netloc = parts.netloc.rpartition("@")[2]
     return urlunsplit(parts._replace(netloc=netloc, query=""))
+
+
+# URLs in free text: a scheme, `://`, and anything up to whitespace, quotes
+# or angle brackets
+URL_IN_TEXT = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
+# Characters of HTTP error bodies logged at most
+BODY_LOG_LIMIT = 1000
+# Query values shorter than this are not redacted from bodies: replacing,
+# e.g., every "1" would garble the body and hide nothing
+MIN_SECRET_LENGTH = 4
+
+
+def redact_urls(text: str) -> str:
+    """Strip the URLs in a text for log messages (see `url_for_log`).
+
+    Args:
+        text: The text, e.g., a job manifest or a response body.
+
+    Returns:
+        The text with each URL stripped; `<URL>` for URLs that can't be
+        parsed.
+    """
+
+    def strip(match: re.Match[str]) -> str:
+        """Strip one URL.
+
+        Args:
+            match: The URL.
+
+        Returns:
+            The stripped URL, or `<URL>`.
+        """
+        try:
+            return url_for_log(match.group(0))
+        except ValueError:
+            return "<URL>"
+
+    return URL_IN_TEXT.sub(strip, text)
+
+
+def body_for_log(text: str, url: str, limit: int = BODY_LOG_LIMIT) -> str:
+    """Prepare the body of an HTTP response for log messages.
+
+    Strips the URLs in the body (see `redact_urls`), redacts the query
+    values and user information of the request's URL wherever else they
+    appear (e.g., a signature that an error repeats), and cuts the body at
+    `limit`.
+
+    Args:
+        text: The body.
+        url: The URL of the request.
+        limit: The number of characters kept.
+
+    Returns:
+        The body for log messages.
+    """
+    text = redact_urls(text)
+    parts = urlsplit(url)
+    raw = [parts.username or "", parts.password or ""]
+    raw += [pair.partition("=")[2] for pair in parts.query.split("&")]
+    secrets = set(raw) | {unquote_plus(value) for value in raw}
+    for secret in sorted(secrets, key=len, reverse=True):
+        if len(secret) >= MIN_SECRET_LENGTH:
+            text = text.replace(secret, "<redacted>")
+    if len(text) > limit:
+        return f"{text[:limit]}... ({len(text) - limit} more characters)"
+    return text
 
 
 @enum.unique
