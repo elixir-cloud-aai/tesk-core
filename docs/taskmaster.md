@@ -24,7 +24,7 @@ the taskmaster stops without running the remaining jobs, keeps the PVC, and
 exits with code 0. The TESK API derives the task's state from the jobs, not
 from the taskmaster's exit code: an executor job that failed gives
 `EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
-keeps every job that failed, with its pods and their logs.
+keeps the jobs that failed, with the logs of their pods that ended.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
@@ -33,20 +33,27 @@ complete with `Complete` or `SuccessCriteriaMet`. Other conditions, e.g.
 
 If a pod of a job can't pull its image (`ImagePullBackOff`) for longer than
 `--pod-timeout`, the taskmaster fails the job: it sets the job's
-`activeDeadlineSeconds` to 1 second, so that Kubernetes stops the job's pods
-and marks the job `Failed` with the reason `DeadlineExceeded`, and then
-handles it like any job that failed. Pods that stay pending for other
-reasons don't time out.
+`activeDeadlineSeconds` to 1 second, so that Kubernetes deletes the job's
+active pods and marks the job `Failed` with the reason `DeadlineExceeded`
+(the pod's events show why it couldn't start). The taskmaster then handles it
+like any job that failed; if Kubernetes hasn't marked the job within another
+`--pod-timeout`, it stops anyway. If the taskmaster can't change the job
+(e.g., its role lacks `patch` on jobs), it deletes the job, as earlier
+releases did. Pods that stay pending for other reasons don't time out.
 
 Executor jobs aren't retried (`backoffLimit: 0`), so that the state and logs
 are those of the executor's only run; `EXECUTOR_BACKOFF_LIMIT` sets another
-limit.
+limit. Pods that Kubernetes disrupts, e.g. evicts from a drained node, are
+replaced and don't fail the job: executor jobs with the restart policy
+`Never` (as the TESK API creates them) get a pod failure policy that ignores
+the condition `DisruptionTarget`, unless they have a pod failure policy of
+their own. Kubernetes supports pod failure policies from 1.26 on.
 
 To cancel a task, the TESK API labels the taskmaster's pod: the taskmaster
 reads its labels from `/podinfo/labels` (a Kubernetes downward API volume)
 while it polls, and when it finds the value `Cancelled`, it deletes the
-running job, also one that it is failing, and stops. Cancellation is the
-only case in which the taskmaster deletes a job.
+running job, also one that it is failing, and stops. If the taskmaster is
+interrupted (`SIGINT`), it deletes the jobs it created.
 
 ## Options
 

@@ -176,7 +176,7 @@ def test_pvc_failure(
         init_pvc(data, filer)
 
 
-@pytest.mark.parametrize("status", ["Failed", "Error", "Cancelled"])
+@pytest.mark.parametrize("status", ["Failed", "Cancelled"])
 @patch("tesk_core.taskmaster.PVC.delete")
 @patch("tesk_core.taskmaster.Job.delete")
 @patch("tesk_core.taskmaster.Job.run_to_completion")
@@ -189,15 +189,72 @@ def test_run_executor_failure(
     status: str,
     data: dict[str, Any],
 ) -> None:
-    """Test that a failed executor exits with code 0 and keeps its job.
+    """Test that a failed executor exits with code 0 and keeps its job and PVC.
 
     The TESK API reads the state and the logs of the executor from the job.
+    `run_to_completion` itself deletes the job of a cancelled task.
     """
     mock_run_to_compl.return_value = status
     with pytest.raises(SystemExit) as exit_info:
         run_executor(data["executors"][0], taskmaster.args.namespace)
     assert exit_info.value.code == 0
     mock_job_delete.assert_not_called()
+    mock_pvc_delete.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (
+            {"restartPolicy": "Never"},
+            {
+                "rules": [
+                    {
+                        "action": "Ignore",
+                        "onPodConditions": [{"type": "DisruptionTarget"}],
+                    }
+                ]
+            },
+        ),
+        ({"restartPolicy": "OnFailure"}, None),
+        ({}, None),
+    ],
+)
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.logger")
+def test_run_executor_pod_failure_policy(
+    mock_logger: MagicMock,
+    mock_run_to_compl: MagicMock,
+    spec: dict[str, str],
+    expected: dict[str, Any] | None,
+    data: dict[str, Any],
+) -> None:
+    """Test that disrupted executor pods (e.g., evicted) don't fail the job.
+
+    Kubernetes allows a pod failure policy only with `restartPolicy: Never`;
+    a policy of the job is kept.
+    """
+    executor = data["executors"][0]
+    pod_spec = executor["spec"]["template"]["spec"]
+    pod_spec.pop("restartPolicy", None)
+    pod_spec.pop("restart_policy", None)
+    pod_spec.update(spec)
+    run_executor(executor, taskmaster.args.namespace)
+    assert executor["spec"].get("podFailurePolicy") == expected
+
+
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.logger")
+def test_run_executor_keeps_pod_failure_policy(
+    mock_logger: MagicMock, mock_run_to_compl: MagicMock, data: dict[str, Any]
+) -> None:
+    """Test that the pod failure policy of an executor's job is kept."""
+    executor = data["executors"][0]
+    executor["spec"]["template"]["spec"]["restartPolicy"] = "Never"
+    policy = {"rules": [{"action": "FailJob", "onExitCodes": {"values": [1]}}]}
+    executor["spec"]["podFailurePolicy"] = policy
+    run_executor(executor, taskmaster.args.namespace)
+    assert executor["spec"]["podFailurePolicy"] == policy
 
 
 @pytest.mark.parametrize(

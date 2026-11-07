@@ -30,8 +30,8 @@ class Job:
         cv1: Client of the Kubernetes core API.
         timeout: Seconds after which pods that can't pull their image fail
             the job.
-        failing: Whether the job was failed (`fail`) and waits for
-            Kubernetes to mark it `Failed`.
+        failing_since: When the job was failed (`fail`), to wait for
+            Kubernetes to mark it `Failed`; `None` before.
         body: The manifest of the job.
     """
 
@@ -51,7 +51,7 @@ class Job:
         self.bv1 = client.BatchV1Api()
         self.cv1 = client.CoreV1Api()
         self.timeout = 240
-        self.failing = False
+        self.failing_since: datetime | None = None
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -105,7 +105,7 @@ class Job:
 
         A pod that can't pull its image (`ImagePullBackOff`) for longer than
         `timeout` fails the job (`fail`); the job runs until Kubernetes marks
-        it `Failed`.
+        it `Failed`, for at most another `timeout`.
 
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
@@ -130,7 +130,15 @@ class Job:
             if condition.type in JOB_FAILED_CONDITIONS:
                 self.status = "Failed"
                 break
-        if self.status != "Running" or self.failing:
+        if self.status != "Running":
+            return self.status, is_all_pods_runnning
+        if self.failing_since is not None:
+            waited = (datetime.now(timezone.utc) - self.failing_since).total_seconds()
+            if waited > self.timeout:
+                logging.warning(
+                    "Job '%s' wasn't marked failed within %s s", self.name, self.timeout
+                )
+                self.status = "Failed"
             return self.status, is_all_pods_runnning
 
         job_duration = 0.0
@@ -157,25 +165,45 @@ class Job:
                         == "ImagePullBackOff"
                     ):
                         logging.info(pod.status.container_statuses[0].state.waiting)
-                        self.fail()
+                        if not self.fail():
+                            self.status = "Failed"
                         break
 
         return self.status, is_all_pods_runnning
 
-    def fail(self) -> None:
-        """Fail the job, and keep it and its pods.
+    def fail(self) -> bool:
+        """Fail the job, and keep it.
 
-        Sets an active deadline that has passed, so that Kubernetes stops the
-        job's pods and marks it `Failed` with the reason `DeadlineExceeded`.
+        Sets an active deadline that has passed, so that Kubernetes deletes
+        the job's active pods and marks the job `Failed` with the reason
+        `DeadlineExceeded`. If the job can't be changed, it is deleted
+        instead, as it can't be left waiting.
+
+        Returns:
+            Whether the job was changed; if not, it was deleted, or that
+            failed too (both errors are logged).
         """
         logging.info("Failing job '%s': its pod can't start", self.name)
-        self.bv1.patch_namespaced_job(
-            self.name, self.namespace, {"spec": {"activeDeadlineSeconds": 1}}
-        )
-        self.failing = True
+        try:
+            self.bv1.patch_namespaced_job(
+                self.name, self.namespace, {"spec": {"activeDeadlineSeconds": 1}}
+            )
+        except ApiException as ex:
+            logging.error("Can't fail job '%s' (%s); deleting it", self.name, ex.status)
+            try:
+                self.delete()
+            except ApiException as delete_ex:
+                logging.error("Can't delete job '%s' (%s)", self.name, delete_ex.status)
+            return False
+        self.failing_since = datetime.now(timezone.utc)
+        return True
 
     def delete(self) -> None:
-        """Delete the job and, in the background, its pods (on cancellation)."""
+        """Delete the job and, in the background, its pods.
+
+        Only on cancellation, on an interrupt of the taskmaster, and if a job
+        can't be failed (`fail`).
+        """
         logging.info("Deleting job '%s'", self.name)
         self.bv1.delete_namespaced_job(
             self.name,
