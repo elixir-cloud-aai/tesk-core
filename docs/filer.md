@@ -17,7 +17,8 @@ first that fails. `-d` turns on debug logging. The filer's own log messages
 show URLs without their query strings (e.g. the parameters of a presigned
 URL) and user info (`user:password@`). Response bodies of HTTP errors are
 logged in the same way, with the query values and user info of the request
-redacted wherever they appear, and cut after 1000 characters.
+(and of redirects) and `.netrc` credentials redacted wherever they appear
+(values of at least 4 characters), and cut after 1000 characters.
 
 Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
@@ -45,8 +46,8 @@ Requests time out after `FILER_HTTP_TIMEOUT` seconds (default 300) without
 progress: when connecting, and between the parts of a response or upload,
 not for the whole transfer, so large files work. The taskmaster passes the
 variable on from its own environment; an empty value counts as unset, and an
-invalid one (not a positive number) is logged once and replaced by the
-default. Credentials can come from a `.netrc` file (see
+invalid one (not a positive number of at most 1000000) is logged once and
+replaced by the default. Credentials can come from a `.netrc` file (see
 [Credentials from `.netrc`](#credentials-from-netrc)), which `requests`
 reads for the URL's host.
 

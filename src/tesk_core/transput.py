@@ -1,5 +1,6 @@
 """Base class of the filer's transfers."""
 
+from collections.abc import Iterable
 import enum
 import logging
 import netrc
@@ -65,26 +66,39 @@ def redact_urls(text: str) -> str:
     return URL_IN_TEXT.sub(strip, text)
 
 
-def body_for_log(text: str, url: str, limit: int = BODY_LOG_LIMIT) -> str:
+def body_for_log(
+    text: str,
+    *urls: str,
+    secrets: Iterable[str] = (),
+    limit: int = BODY_LOG_LIMIT,
+) -> str:
     """Prepare the body of an HTTP response for log messages.
 
     Strips the URLs in the body (see `redact_urls`), redacts the query
-    values and user information of the request's URL wherever else they
-    appear (e.g., a signature that an error repeats), and cuts the body at
-    `limit`.
+    values and user information of the request's URLs, and other secrets
+    (e.g., credentials from `.netrc`), wherever else they appear (e.g., a
+    signature that an error repeats), and cuts the body at `limit`. Values
+    shorter than `MIN_SECRET_LENGTH` are kept.
 
     Args:
         text: The body.
-        url: The URL of the request.
+        *urls: The URLs of the request: as given, as sent (normalized), and
+            those of redirects.
+        secrets: More values to redact.
         limit: The number of characters kept.
 
     Returns:
         The body for log messages.
     """
     text = redact_urls(text)
-    parts = urlsplit(url)
-    raw = [parts.username or "", parts.password or ""]
-    raw += [pair.partition("=")[2] for pair in parts.query.split("&")]
+    raw = list(secrets)
+    for url in urls:
+        try:
+            parts = urlsplit(url)
+            raw += [parts.username or "", parts.password or ""]
+        except ValueError:
+            parts = urlsplit("")
+        raw += [pair.partition("=")[2] for pair in parts.query.split("&")]
     secrets = set(raw) | {unquote_plus(value) for value in raw}
     # Also as JSON with escaped slashes, as some servers write it
     secrets |= {value.replace("/", "\\/") for value in secrets}

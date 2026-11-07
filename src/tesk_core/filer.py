@@ -6,6 +6,7 @@ JSON file (`*.gz`).
 """
 
 import argparse
+import base64
 from collections.abc import Callable
 import ftplib
 from ftplib import FTP
@@ -55,6 +56,8 @@ def http_join(url: str, name: str) -> str:
 # read from it: not a limit on the whole transfer, so large files work
 HTTP_TIMEOUT_ENV = "FILER_HTTP_TIMEOUT"
 HTTP_TIMEOUT_DEFAULT = 300.0
+# Longer timeouts (about 11 days) are invalid: sockets can't take any length
+HTTP_TIMEOUT_MAX = 1_000_000.0
 
 
 @functools.cache
@@ -83,10 +86,33 @@ def http_timeout() -> float:
         timeout = float(value)
     except ValueError:
         timeout = math.nan
-    if not math.isfinite(timeout) or timeout <= 0:
+    if not math.isfinite(timeout) or not 0 < timeout <= HTTP_TIMEOUT_MAX:
         log_invalid_http_timeout()
         return HTTP_TIMEOUT_DEFAULT
     return timeout
+
+
+def netrc_secrets(url: str) -> list[str]:
+    """Get the `.netrc` credentials that `requests` sends to a URL.
+
+    For redacting them from log messages: the user name, the password, and
+    both as a Basic authorization value.
+
+    Args:
+        url: The URL.
+
+    Returns:
+        The credentials, as sent; empty without any.
+    """
+    try:
+        auth = requests.utils.get_netrc_auth(url)
+    except Exception:
+        return []
+    if not auth:
+        return []
+    user, password = auth
+    basic = base64.b64encode(f"{user}:{password}".encode()).decode()
+    return [user, password, basic]
 
 
 class HTTPTransput(Transput):
@@ -106,7 +132,16 @@ class HTTPTransput(Transput):
         if req.status_code < 200 or req.status_code >= 300:
             logging.error("Got status code: %d", req.status_code)
             if req.text:
-                logging.error("Response body: %s", body_for_log(req.text, self.url))
+                sent = [req.url, *(item.url for item in req.history)]
+                urls = [self.url, *(url for url in sent if url)]
+                logging.error(
+                    "Response body: %s",
+                    body_for_log(
+                        req.text,
+                        *urls,
+                        secrets=[s for url in urls for s in netrc_secrets(url)],
+                    ),
+                )
             return False
         logging.debug("OK, got status code: %d", req.status_code)
         return True

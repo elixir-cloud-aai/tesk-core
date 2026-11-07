@@ -1,6 +1,7 @@
 """Tests for the timeout of the filer's HTTP requests and its log messages."""
 
 import argparse
+import base64
 from collections.abc import Iterator
 import json
 import logging
@@ -23,6 +24,7 @@ from tesk_core.filer import (
     Type,
     http_timeout,
     log_invalid_http_timeout,
+    netrc_secrets,
 )
 from tesk_core.filer_class import Filer
 from tesk_core.pvc import PVC
@@ -82,7 +84,9 @@ def test_http_timeout(value: str | None, expected: float) -> None:
         assert http_timeout() == expected
 
 
-@pytest.mark.parametrize("value", ["abc", "0", "-1", "inf", "nan", "1e999"])
+@pytest.mark.parametrize(
+    "value", ["abc", "0", "-1", "inf", "nan", "1e999", "1e300", "1000001"]
+)
 def test_http_timeout_invalid(value: str, caplog: pytest.LogCaptureFixture) -> None:
     """Test that an invalid timeout falls back to the default, logged once.
 
@@ -392,3 +396,52 @@ def test_filer_passes_empty_timeout() -> None:
     """Test that an empty timeout is passed as is; the filer ignores it."""
     variables = {var["name"]: var["value"] for var in Filer("n", {}).getEnv()}
     assert variables[HTTP_TIMEOUT_ENV] == ""
+
+
+def test_error_body_redacts_redirect_and_netrc(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that error bodies hide secrets of redirects and from `.netrc`.
+
+    Args:
+        mocker: The mocker fixture.
+        tmp_path: The temporary directory of the test.
+        caplog: The log capture fixture.
+        monkeypatch: The fixture that sets the environment.
+    """
+    netrc_path = tmp_path / ".netrc"
+    netrc_path.write_text("machine example.org login netuser password netpass1\n")
+    netrc_path.chmod(0o600)
+    monkeypatch.setenv("NETRC", str(netrc_path))
+    basic = base64.b64encode(b"netuser:netpass1").decode()
+    body = f"token REDIRECTTOKEN user netuser pass netpass1 auth Basic {basic}"
+    redirect = _response(302)
+    redirect.url = "https://other.example.org/x?t=REDIRECTTOKEN"
+    resp = _response(403, body.encode())
+    resp.url = "https://example.org/x"
+    resp.history = [redirect]
+    mocker.patch("requests.get", return_value=resp)
+    HTTPTransput(
+        str(tmp_path / "a"), "https://example.org/x", Type.File
+    ).download_file()
+    assert "Response body" in caplog.text
+    for secret in ("REDIRECTTOKEN", "netuser", "netpass1", basic):
+        assert secret not in caplog.text
+
+
+def test_netrc_secrets_error(mocker: MockerFixture) -> None:
+    """Test that errors reading `.netrc` don't fail the transfer's logging.
+
+    Args:
+        mocker: The mocker fixture.
+    """
+    mocker.patch("requests.utils.get_netrc_auth", side_effect=OSError)
+    assert netrc_secrets("https://example.org/") == []
+
+
+def test_body_for_log_bad_url() -> None:
+    """Test that URLs that can't be parsed don't fail the redaction."""
+    assert body_for_log("body", "http://[bad") == "body"
