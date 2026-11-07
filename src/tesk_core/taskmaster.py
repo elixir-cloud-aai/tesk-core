@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
+from urllib3.exceptions import HTTPError
 
 from tesk_core.filer_class import Filer
 from tesk_core.job import Job
@@ -34,6 +35,9 @@ cancel_value = "Cancelled"
 # The labels with the name of the job that created a pod: the first since
 # Kubernetes 1.27, the second also before
 job_name_labels = ("batch.kubernetes.io/job-name", "job-name")
+# Reads the taskmaster's job; created at the first check, after the
+# Kubernetes configuration is loaded, and reused at every poll
+batch_api: client.BatchV1Api | None = None
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -476,8 +480,10 @@ def read_pod_labels() -> dict[str, str]:
 def is_job_cancelled(job_name: str) -> bool:
     """Tell whether the TESK API labelled the taskmaster's job as cancelled.
 
-    An error reading the job is logged, and counts as not cancelled: the job
-    is read again at the next check.
+    An error reading the job (also when it doesn't exist) is logged, and
+    counts as not cancelled: the job is read again at the next check. A
+    missing job doesn't stop the taskmaster, so that a wrong namespace can't
+    cancel every task.
 
     Args:
         job_name: The name of the taskmaster's job.
@@ -485,8 +491,11 @@ def is_job_cancelled(job_name: str) -> bool:
     Returns:
         Whether the job has the cancel label.
     """
+    global batch_api  # noqa: PLW0603 -- one client for all polls
+    if batch_api is None:
+        batch_api = client.BatchV1Api()
     try:
-        job = client.BatchV1Api().read_namespaced_job(job_name, args.namespace)
+        job = batch_api.read_namespaced_job(job_name, args.namespace)
     except ApiException as ex:
         logger.warning(
             "Can't read job '%s' to check for cancellation: %s %s",
@@ -495,8 +504,14 @@ def is_job_cancelled(job_name: str) -> bool:
             ex.reason,
         )
         return False
+    except HTTPError as ex:
+        logger.warning(
+            "Can't read job '%s' to check for cancellation: %s", job_name, ex
+        )
+        return False
     job_labels = job.metadata.labels or {}
-    return bool(job_labels.get(cancel_label) == cancel_value)
+    cancelled: bool = job_labels.get(cancel_label) == cancel_value
+    return cancelled
 
 
 def check_cancelled() -> bool:

@@ -74,9 +74,14 @@ from the Kubernetes API (the job's name is in the pod's `job-name` label). A
 task that was cancelled while its taskmaster's pod was pending, or before the
 pod existed, has the label only on its job; its taskmaster stops before it
 creates any job. When the taskmaster finds the label while a job runs, it
-deletes that job, also one that it is failing, and stops. If it can't read
-its job, it logs a warning and checks again at the next poll. If the
-taskmaster is interrupted (`SIGINT`), it deletes the jobs it created.
+deletes that job, also one that it is failing, and stops. Reading the job
+adds one `get` request per poll, which needs `get` on `jobs` for the
+taskmaster's service account (granted by the role of TESK's Helm chart,
+`charts/tesk/templates/common/taskmaster-rbac.yaml`). If the taskmaster
+can't read its job, also if the job doesn't exist, it logs a warning and
+checks again at the next poll. Without `/podinfo/labels` (e.g. when run by
+hand), it doesn't check for cancellation at all. If the taskmaster is
+interrupted (`SIGINT`), it deletes the jobs it created.
 
 ## Options
 

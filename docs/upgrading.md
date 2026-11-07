@@ -13,7 +13,8 @@ existed, used to run to its end, although the TESK API reported it as
 `CANCELED`: the TESK API labels only a running pod. The taskmaster now also
 reads the cancel label of its own job from the Kubernetes API, and stops
 before it creates any job. This needs `get` on `jobs` for the taskmaster's
-service account, which TESK's Helm chart grants; deployments with their own
+service account, which the role of TESK's Helm chart grants
+(`charts/tesk/templates/common/taskmaster-rbac.yaml`); deployments with their own
 role must grant it too. Without it, the taskmaster logs a warning at every
 poll and stops only on the pod's label, as before. Only the label
 `task-status: Cancelled` cancels a task now, not any label with the value

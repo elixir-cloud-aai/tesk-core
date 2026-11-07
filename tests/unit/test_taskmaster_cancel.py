@@ -1,14 +1,16 @@
 """Tests for how the taskmaster finds out that its task was cancelled."""
 
 from argparse import Namespace
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from kubernetes.client.rest import ApiException
 import pytest
+from urllib3.exceptions import MaxRetryError
 
 from tesk_core import taskmaster
-from tesk_core.taskmaster import check_cancelled, main
+from tesk_core.taskmaster import check_cancelled, main, read_pod_labels
 
 # As the Downward API writes them: one `key="value"` per line, sorted by key,
 # without a newline after the last line
@@ -27,6 +29,7 @@ def labels_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         The path of the labels file, which doesn't exist yet.
     """
     monkeypatch.setattr(taskmaster, "args", Namespace(namespace="tesk"))
+    monkeypatch.setattr(taskmaster, "batch_api", None)
     path = tmp_path / "labels"
     monkeypatch.setattr(taskmaster, "pod_labels_file", str(path))
     return path
@@ -122,7 +125,9 @@ def test_check_cancelled_without_job(
 
 
 @patch("tesk_core.taskmaster.client.BatchV1Api")
-def test_check_cancelled_api_error(mock_api: MagicMock, labels_file: Path) -> None:
+def test_check_cancelled_api_error(
+    mock_api: MagicMock, labels_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Test that an error reading the job doesn't stop the taskmaster.
 
     The pod's label still cancels it; the job is read again at the next poll.
@@ -132,7 +137,58 @@ def test_check_cancelled_api_error(mock_api: MagicMock, labels_file: Path) -> No
         status=403, reason="Forbidden"
     )
 
-    assert not check_cancelled()
+    with caplog.at_level(logging.WARNING, logger=taskmaster.logger.name):
+        assert not check_cancelled()
+
+    assert "Can't read job 'task-1234'" in caplog.text
+
+
+@patch("tesk_core.taskmaster.client.BatchV1Api")
+def test_check_cancelled_connection_error(
+    mock_api: MagicMock, labels_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the API server being unreachable doesn't stop the taskmaster."""
+    labels_file.write_text(POD_LABELS)
+    mock_api.return_value.read_namespaced_job.side_effect = MaxRetryError(
+        pool=MagicMock(), url="/apis/batch/v1"
+    )
+
+    with caplog.at_level(logging.WARNING, logger=taskmaster.logger.name):
+        assert not check_cancelled()
+
+    assert "Can't read job 'task-1234'" in caplog.text
+
+
+@patch("tesk_core.taskmaster.client.BatchV1Api")
+def test_check_cancelled_reuses_client(mock_api: MagicMock, labels_file: Path) -> None:
+    """Test that the polls share one API client."""
+    labels_file.write_text(POD_LABELS)
+    mock_api.return_value.read_namespaced_job.return_value = taskmaster_job(None)
+
+    check_cancelled()
+    check_cancelled()
+
+    mock_api.assert_called_once_with()
+    assert mock_api.return_value.read_namespaced_job.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("contents", "labels"),
+    [
+        ("", {}),
+        ("\n", {}),
+        ("no-separator", {}),
+        ('a="x=y"', {"a": "x=y"}),
+        ('a="1"\nb="2"\n', {"a": "1", "b": "2"}),
+    ],
+)
+def test_read_pod_labels(
+    labels_file: Path, contents: str, labels: dict[str, str]
+) -> None:
+    """Test that the labels file is parsed line by line, quotes removed."""
+    labels_file.write_text(contents)
+
+    assert read_pod_labels() == labels
 
 
 @patch("tesk_core.taskmaster.run_task")
