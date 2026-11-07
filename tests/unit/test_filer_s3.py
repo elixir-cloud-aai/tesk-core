@@ -184,11 +184,9 @@ def test_s3_upload_file(
     if expected:
         assert "File upload failed for" in caplog.text
     else:
-        # Checking if the file was uploaded: if the object is found, the
-        # load() method returns None, otherwise an exception is raised.
-        # (load() is typed as returning nothing, but it is checked on purpose)
-        loaded = client.Object("tesk", "folder/file.txt").load()  # type: ignore[func-returns-value]
-        assert loaded is None
+        # The file was uploaded: load() raises an exception if the object
+        # doesn't exist
+        client.Object("tesk", "folder/file.txt").load()
 
 
 @pytest.mark.parametrize(
@@ -243,10 +241,9 @@ def test_s3_upload_directory(
     if expected:
         assert "File upload failed for" in caplog.text
     else:
-        # Checking if the file was uploaded: if the object is found, the
-        # load() method returns None, otherwise an exception is raised.
-        loaded = client.Object("tesk", "folder1/folder2/a/1.txt").load()  # type: ignore[func-returns-value]
-        assert loaded is None
+        # The file was uploaded: load() raises an exception if the object
+        # doesn't exist
+        client.Object("tesk", "folder1/folder2/a/1.txt").load()
         head = client.meta.client.head_object(
             Bucket=trans.bucket, Key="folder1/folder2/a/1.txt"
         )

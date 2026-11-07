@@ -1,1 +1,1 @@
-"""Tests of the filer and the taskmaster."""
+"""Tests of tesk-core."""

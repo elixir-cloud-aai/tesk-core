@@ -199,12 +199,9 @@ def test_run_executor_complete(
     mock_pvc: MagicMock,
     data: dict[str, Any],
 ) -> None:
-    """Test that a completed executor returns nothing."""
-    # The return value is checked on purpose, although it is always None
-    result = run_executor(  # type: ignore[func-returns-value]
-        data["executors"][0], taskmaster.args.namespace, mock_pvc
-    )
-    assert result is None
+    """Test that a completed executor job runs once, without exiting."""
+    run_executor(data["executors"][0], taskmaster.args.namespace, mock_pvc)
+    mock_run_to_compl.assert_called_once()
 
 
 @patch("tesk_core.taskmaster.logger")

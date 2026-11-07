@@ -48,7 +48,7 @@ def test_ftp_download_file_error(
     conn = mocker.patch("ftplib.FTP")
     mocker.patch("ftplib.FTP.retrbinary", side_effect=ftplib.error_perm)
     with mock.patch("builtins.open", mock.mock_open(), create=False):
-        assert ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py") == 1
+        assert ftp_download_file(conn, "remote.txt", "test_copy.py") == 1
         assert "Unable to download file" in caplog.text
 
 
@@ -59,9 +59,9 @@ def test_ftp_download_file_success(
     conn = mocker.patch("ftplib.FTP")
     mock_retrbin = mocker.patch("ftplib.FTP.retrbinary")
     with mock.patch("builtins.open", mock.mock_open(), create=False) as m:
-        assert ftp_download_file(conn, "test_filer_ftp_pytest.py", "test_copy.py") == 0
+        assert ftp_download_file(conn, "remote.txt", "test_copy.py") == 0
 
-        mock_retrbin.assert_called_with("RETR " + "test_filer_ftp_pytest.py", mock.ANY)
+        mock_retrbin.assert_called_with("RETR remote.txt", mock.ANY)
 
         m.assert_called_with("test_copy.py", "w+b")
 

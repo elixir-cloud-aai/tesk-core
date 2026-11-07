@@ -58,8 +58,9 @@ uv run coverage report -m
 
 `uv run pytest tests/unit` or `uv run pytest tests/integration` runs one
 level. New tests are plain pytest functions (or classes without
-`unittest.TestCase`) in a file `test_<module>.py` of the matching level;
-they are linted and type-checked like the package.
+`unittest.TestCase`) in a file of the matching level named after the module
+or topic (e.g. `test_filer_s3.py`); they are linted and type-checked like
+the package.
 
 [ruff](https://docs.astral.sh/ruff/) lints and formats the code, and
 [mypy](https://mypy.readthedocs.io/) checks its type hints (complete type
