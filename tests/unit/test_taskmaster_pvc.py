@@ -15,7 +15,12 @@ from urllib3.exceptions import HTTPError
 from tesk_core import taskmaster
 from tesk_core.job import Job
 from tesk_core.pvc import PVC
-from tesk_core.taskmaster import exit_cancelled, keep_failed_pvc, run_task
+from tesk_core.taskmaster import (
+    clean_on_interrupt,
+    exit_cancelled,
+    keep_failed_pvc,
+    run_task,
+)
 
 RESOURCES = Path(__file__).parent / "resources"
 
@@ -385,3 +390,54 @@ def test_pvc_delete_timeout(mock_client: MagicMock) -> None:
     first, second = api.delete_namespaced_persistent_volume_claim.call_args_list
     assert "_request_timeout" not in first.kwargs
     assert second.kwargs["_request_timeout"] == (5, 30)
+
+
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
+@patch("tesk_core.taskmaster.PVC.create")
+def test_unexpected_error_keeps_pvc(
+    mock_create: MagicMock, mock_delete: MagicMock, data: dict[str, Any]
+) -> None:
+    """Test that an unexpected error keeps the claim, for a retry of the pod.
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+        data: The task.
+    """
+    error = ApiException(status=500, reason="Server Error")
+    with (
+        patch.object(Job, "run_to_completion", side_effect=error),
+        pytest.raises(ApiException),
+    ):
+        run_task(data, "filer_name", "filer_version")
+
+    mock_delete.assert_not_called()
+    assert taskmaster.created_pvc is not None
+
+
+@patch("tesk_core.taskmaster.Job.delete")
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
+@patch("tesk_core.taskmaster.PVC.create")
+def test_interrupt_keeps_pvc(
+    mock_create: MagicMock,
+    mock_delete: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that an interrupt deletes the jobs and keeps the claim.
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+        mock_job_delete: The mocked deletion of the jobs.
+        data: The task.
+    """
+    with (
+        patch.object(Job, "run_to_completion", side_effect=KeyboardInterrupt),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        run_task(data, "filer_name", "filer_version")
+    clean_on_interrupt()
+
+    mock_job_delete.assert_called_once_with()
+    mock_delete.assert_not_called()
