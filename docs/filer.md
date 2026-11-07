@@ -44,6 +44,9 @@ reads for the URL's host.
 
 ### FTP
 
+The filer connects to the URL's host and port (21 if the URL has none);
+user information in the URL is ignored.
+
 If a `.netrc` file is mounted, the filer logs in with its credentials for
 the URL's host, or anonymously if it has none for that host. Without a
 `.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`,

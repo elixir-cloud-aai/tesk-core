@@ -159,3 +159,35 @@ def test_ftp_make_dirs_error(
 
     assert ftp_make_dirs(conn, "dir1") == 1
     assert "Unable to create directory" in caplog.text
+
+
+@pytest.mark.parametrize("user_info", ["", "someone@"])
+def test_ftp_download_file_with_port(
+    tmp_path: Path,
+    ftpserver: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    user_info: str,
+) -> None:
+    """Test that a file is downloaded from a URL with a port.
+
+    With and without user information in the URL; the credentials come from
+    the environment.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+        monkeypatch: The fixture that sets the environment.
+        user_info: User information in the URL.
+    """
+    login = ftpserver.get_login_data()
+    monkeypatch.setenv("HOME", str(tmp_path))  # No `.netrc`
+    monkeypatch.setenv("TESK_FTP_USERNAME", login["user"])
+    monkeypatch.setenv("TESK_FTP_PASSWORD", login["passwd"])
+    (Path(ftpserver.server_home) / "port.txt").write_text("content")
+    url = f"ftp://{user_info}{login['host']}:{login['port']}/port.txt"
+
+    with FTPTransput(str(tmp_path / "port.txt"), url, Type.File) as transfer:
+        assert transfer.download_file() == 0
+
+    assert (tmp_path / "port.txt").read_text() == "content"

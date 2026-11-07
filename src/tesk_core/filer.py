@@ -315,11 +315,15 @@ class FTPTransput(Transput):
     def __enter__(self) -> "FTPTransput":
         """Connect and log in, unless the connection is reused.
 
+        Connects to the URL's host and port (the default port, 21, if the URL
+        has none), without its user information.
+
         Returns:
             The transfer itself.
         """
         if self.connection_owner:
-            self.ftp_connection.connect(self.netloc)
+            url = urlparse(self.url)
+            self.ftp_connection.connect(url.hostname or "", url.port or 0)
             ftp_login(self.ftp_connection, self.netloc, self.netrc_file)
         return self
 
