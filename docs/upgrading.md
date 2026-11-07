@@ -6,6 +6,20 @@ to the filer.
 
 ## Unreleased
 
+### PVCs of failed and cancelled tasks are deleted
+
+The taskmaster used to delete a task's PVC only after the outputs were
+uploaded: tasks that failed or were cancelled left their PVC behind, with
+its storage. Now the taskmaster deletes the PVC whenever it stops because a
+job didn't complete or the task was cancelled (see
+[Taskmaster](taskmaster.md#what-it-does)). PVCs left behind by earlier
+releases stay; delete them by hand (`<task>-pvc`, once the task has
+ended).
+
+To keep the earlier behaviour, e.g. to inspect the files of failed tasks,
+set `KEEP_FAILED_PVC` to `true` in the taskmaster's environment. TESK's Helm
+chart will get a value for it (elixir-cloud-aai/TESK#261).
+
 ### Early cancellation stops the task
 
 A task cancelled while its taskmaster's pod was pending, or before the pod

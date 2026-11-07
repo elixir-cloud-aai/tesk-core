@@ -45,6 +45,8 @@ job_read_error_logged = False
 # job, per attempt (the client tries up to 4 times), so that a stalled API
 # server can't block the cancellation check for long
 job_read_timeout = (5, 10)
+# The setting that keeps the claim of a task that doesn't complete (`true`)
+keep_failed_pvc_env = "KEEP_FAILED_PVC"
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -266,6 +268,8 @@ def run_task(
         have_json_pvc: Whether the task is in a ConfigMap named after it,
             rather than passed to the filer in the environment.
     """
+    global created_pvc  # noqa: PLW0603 -- module state, see `delete_created_pvc`
+
     task_name = data["executors"][0]["metadata"]["labels"]["taskmaster-name"]
     pvc = None
 
@@ -320,6 +324,8 @@ def run_task(
         if status != "Complete":
             exit_cancelled("Got status " + status)
         elif pvc is not None:
+            # Forgotten first, so that it isn't deleted again if this fails
+            created_pvc = None
             pvc.delete()
 
 
@@ -460,13 +466,63 @@ def clean_on_interrupt() -> None:
         job.delete()
 
 
+def keep_failed_pvc() -> bool:
+    """Tell whether to keep the claim of a task that doesn't complete.
+
+    `KEEP_FAILED_PVC` set to `true` (in any case) keeps it; unset, empty or
+    `false` deletes it. Other values log a warning and delete it.
+
+    Returns:
+        Whether to keep the claim.
+    """
+    value = os.environ.get(keep_failed_pvc_env, "").strip().lower()
+    if value not in ("", "true", "false"):
+        logger.warning(
+            "Ignoring %s=%r: not true or false; deleting the PVC",
+            keep_failed_pvc_env,
+            value,
+        )
+    return value == "true"
+
+
+def delete_created_pvc() -> None:
+    """Delete the task's claim, if the taskmaster created one.
+
+    Kept if `keep_failed_pvc` says so. An error is logged, not raised, so
+    that the taskmaster still stops as it should; a claim that is already
+    gone isn't an error.
+    """
+    global created_pvc  # noqa: PLW0603 -- module state, see `clean_on_interrupt`
+    pvc = created_pvc
+    if pvc is None:
+        return
+    if keep_failed_pvc():
+        logger.info("Keeping PVC '%s' (%s)", pvc.name, keep_failed_pvc_env)
+        return
+    # Forgotten first, so that it isn't deleted twice
+    created_pvc = None
+    try:
+        pvc.delete()
+    except ApiException as ex:
+        if ex.status != 404:
+            logger.error("Can't delete PVC '%s': %s %s", pvc.name, ex.status, ex.reason)
+    except HTTPError as ex:
+        logger.error("Can't delete PVC '%s': %s", pvc.name, ex)
+
+
 def exit_cancelled(reason: str = "Unknown reason") -> NoReturn:
-    """Log why the taskmaster stops, and exit with code 0.
+    """Log why the taskmaster stops, delete the claim, and exit with code 0.
+
+    The taskmaster stops this way when a job doesn't complete or the task is
+    cancelled. The task won't use its claim again, so it is deleted
+    (`delete_created_pvc`). Unexpected errors don't come here: they fail the
+    taskmaster's pod, and a retry of the pod reuses the claim.
 
     Args:
         reason: Why the taskmaster stops.
     """
     logger.error("Cancelling taskmaster: %s", reason)
+    delete_created_pvc()
     sys.exit(0)
 
 
