@@ -2,12 +2,16 @@
 
 import ftplib
 import os
+from pathlib import Path
 from unittest import mock
+from unittest.mock import MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
 
 from tesk_core.filer import (
+    FTPTransput,
+    Type,
     ftp_check_directory,
     ftp_download_file,
     ftp_login,
@@ -86,3 +90,15 @@ def test_ftp_make_dirs(mocker: MockerFixture) -> None:
     """Test that ftp_make_dirs exits with 0 for an existing directory."""
     conn = mocker.patch("ftplib.FTP")
     assert ftp_make_dirs(conn, os.curdir) == 0
+
+
+def test_ftp_upload_dir_make_dirs_error(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a directory upload fails if the remote directory can't be made."""
+    mocker.patch("tesk_core.filer.ftp_make_dirs", return_value=1)
+    transfer = FTPTransput(
+        str(tmp_path), "ftp://ftp.example.org/dir", Type.Directory, MagicMock()
+    )
+    assert transfer.upload_dir() == 1
+    assert "Unable to create remote directory" in caplog.text
