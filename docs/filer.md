@@ -81,6 +81,12 @@ S3 API requires them (`AWS_REQUEST_CHECKSUM_CALCULATION` and
 `AWS_RESPONSE_CHECKSUM_VALIDATION` set to `WHEN_REQUIRED`), for stores that
 don't support the newer checksums.
 
+Only `s3://` URLs use S3. The bucket is the URL's host part, taken as
+written, so bucket names may contain `s3` (e.g. `s3://mys3data/out.txt`).
+`http(s)://` URLs are transferred over HTTP, even if they point to an S3
+endpoint (e.g. `https://mybucket.s3.amazonaws.com/file.txt`); to use S3 for
+them, rewrite them as `s3://mybucket/file.txt`.
+
 ### Shared volume (`file:`)
 
 With `file:` URLs, the filer copies files between the task's volume and a
