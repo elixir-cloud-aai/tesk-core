@@ -25,6 +25,12 @@ the upgrade have no owner, and stay. The task's ConfigMap, and PVCs that
 are kept, aren't deleted with the jobs; pick a TTL of hours rather than
 seconds (see the linked section).
 
+### One FTP connection per uploaded directory
+
+The filer uploads a directory over a single FTP connection; before, it
+connected and logged in again for each file and subdirectory, which FTP
+servers that limit connections or logins could refuse. Nothing to change.
+
 ### Filers run only when they have something to stage
 
 The taskmaster runs the inputs filer (`<task>-inputs-filer`) only for tasks
