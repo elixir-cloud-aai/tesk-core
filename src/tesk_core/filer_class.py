@@ -125,6 +125,12 @@ class Filer:
             env.append({"name": "JSON_INPUT", "value": json.dumps(data)})
         env.append({"name": "HOST_BASE_PATH", "value": path.HOST_BASE_PATH})
         env.append({"name": "CONTAINER_BASE_PATH", "value": path.CONTAINER_BASE_PATH})
+        # The filer's HTTP(S) timeout, if the taskmaster has one (as
+        # `filer.HTTP_TIMEOUT_ENV`, not imported: the taskmaster doesn't
+        # need the filer's dependencies)
+        http_timeout = os.environ.get("FILER_HTTP_TIMEOUT")
+        if http_timeout is not None:
+            env.append({"name": "FILER_HTTP_TIMEOUT", "value": http_timeout})
 
         if json_pvc:
             self.getVolumeMounts().append(

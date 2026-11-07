@@ -10,7 +10,7 @@ from pytest_mock import MockerFixture
 import requests
 from requests import Response
 
-from tesk_core.filer import HTTPTransput, Type, http_join
+from tesk_core.filer import HTTP_TIMEOUT_DEFAULT, HTTPTransput, Type, http_join
 
 PATH_DOWN = "test_download_file.txt"
 PATH_UP = __file__
@@ -31,7 +31,7 @@ def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
     mock_get = mocker.patch("requests.get", return_value=resp)
 
     assert http_obj.download_file() == 0
-    mock_get.assert_called_once_with(URL)
+    mock_get.assert_called_once_with(URL, timeout=HTTP_TIMEOUT_DEFAULT)
     assert path.read_bytes() == resp._content
 
 
@@ -53,7 +53,7 @@ def test_upload_file(mocker: MockerFixture) -> None:
     http_obj = HTTPTransput(PATH_UP, URL, FTYPE)
     uploads: dict[str, bytes] = {}
 
-    def mock_put(url: str, data: bytes | IO[bytes]) -> Response:
+    def mock_put(url: str, data: bytes | IO[bytes], timeout: float) -> Response:
         uploads[url] = data if isinstance(data, bytes) else data.read()
         return resp
 
@@ -91,7 +91,7 @@ def test_upload_dir(mocker: MockerFixture, fs: FakeFilesystem) -> None:
     # during the call.
     uploads = {}
 
-    def mock_put(url: str, data: bytes | IO[bytes]) -> Response:
+    def mock_put(url: str, data: bytes | IO[bytes], timeout: float) -> Response:
         uploads[url] = data if isinstance(data, bytes) else data.read()
         return resp
 
