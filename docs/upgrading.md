@@ -6,6 +6,18 @@ to the filer.
 
 ## Unreleased
 
+### Tasks that can't be scheduled can time out
+
+A task whose pod the scheduler can't place, e.g. because it asks for more
+CPU or memory than any node has, waited forever as `QUEUED`. The new
+setting `TESK_MAX_QUEUE_SECONDS` ends such a task after that many seconds
+with `SYSTEM_ERROR`, and logs why (see
+[Taskmaster](taskmaster.md#what-it-does)). It is unset by default: tasks
+wait as before. An executor whose pod can't be scheduled in time has its
+job deleted; the TESK API reports that as `SYSTEM_ERROR` from the release
+that derives the task state from all jobs of a task
+([tesk-api#104](https://github.com/elixir-cloud-aai/tesk-api/issues/104)).
+
 ### Finished tasks can be deleted after a TTL
 
 The taskmaster's job now owns the task's filer and executor jobs

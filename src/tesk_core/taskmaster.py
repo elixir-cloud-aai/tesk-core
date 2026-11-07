@@ -59,6 +59,11 @@ keep_failed_pvc_env = "KEEP_FAILED_PVC"
 task_ttl_env = "TASK_TTL_SECONDS"
 # The largest TTL that Kubernetes accepts (an int32)
 max_task_ttl = 2**31 - 1
+# The setting with the seconds after which a pod that can't be scheduled
+# ends the task (`SYSTEM_ERROR`); unset, pods wait to be scheduled forever
+max_queue_env = "TESK_MAX_QUEUE_SECONDS"
+# The max queue time of the task's jobs; set by `main`
+max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;
 # set by `init_own_job`, none if the job can't be read
 owner_references: list[dict[str, str]] = []
@@ -128,6 +133,10 @@ def run_executor(
     logger.debug("Created job: %s", jobname)
     # `Job.run_to_completion` logs the manifest, redacted
     job = new_job(executor, jobname, namespace)
+    # Deleted rather than failed if it can't be scheduled in time, so that the
+    # TESK API reports `SYSTEM_ERROR` (a missing executor), not
+    # `EXECUTOR_ERROR`: the executor never ran
+    job.delete_unschedulable = True
 
     created_jobs.append(job)
 
@@ -460,7 +469,7 @@ def newLogger(loglevel: int) -> logging.Logger:
 
 def main() -> None:
     """Run the taskmaster on the command line."""
-    global args, logger, created_pvc  # noqa: PLW0603 -- module state of the run
+    global args, logger, created_pvc, max_queue  # noqa: PLW0603 -- module state of the run
 
     have_json_pvc = False
 
@@ -487,6 +496,7 @@ def main() -> None:
     # Before the task is read, so that a taskmaster that fails on it gets its
     # TTL too, and before any job is created, also for a task cancelled now
     init_own_job()
+    max_queue = max_queue_seconds()
 
     # Get input JSON
     if args.file is None:
@@ -715,6 +725,42 @@ def own_job_name(labels: dict[str, str]) -> str | None:
     return next((labels[key] for key in job_name_labels if key in labels), None)
 
 
+def env_seconds(name: str, minimum: int, unset: str) -> int | None:
+    """Get a number of seconds from a setting in the environment.
+
+    Args:
+        name: The environment variable.
+        minimum: The smallest valid value; the largest is `max_task_ttl`.
+        unset: What happens without a valid value, for the log.
+
+    Returns:
+        The seconds: a whole number from `minimum` to `max_task_ttl`. None if
+        the setting is unset or empty, or invalid, which is logged.
+    """
+    raw = os.environ.get(name, "")
+    value = raw.strip()
+    if not value:
+        return None
+    # Not more digits than the largest value: `int` limits the digits it
+    # converts
+    if (
+        value.isascii()
+        and value.isdigit()
+        and len(value) <= len(str(max_task_ttl))
+        and minimum <= int(value) <= max_task_ttl
+    ):
+        return int(value)
+    logger.error(
+        "Ignoring %s=%r: not a whole number of seconds from %d to %d; %s",
+        name,
+        raw,
+        minimum,
+        max_task_ttl,
+        unset,
+    )
+    return None
+
+
 def task_ttl_seconds() -> int | None:
     """Get the TTL of the taskmaster's job from `TASK_TTL_SECONDS`.
 
@@ -723,24 +769,18 @@ def task_ttl_seconds() -> int | None:
         number from 0 to `max_task_ttl`. None if the setting is unset or
         empty, or invalid, which is logged.
     """
-    raw = os.environ.get(task_ttl_env, "")
-    value = raw.strip()
-    if not value:
-        return None
-    if (
-        value.isascii()
-        and value.isdigit()
-        and len(value) <= len(str(max_task_ttl))
-        and int(value) <= max_task_ttl
-    ):
-        return int(value)
-    logger.error(
-        "Ignoring %s=%r: not a whole number of seconds from 0 to %d; no TTL",
-        task_ttl_env,
-        raw,
-        max_task_ttl,
-    )
-    return None
+    return env_seconds(task_ttl_env, 0, "no TTL")
+
+
+def max_queue_seconds() -> int | None:
+    """Get the max queue time of the task's pods from `TESK_MAX_QUEUE_SECONDS`.
+
+    Returns:
+        The seconds after which a pod that can't be scheduled ends the task:
+        a whole number from 1 to `max_task_ttl`. None if the setting is unset
+        or empty, or invalid, which is logged: pods wait forever.
+    """
+    return env_seconds(max_queue_env, 1, "pods wait to be scheduled forever")
 
 
 def init_own_job() -> None:
@@ -784,7 +824,10 @@ def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Jo
 
     Sets the owner references of `init_own_job` as the manifest's only
     ones, so that no other owner keeps the job when the taskmaster's job is
-    deleted (the TESK API sets none).
+    deleted (the TESK API sets none), and the max queue time (`max_queue`):
+    a job whose pod can't be scheduled in time is failed and kept, which the
+    TESK API reports as `SYSTEM_ERROR` for filers (executors are deleted
+    instead, see `run_executor`).
 
     Args:
         body: The manifest of the job, changed in place.
@@ -796,7 +839,9 @@ def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Jo
     """
     if owner_references:
         body["metadata"]["ownerReferences"] = list(owner_references)
-    return Job(body, name, args.namespace if namespace is None else namespace)
+    job = Job(body, name, args.namespace if namespace is None else namespace)
+    job.max_queue = max_queue
+    return job
 
 
 if __name__ == "__main__":

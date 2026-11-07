@@ -54,6 +54,28 @@ def cannot_start(pod: client.V1Pod) -> client.V1ContainerStateWaiting | None:
     return None
 
 
+def unschedulable(pod: client.V1Pod) -> str | None:
+    """Tell why the scheduler can't place a pod, if it can't.
+
+    Args:
+        pod: The pod.
+
+    Returns:
+        The message of the pod's condition `PodScheduled`, if it is `False`
+        with the reason `Unschedulable` (e.g. no node has enough CPU or
+        memory), or `None`.
+    """
+    for condition in pod.status.conditions or []:
+        if (
+            condition.type == "PodScheduled"
+            and condition.status == "False"
+            and condition.reason == "Unschedulable"
+        ):
+            message: str = condition.message or "no reason given"
+            return message
+    return None
+
+
 class Job:
     """A Kubernetes job, run to completion.
 
@@ -74,6 +96,10 @@ class Job:
         failed_pods: The number of the job's failed pods last seen; when it
             grows, the job's new pods are checked again.
         body: The manifest of the job.
+        max_queue: Seconds after which a pod that the scheduler can't place
+            (`unschedulable`) ends the job; `None` waits forever.
+        delete_unschedulable: Whether such a job is deleted, rather than
+            failed and kept (`fail`).
     """
 
     def __init__(
@@ -96,6 +122,8 @@ class Job:
         self.pod_check_interval = POD_CHECK_INTERVAL
         self.next_pod_check: datetime | None = None
         self.failed_pods = 0
+        self.max_queue: int | None = None
+        self.delete_unschedulable = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -149,8 +177,12 @@ class Job:
 
         A pending pod that can't start (see `CANNOT_START_REASONS`) for
         longer than `timeout`, counted from its start or, if it hasn't
-        started, its creation, fails the job (`fail`). Pending pods are
-        checked at most every `pod_check_interval` seconds. The job runs until
+        started, its creation, fails the job (`fail`). With `max_queue`, a
+        pod that the scheduler can't place (`unschedulable`) for longer than
+        that, counted from its creation, ends the job
+        (`end_unschedulable`). Pending pods are checked at most every
+        `pod_check_interval` seconds, once the job has run for longer than
+        `timeout` or `max_queue`. The job runs until
         Kubernetes marks it `Failed`, for at most another `timeout`; then it
         counts as `Failed`, and is kept.
 
@@ -207,8 +239,11 @@ class Job:
                 datetime.now(timezone.utc) - job.status.start_time
             ).total_seconds()
         now = datetime.now(timezone.utc)
+        check_after = self.timeout
+        if self.max_queue is not None:
+            check_after = min(check_after, self.max_queue)
         if (
-            job_duration > self.timeout
+            job_duration > check_after
             and not is_all_pods_runnning
             and (self.next_pod_check is None or now >= self.next_pod_check)
         ):
@@ -229,6 +264,22 @@ class Job:
                 if since is None:
                     continue
                 delta = (datetime.now(timezone.utc) - since).total_seconds()
+                # Only with a max queue time, and only once it has passed
+                if (
+                    self.max_queue is not None
+                    and delta > self.max_queue
+                    and (scheduling := unschedulable(pod)) is not None
+                ):
+                    logging.error(
+                        "Pod '%s' of job '%s' wasn't scheduled within %s s: %s",
+                        pod.metadata.name,
+                        self.name,
+                        self.max_queue,
+                        scheduling,
+                    )
+                    self.status = self.end_unschedulable()
+                    failed = True
+                    break
                 waiting = cannot_start(pod)
                 if delta > self.timeout and waiting is not None:
                     logging.info(
@@ -246,6 +297,19 @@ class Job:
                 self.next_pod_check = now + timedelta(seconds=self.pod_check_interval)
 
         return self.status, is_all_pods_runnning
+
+    def end_unschedulable(self) -> str:
+        """End the job, as its pod can't be scheduled in time.
+
+        Deletes it if `delete_unschedulable`, otherwise fails it (`fail`).
+
+        Returns:
+            The job's status: `Failed` once deleted, otherwise as `fail`.
+        """
+        if self.delete_unschedulable:
+            self.delete_quietly()
+            return "Failed"
+        return self.fail()
 
     def fail(self) -> str:
         """Fail the job, and keep it.
