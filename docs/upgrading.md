@@ -43,6 +43,15 @@ without an entry. Set `TESK_FTP_HOSTS`, or remove the env credentials if
 the `.netrc` file has all you need. An empty `TESK_FTP_USERNAME` counts as
 no credentials, with or without `.netrc`.
 
+### Pods that can't start time out
+
+Pending pods now time out (`--pod-timeout`) for more reasons than
+`ImagePullBackOff`: also `ErrImagePull`, `InvalidImageName` and
+`CreateContainerConfigError`, for init containers too, and also before the
+pod has started (measured from its creation). Their job fails and is kept,
+as described below. Pods that are pending for other reasons, e.g. waiting to
+be scheduled, still wait. No change is needed.
+
 ### Failed jobs are kept
 
 - The taskmaster no longer deletes a job that

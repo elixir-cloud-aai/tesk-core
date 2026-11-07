@@ -320,7 +320,7 @@ def newParser() -> argparse.ArgumentParser:
         "-pt",
         "--pod-timeout",
         type=int,
-        help="Seconds after which a pod that can't pull its image fails its job",
+        help="Seconds after which a pending pod that can't start fails its job",
         default=240,
     )
     parser.add_argument(

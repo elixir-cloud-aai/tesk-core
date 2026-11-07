@@ -18,6 +18,37 @@ JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
 # Active deadline that fails a job (`Job.fail`), in seconds
 FAIL_DEADLINE = 1
+# Reasons why containers of a pending pod wait that don't resolve by
+# waiting; pods that wait for other reasons (e.g., to be scheduled, or while
+# a large image is pulled) are queued and keep waiting
+CANNOT_START_REASONS = frozenset(
+    {
+        "CreateContainerConfigError",
+        "ErrImagePull",
+        "ImagePullBackOff",
+        "InvalidImageName",
+    }
+)
+
+
+def cannot_start(pod: client.V1Pod) -> client.V1ContainerStateWaiting | None:
+    """Find a container of a pod that waits for a reason that won't resolve.
+
+    Args:
+        pod: The pod.
+
+    Returns:
+        The waiting state of the first such container, init containers
+        included, or `None`.
+    """
+    statuses = (pod.status.init_container_statuses or []) + (
+        pod.status.container_statuses or []
+    )
+    for status in statuses:
+        waiting = status.state.waiting if status.state is not None else None
+        if waiting is not None and waiting.reason in CANNOT_START_REASONS:
+            return waiting
+    return None
 
 
 class Job:
@@ -30,8 +61,8 @@ class Job:
             `Failed`.
         bv1: Client of the Kubernetes batch API.
         cv1: Client of the Kubernetes core API.
-        timeout: Seconds after which pods that can't pull their image fail
-            the job.
+        timeout: Seconds after which pending pods that can't start (see
+            `CANNOT_START_REASONS`) fail the job.
         failing_since: When the job was failed (`fail`), to wait for
             Kubernetes to mark it `Failed`; `None` before.
         body: The manifest of the job.
@@ -69,8 +100,8 @@ class Job:
             poll_interval: Seconds between status checks.
             check_cancelled: Tells whether the task was cancelled; if so, the
                 job is deleted.
-            pod_timeout: Seconds after which pods that can't pull their
-                image fail the job.
+            pod_timeout: Seconds after which pending pods that can't start
+                (see `CANNOT_START_REASONS`) fail the job.
 
         Returns:
             The final status: `Complete`, `Failed` or `Cancelled`. Only a
@@ -105,10 +136,11 @@ class Job:
     def get_status(self, is_all_pods_runnning: bool) -> tuple[str, bool]:
         """Get the status of the job.
 
-        A pod that can't pull its image (`ImagePullBackOff`) for longer than
-        `timeout` fails the job (`fail`); the job runs until Kubernetes marks
-        it `Failed`, for at most another `timeout`; then it counts as
-        `Failed`, and is kept.
+        A pending pod that can't start (see `CANNOT_START_REASONS`) for
+        longer than `timeout`, counted from its start or, if it hasn't
+        started, its creation, fails the job (`fail`); the job runs until
+        Kubernetes marks it `Failed`, for at most another `timeout`; then it
+        counts as `Failed`, and is kept.
 
         Args:
             is_all_pods_runnning: Whether all pods of the job were found
@@ -164,19 +196,20 @@ class Job:
             ).items
             is_all_pods_runnning = True
             for pod in pods:
-                if pod.status.phase == "Pending" and pod.status.start_time:
-                    is_all_pods_runnning = False
-                    delta = (
-                        datetime.now(timezone.utc) - pod.status.start_time
-                    ).total_seconds()
-                    if (
-                        delta > self.timeout
-                        and pod.status.container_statuses[0].state.waiting.reason
-                        == "ImagePullBackOff"
-                    ):
-                        logging.info(pod.status.container_statuses[0].state.waiting)
-                        self.status = self.fail()
-                        break
+                if pod.status.phase != "Pending":
+                    continue
+                # Also pods that aren't scheduled yet, so that an image pull
+                # error after scheduling is still found
+                is_all_pods_runnning = False
+                since = pod.status.start_time or pod.metadata.creation_timestamp
+                if since is None:
+                    continue
+                delta = (datetime.now(timezone.utc) - since).total_seconds()
+                waiting = cannot_start(pod)
+                if delta > self.timeout and waiting is not None:
+                    logging.info(waiting)
+                    self.status = self.fail()
+                    break
 
         return self.status, is_all_pods_runnning
 
