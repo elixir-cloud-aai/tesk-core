@@ -153,6 +153,11 @@ class Job:
                 return "Cancelled"
             time.sleep(poll_interval)
             status, is_all_pods_running = self.get_status(is_all_pods_running)
+        # The job is kept after a pod timeout, so check for a cancellation
+        # that came in since the last check
+        if status == "PodTimeout" and check_cancelled():
+            self.delete()
+            return "Cancelled"
         return status
 
     def get_status(self, is_all_pods_runnning: bool) -> tuple[str, bool]:

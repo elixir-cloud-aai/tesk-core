@@ -312,7 +312,11 @@ def newParser() -> argparse.ArgumentParser:
 
     parser.add_argument("-p", "--poll-interval", help="Job polling interval", default=5)
     parser.add_argument(
-        "-pt", "--pod-timeout", type=int, help="Pod creation timeout", default=240
+        "-pt",
+        "--pod-timeout",
+        type=int,
+        help="Seconds after which a pending pod that can't start fails its job",
+        default=240,
     )
     parser.add_argument(
         "-fn",
