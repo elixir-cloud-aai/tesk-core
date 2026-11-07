@@ -47,13 +47,20 @@ reads for the URL's host.
 Directory downloads skip, with a warning, listing entries whose names aren't
 a single path component (empty, `.`, `..`, or with `/` or `\`).
 
-If a `.netrc` file is mounted, the filer logs in with its credentials for
-the URL's host, or anonymously if it has none for that host. Without a
-`.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`
-if both are set and the URL's host is in `TESK_FTP_HOSTS`, and otherwise
-anonymously. If the server refuses the credentials, the filer logs in
-anonymously. TESK's Helm chart sets the credentials from a Kubernetes
-secret (`ftp.classicFtpSecret`) and `TESK_FTP_HOSTS` from `ftp.hosts` (see
+The filer logs in with the first credentials it finds:
+
+1. The entry in a mounted `.netrc` file for the URL's host and port (e.g.
+   `machine ftp.example.org:2121`, for when the filer can connect to URLs
+   with a port; see below) or for its host (`machine ftp.example.org`),
+   matched as written, including case; otherwise its `default` entry, if it
+   has one, for any host.
+2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set (the user
+   name not empty) and the URL's host is in `TESK_FTP_HOSTS` (see below).
+3. Anonymously.
+
+If the server refuses the credentials, the filer logs in anonymously.
+TESK's Helm chart sets the credentials from a Kubernetes secret
+(`ftp.classicFtpSecret`) and `TESK_FTP_HOSTS` from `ftp.hosts` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 

@@ -604,9 +604,10 @@ def log_missing_ftp_hosts() -> None:
 def ftp_env_credentials(netloc: str) -> tuple[str, str] | None:
     """Get the env FTP credentials, if they may be sent to the URL's host.
 
-    `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are sent only to the hosts
-    in `TESK_FTP_HOSTS` (see `ftp_host_allowed`). Without entries in
-    `TESK_FTP_HOSTS`, they are sent nowhere, and an error is logged once.
+    `TESK_FTP_USERNAME` (if not empty) and `TESK_FTP_PASSWORD` are sent
+    only to the hosts in `TESK_FTP_HOSTS` (see `ftp_host_allowed`). Without
+    entries in `TESK_FTP_HOSTS`, they are sent nowhere, and an error is
+    logged once.
 
     Args:
         netloc: The network location of the URL.
@@ -616,7 +617,8 @@ def ftp_env_credentials(netloc: str) -> tuple[str, str] | None:
     """
     user = os.environ.get("TESK_FTP_USERNAME")
     password = os.environ.get("TESK_FTP_PASSWORD")
-    if user is None or password is None:
+    # An empty user name is no account (e.g., from a secret without one)
+    if not user or password is None:
         return None
     hosts = os.environ.get(FTP_HOSTS_ENV, "")
     entries = ftp_host_entries(hosts)
@@ -636,13 +638,33 @@ def ftp_env_credentials(netloc: str) -> tuple[str, str] | None:
     return user, password
 
 
+def netloc_host(netloc: str) -> str:
+    """Get the host of a URL's network location, as written.
+
+    Unlike `urlsplit(...).hostname`, keeps the case, as `.netrc` entries
+    match hosts case-sensitively.
+
+    Args:
+        netloc: The network location, with user information and port, if any.
+
+    Returns:
+        The host, without user information, port and IPv6 brackets.
+    """
+    host = netloc.rpartition("@")[2]
+    if host.startswith("["):
+        return host[1:].partition("]")[0]
+    return host.partition(":")[0]
+
+
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
     """Log in to an FTP server.
 
-    With the credentials for the host in `.netrc`, if it was read;
-    otherwise with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are
-    set and the host is in `TESK_FTP_HOSTS` (see `ftp_env_credentials`).
-    Without credentials, or if they are refused, anonymously.
+    With the first credentials found: the `.netrc` entry for the host and
+    port, the one for the host, or the `default` entry, if `.netrc` was
+    read; otherwise `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both
+    are set and the host is in `TESK_FTP_HOSTS` (see
+    `ftp_env_credentials`). Without credentials, or if they are refused,
+    anonymously.
 
     Args:
         ftp_connection: The connection.
@@ -652,10 +674,14 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     """
     user = None
     password: str | None = None
+    creds: tuple[str, str | None, str | None] | None = None
     if netrc_file is not None:
-        creds = netrc_file.authenticators(netloc)
-        if creds:
-            user, _, password = creds
+        # An entry for the host and port, as before; then one for the host,
+        # or the `default` entry
+        creds = netrc_file.hosts.get(netloc.rpartition("@")[2])
+        creds = creds or netrc_file.authenticators(netloc_host(netloc))
+    if creds:
+        user, _, password = creds
     else:
         env_creds = ftp_env_credentials(netloc)
         if env_creds:
