@@ -36,14 +36,23 @@ def test_ftp_login(mocker: MockerFixture) -> None:
 
 @pytest.fixture
 def netrc_file(tmp_path: Path) -> netrc.netrc:
-    """A `.netrc` file with credentials for `ftp.example.org` only."""
+    """Read a `.netrc` file with credentials for `FTP.example.org` only.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+
+    Returns:
+        The parsed file.
+    """
     path = tmp_path / ".netrc"
-    path.write_text("machine ftp.example.org login netrc_user password netrc_pass\n")
+    path.write_text("machine FTP.example.org login netrc_user password netrc_pass\n")
     path.chmod(0o600)
     return netrc.netrc(str(path))
 
 
-@pytest.mark.parametrize("netloc", ["ftp.example.org", "ftp.example.org:2121"])
+@pytest.mark.parametrize(
+    "netloc", ["FTP.example.org", "FTP.example.org:2121", "user@FTP.example.org"]
+)
 def test_ftp_login_netrc_entry(
     netrc_file: netrc.netrc, monkeypatch: pytest.MonkeyPatch, netloc: str
 ) -> None:
@@ -66,6 +75,15 @@ def test_ftp_login_netrc_without_entry(
     monkeypatch.setenv("TESK_FTP_PASSWORD", "env_pass")
     conn = MagicMock()
     ftp_login(conn, "other.example.org", netrc_file)
+    conn.login.assert_called_once_with("env_user", "env_pass")
+
+
+def test_ftp_login_without_netrc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the environment's credentials are used without `.netrc`."""
+    monkeypatch.setenv("TESK_FTP_USERNAME", "env_user")
+    monkeypatch.setenv("TESK_FTP_PASSWORD", "env_pass")
+    conn = MagicMock()
+    ftp_login(conn, "other.example.org", None)
     conn.login.assert_called_once_with("env_user", "env_pass")
 
 

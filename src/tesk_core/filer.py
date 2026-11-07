@@ -438,6 +438,24 @@ class FTPTransput(Transput):
             self.ftp_connection.close()
 
 
+def netloc_host(netloc: str) -> str:
+    """Get the host of a URL's network location, as written.
+
+    Unlike `urlparse(...).hostname`, keeps the case, as `.netrc` entries
+    match hosts case-sensitively.
+
+    Args:
+        netloc: The network location, with user information and port, if any.
+
+    Returns:
+        The host, without user information, port and IPv6 brackets.
+    """
+    host = netloc.rpartition("@")[2]
+    if host.startswith("["):
+        return host[1:].partition("]")[0]
+    return host.partition(":")[0]
+
+
 def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) -> None:
     """Log in to an FTP server.
 
@@ -455,7 +473,7 @@ def ftp_login(ftp_connection: FTP, netloc: str, netrc_file: netrc.netrc | None) 
     password: str | None = None
     creds = None
     if netrc_file is not None:
-        creds = netrc_file.authenticators(urlparse(f"//{netloc}").hostname or netloc)
+        creds = netrc_file.authenticators(netloc_host(netloc))
     if creds:
         user, _, password = creds
     elif "TESK_FTP_USERNAME" in os.environ and "TESK_FTP_PASSWORD" in os.environ:

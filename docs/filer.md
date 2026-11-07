@@ -46,14 +46,14 @@ reads for the URL's host.
 
 The filer logs in with the first credentials it finds:
 
-1. The entry for the URL's host (without the port) in a mounted `.netrc`
-   file.
+1. The entry for the URL's host in a mounted `.netrc` file (host names
+   match as written, including case), or its `default` entry.
 2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set.
 3. Anonymously.
 
-If the server refuses the credentials, the filer logs in anonymously.
-TESK's Helm chart sets the two variables from a
-Kubernetes secret (`ftp.classic_ftp_secret`; see
+If the server refuses the credentials, the filer logs in anonymously. TESK's
+Helm chart sets the two variables from a Kubernetes secret
+(`ftp.classic_ftp_secret`; see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 
