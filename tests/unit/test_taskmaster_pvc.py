@@ -448,8 +448,9 @@ def test_interrupt_keeps_pvc(
 @patch("tesk_core.taskmaster.check_cancelled")
 @patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
-@patch.object(Job, "run_to_completion", statuses())
+@patch.object(Job, "run_to_completion", autospec=True, side_effect=statuses())
 def test_cancelled_after_executors_without_outputs(
+    mock_run: MagicMock,
     mock_create: MagicMock,
     mock_delete: MagicMock,
     mock_cancelled: MagicMock,
@@ -462,6 +463,7 @@ def test_cancelled_after_executors_without_outputs(
     `KEEP_FAILED_PVC` keeps its claim.
 
     Args:
+        mock_run: The mocked run of a job.
         mock_create: The mocked creation of the claim.
         mock_delete: The mocked deletion of the claim.
         mock_cancelled: The mocked check for cancellation.
@@ -476,4 +478,7 @@ def test_cancelled_after_executors_without_outputs(
     with pytest.raises(SystemExit):
         run_task(data, "filer_name", "filer_version")
 
+    # The executor ran to its end, and no outputs filer after it
+    assert mock_run.call_args_list[-1].args[0].name == "task-1000-ex-00"
+    assert mock_cancelled.call_count == 2
     mock_delete.assert_not_called()

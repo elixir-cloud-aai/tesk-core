@@ -22,9 +22,9 @@ The taskmaster and the filer of [TESK][tesk], an implementation of the
 [Kubernetes](https://kubernetes.io), brought to you by
 [ELIXIR On-Cloud](https://elixir-on.cloud/). For each task that the TESK
 API accepts, the **taskmaster** runs as a Kubernetes job of its own: it
-creates the task's volume, has the filer stage the inputs, runs the
-executors one after another, has the filer stage the outputs, and cleans
-up. The **filer** downloads the inputs onto the task's volume and uploads
+creates the task's volume, has the filer stage the inputs (if any), runs
+the executors one after another, has the filer stage the outputs (if any),
+and cleans up. The **filer** downloads the inputs onto the task's volume and uploads
 the outputs, over HTTP(S), FTP, S3 or a shared volume. Both are commands of
 the Python package `teskcore`, published as the images
 `elixircloud/tesk-core-taskmaster` and `elixircloud/tesk-core-filer`, and

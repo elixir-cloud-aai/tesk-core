@@ -168,8 +168,13 @@ def test_run_task(mock_create: MagicMock, mock_delete: MagicMock) -> None:
 )
 @patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
-@patch("tesk_core.taskmaster.Job.run_to_completion", jobRunToCompletionMock)
+@patch(
+    "tesk_core.taskmaster.Job.run_to_completion",
+    autospec=True,
+    return_value="Complete",
+)
 def test_run_task_skips_idle_filers(
+    mock_run: MagicMock,
     mock_create: MagicMock,
     mock_delete: MagicMock,
     io: dict[str, list[Any]],
@@ -182,6 +187,7 @@ def test_run_task_skips_idle_filers(
     outputs, also when no filer runs; without them, there is none.
 
     Args:
+        mock_run: The mocked run of a job.
         mock_create: The mocked creation of the claim.
         mock_delete: The mocked deletion of the claim.
         io: The task's volumes, inputs or outputs.
@@ -195,6 +201,7 @@ def test_run_task_skips_idle_filers(
     run_task(data, "filer_name", "filer_version")
 
     assert [job.name for job in taskmaster.created_jobs] == expected
+    assert [call.args[0].name for call in mock_run.call_args_list] == expected
     if io:
         mock_create.assert_called_once_with()
         mock_delete.assert_called_once()
