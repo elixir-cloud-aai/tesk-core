@@ -49,12 +49,40 @@ a single path component (empty, `.`, `..`, or with `/` or `\`).
 
 If a `.netrc` file is mounted, the filer logs in with its credentials for
 the URL's host, or anonymously if it has none for that host. Without a
-`.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`,
-if both are set, and otherwise anonymously. If the server refuses the
-credentials, the filer logs in anonymously. TESK's Helm chart sets the two variables from a
-Kubernetes secret (`ftp.classic_ftp_secret`; see
+`.netrc` file, it logs in with `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`
+if both are set and the URL's host is in `TESK_FTP_HOSTS`, and otherwise
+anonymously. If the server refuses the credentials, the filer logs in
+anonymously. TESK's Helm chart sets the credentials from a Kubernetes
+secret (`ftp.classicFtpSecret`) and `TESK_FTP_HOSTS` from `ftp.hosts` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
+
+`TESK_FTP_HOSTS` lists the hosts that the credentials are sent to,
+separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
+
+- Each entry is `host` or `host:port`; IPv6 addresses go in brackets.
+  Spaces around entries are ignored.
+- Hosts match exactly, ignoring case: `ftp.example.org` matches neither
+  `example.org` nor `ftp.example.org.other.org`. There are no wildcards.
+- An entry without a port matches the host on any port; one with a port
+  matches only that port (`ftp.example.org:21` also matches URLs without
+  a port).
+- Entries with user information, a path, whitespace or control characters
+  inside, or an empty, invalid or zero port (e.g. `ftp.example.org:`)
+  match nothing;
+  the filer logs an error, once per run, with their number (not their
+  text).
+
+The filer can't connect to FTP URLs with a port yet
+([#89](https://github.com/elixir-cloud-aai/tesk-core/issues/89)); entries
+with a port are for when it can.
+
+If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
+`TESK_FTP_HOSTS` is not (or has no entries), the credentials are sent to no
+host:
+the filer logs in anonymously and logs an error, once per run, that says to
+set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain neither
+the credentials nor the user information of URLs.
 
 ### S3
 
@@ -112,7 +140,7 @@ If the taskmaster has the environment variable `NETRC_SECRET_NAME`, it mounts
 the key `.netrc` of that Kubernetes secret into the filer as
 `/opt/home/.netrc`, and sets `HOME` to `/opt/home`. The filer then uses it
 for FTP and HTTP(S), as described above. TESK's Helm chart creates such a
-secret with `ftp.netrc_secret`. A `.netrc` file has one entry per host:
+secret with `ftp.netrcSecret`. A `.netrc` file has one entry per host:
 
 ```text
 machine ftp.example.org

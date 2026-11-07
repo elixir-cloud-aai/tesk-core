@@ -1,6 +1,8 @@
 """Tests for 'filer.py' FTP functionalities using 'pytest'."""
 
+from collections.abc import Iterator
 import ftplib
+import logging
 import os
 from pathlib import Path
 from unittest import mock
@@ -14,25 +16,252 @@ from tesk_core.filer import (
     Type,
     ftp_check_directory,
     ftp_download_file,
+    ftp_host_allowed,
     ftp_login,
     ftp_make_dirs,
     ftp_upload_file,
+    log_invalid_ftp_hosts,
+    log_missing_ftp_hosts,
 )
 
+CREDENTIALS = {"TESK_FTP_USERNAME": "test", "TESK_FTP_PASSWORD": "test_pass"}
 
-def test_ftp_login(mocker: MockerFixture) -> None:
-    """Test that ftp_login detects credentials and calls ftplib.FTP.login."""
-    conn = mocker.patch("ftplib.FTP")
-    mock_login = mocker.patch("ftplib.FTP.login")
-    with mock.patch.dict(
-        "os.environ",
-        {
-            "TESK_FTP_USERNAME": "test",
-            "TESK_FTP_PASSWORD": "test_pass",
-        },
-    ):
-        ftp_login(conn, "", None)
-        mock_login.assert_called_with("test", "test_pass")
+
+@pytest.fixture(autouse=True)
+def _reset_missing_hosts_log() -> Iterator[None]:
+    """Let each test log the error about missing `TESK_FTP_HOSTS` again.
+
+    Yields:
+        Nothing; resets before and after the test.
+    """
+    log_missing_ftp_hosts.cache_clear()
+    log_invalid_ftp_hosts.cache_clear()
+    yield
+    log_missing_ftp_hosts.cache_clear()
+    log_invalid_ftp_hosts.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("hosts", "netloc"),
+    [
+        ("ftp.example.org", "ftp.example.org"),
+        ("FTP.Example.org", "ftp.example.ORG"),
+        ("ftp.example.org", "ftp.example.org:2121"),
+        ("ftp.example.org:2121", "ftp.example.org:2121"),
+        ("ftp.example.org:21", "ftp.example.org"),
+        ("ftp.example.org", "user:secret@ftp.example.org"),
+        ("other.example.org, ftp.example.org ,", "ftp.example.org"),
+        ("[::1]", "[::1]:2121"),
+        ("[::1]:2121", "[::1]:2121"),
+        ("192.0.2.1", "192.0.2.1"),
+    ],
+)
+def test_ftp_host_allowed(hosts: str, netloc: str) -> None:
+    """Test that listed hosts match, ignoring case, with any or their port.
+
+    Args:
+        hosts: The value of `TESK_FTP_HOSTS`.
+        netloc: The network location of the URL.
+    """
+    assert ftp_host_allowed(netloc, hosts)
+
+
+@pytest.mark.parametrize(
+    ("hosts", "netloc"),
+    [
+        ("ftp.example.org", "other.example.org"),
+        ("ftp.example.org", "ftp.example.org.attacker.example"),
+        ("example.org", "ftp.example.org"),
+        ("ftp.example.org:2121", "ftp.example.org"),
+        ("ftp.example.org:2121", "ftp.example.org:2122"),
+        ("ftp.example.org", "ftp.example.org@other.example.org"),
+        ("ftp.example.org", "ftp.example.org:abc"),
+        ("*.example.org", "ftp.example.org"),
+        ("ftp.example.org:abc", "ftp.example.org"),
+        ("user@ftp.example.org", "ftp.example.org"),
+        ("ftp.example.org/path", "ftp.example.org"),
+        ("", "ftp.example.org"),
+        (" , ", "ftp.example.org"),
+        ("ftp.example.org", ""),
+        ("[::1", "[::1]"),
+        ("host]", "host"),
+        ("[ftp.example.org]", "ftp.example.org"),
+        ("\uff03x", "x"),
+        ("ftp://ftp.example.org", "ftp.example.org"),
+        ("ftp.example.org", "[::1"),
+        ("ftp example.org", "ftp example.org"),
+        ("h\x00", "h\x00"),
+        ("ftp.example.org:0", "ftp.example.org:0"),
+        ("ftp.example.org:", "ftp.example.org:2121"),
+        ("[::1]:", "[::1]:2121"),
+        ("\tftp.example.org", "ftp.example.org"),
+        ("ftp.example.org\n", "ftp.example.org"),
+    ],
+)
+def test_ftp_host_not_allowed(hosts: str, netloc: str) -> None:
+    """Test that other hosts, ports and invalid entries don't match.
+
+    Args:
+        hosts: The value of `TESK_FTP_HOSTS`.
+        netloc: The network location of the URL.
+    """
+    assert not ftp_host_allowed(netloc, hosts)
+
+
+def test_ftp_login_env_credentials_listed_host(mocker: MockerFixture) -> None:
+    """Test that the env credentials are sent to a listed host.
+
+    Args:
+        mocker: The mocker fixture.
+    """
+    conn = mocker.MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+    conn.login.assert_called_once_with("test", "test_pass")
+
+
+def test_ftp_login_env_credentials_other_host(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the env credentials aren't sent to a host that isn't listed.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True), caplog.at_level("DEBUG"):
+        ftp_login(conn, "user:pw@other.example.org:2121", None)
+    conn.login.assert_called_once_with()
+    assert caplog.messages == [
+        "FTP host other.example.org:2121 is not in TESK_FTP_HOSTS; "
+        "logging in anonymously"
+    ]
+    assert "pw@" not in caplog.text
+    assert "test_pass" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_ftp_login_env_credentials_without_hosts(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the env credentials aren't sent without `TESK_FTP_HOSTS`.
+
+    The filer logs in anonymously, and logs one error per process.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    with mock.patch.dict("os.environ", CREDENTIALS, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+        ftp_login(conn, "other.example.org", None)
+    assert conn.login.call_args_list == [mock.call(), mock.call()]
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "TESK_FTP_HOSTS" in errors[0].getMessage()
+    assert ".netrc" in errors[0].getMessage()
+    assert "test_pass" not in caplog.text
+
+
+@pytest.mark.parametrize("hosts", ["", " ", ",", " , ,"])
+def test_ftp_login_env_credentials_empty_hosts(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture, hosts: str
+) -> None:
+    """Test that a `TESK_FTP_HOSTS` without entries counts as missing.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+        hosts: The value of `TESK_FTP_HOSTS`.
+    """
+    conn = mocker.MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": hosts}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+    conn.login.assert_called_once_with()
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "lists no hosts" in errors[0].getMessage()
+
+
+def test_ftp_login_invalid_hosts(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that invalid entries are logged once, without their text.
+
+    Valid entries still match.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    hosts = "ftp://u:secret@h, [::1, a b, ftp.example.org"
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": hosts}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+        ftp_login(conn, "ftp.example.org", None)
+    assert conn.login.call_args_list == [mock.call("test", "test_pass")] * 2
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "3 invalid entries" in errors[0].getMessage()
+    assert "secret" not in caplog.text
+
+
+def test_ftp_login_without_credentials(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the filer logs in anonymously, without errors, without creds.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+    conn.login.assert_called_once_with()
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_ftp_login_netrc(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that `.netrc` credentials are used without `TESK_FTP_HOSTS`.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+    """
+    conn = mocker.MagicMock()
+    netrc_file = mocker.MagicMock()
+    netrc_file.authenticators.return_value = ("nuser", None, "npass")
+    with mock.patch.dict("os.environ", CREDENTIALS, clear=True):
+        ftp_login(conn, "ftp.example.org", netrc_file)
+    conn.login.assert_called_once_with("nuser", "npass")
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_ftp_login_refused(mocker: MockerFixture) -> None:
+    """Test that refused credentials lead to an anonymous login.
+
+    Args:
+        mocker: The mocker fixture.
+    """
+    conn = mocker.MagicMock()
+    # Mocked: nothing is sent
+    conn.login.side_effect = [ftplib.error_perm("530"), None]  # noqa: S321
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, "ftp.example.org", None)
+    assert conn.login.call_args_list == [
+        mock.call("test", "test_pass"),
+        mock.call(),
+    ]
 
 
 def test_ftp_upload_file_error(
