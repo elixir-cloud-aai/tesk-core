@@ -38,8 +38,9 @@ container configuration (`CreateContainerConfigError`, e.g. a missing secret
 or ConfigMap), for init containers too. The timeout is measured from the
 pod's start, or from its creation if it hasn't started. The taskmaster checks
 the pods only once the job has been active for longer than `--pod-timeout`,
-then at most once a minute, and stops checking once none of them is pending;
-pods that the job creates later (retries, replaced pods) aren't checked. A
+then at most once a minute, and stops checking once none of them is pending.
+When a pod of the job fails, it checks again, so that a retry or the
+replacement of an evicted pod that can't start times out too. A
 pull error that comes after the pod has waited longer than `--pod-timeout`,
 e.g. after a long pull of a large image, fails the job at the next check.
 

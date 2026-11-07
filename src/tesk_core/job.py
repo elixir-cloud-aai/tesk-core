@@ -71,6 +71,8 @@ class Job:
         pod_check_interval: Seconds between checks of pending pods.
         next_pod_check: When pending pods are checked next; `None` before
             the first check.
+        failed_pods: The number of the job's failed pods last seen; when it
+            grows, the job's new pods are checked again.
         body: The manifest of the job.
     """
 
@@ -93,6 +95,7 @@ class Job:
         self.failing_since: datetime | None = None
         self.pod_check_interval = POD_CHECK_INTERVAL
         self.next_pod_check: datetime | None = None
+        self.failed_pods = 0
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -176,6 +179,12 @@ class Job:
                 break
         if self.status != "Running":
             return self.status, is_all_pods_runnning
+        # A pod failed, so the job may have created a new one (a retry, or
+        # the replacement of an evicted pod): check the pods again
+        failed_pods = job.status.failed or 0
+        if failed_pods > self.failed_pods:
+            self.failed_pods = failed_pods
+            is_all_pods_runnning = False
         # A job that an earlier run of the taskmaster failed (see `fail`)
         spec = getattr(job, "spec", None)
         if (

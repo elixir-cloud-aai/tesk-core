@@ -981,3 +981,35 @@ def test_cannot_start_init_and_main_containers(
     )
     waiting = cannot_start(pod)
     assert (waiting.reason if waiting is not None else None) == expected
+
+
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+def test_get_status_replacement_pod_cannot_start(
+    mock_list_namespaced_pod: MagicMock,
+    mock_read_namespaced_job: MagicMock,
+    mock_patch_namespaced_job: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that pods are checked again once a pod of the job failed.
+
+    A retry or a replacement of an evicted pod can't start either.
+    """
+    running = job_with_conditions(None)
+    retried = job_with_conditions(None)
+    retried.__dict__["status"].__dict__["failed"] = 1
+    mock_read_namespaced_job.side_effect = [running, running, retried]
+    mock_list_namespaced_pod.side_effect = [
+        pending_pod("ErrImagePull", phase="Running"),
+        pending_pod("ErrImagePull"),
+    ]
+    job = Job(data["executors"][0], "task-ex-00", taskmaster.args.namespace)
+    job.timeout = 50
+    status, all_running = job.get_status(False)
+    assert (status, all_running) == ("Running", True)
+    assert job.get_status(all_running) == ("Running", True)
+    assert mock_list_namespaced_pod.call_count == 1
+    job.get_status(all_running)
+    assert mock_list_namespaced_pod.call_count == 2
+    mock_patch_namespaced_job.assert_called_once()
