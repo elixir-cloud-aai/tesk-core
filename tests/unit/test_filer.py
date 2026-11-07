@@ -282,8 +282,10 @@ class TestFiler:
         assert subfolders_in(path) == subfldrs
 
 
+@patch("tesk_core.path.HOST_BASE_PATH", None)
+@patch("tesk_core.path.CONTAINER_BASE_PATH", None)
 class TestFilerNoEnv:
-    """Tests without the base paths."""
+    """Tests without the base paths, whatever the environment of the run."""
 
     def test_newTransput_file_disabled(self) -> None:
         """Test that the `file:` protocol is disabled without base paths."""

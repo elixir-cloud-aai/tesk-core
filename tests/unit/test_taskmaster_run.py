@@ -5,30 +5,26 @@ from collections.abc import Callable
 import json
 import logging
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from tesk_core import taskmaster
 from tesk_core.job import Job
-from tesk_core.taskmaster import PVC, newLogger, newParser, run_task
+from tesk_core.taskmaster import newLogger, newParser, run_task
 
 RESOURCES = Path(__file__).parent / "resources"
 
 
-def pvcCreateMock(self: PVC) -> None:
-    """Mock `PVC.create`.
+@pytest.fixture(autouse=True)
+def taskmaster_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the created jobs and claim of the taskmaster module.
 
     Args:
-        self: The volume claim.
+        monkeypatch: The fixture that restores the module state afterwards.
     """
-    print("[mock] Creating PVC...")
-
-
-def pvcDeleteMock(self: PVC) -> None:
-    """Mock `PVC.delete`.
-
-    Args:
-        self: The volume claim.
-    """
-    print("[mock] Deleting PVC...")
+    monkeypatch.setattr(taskmaster, "created_jobs", [])
+    monkeypatch.setattr(taskmaster, "created_pvc", None)
 
 
 def jobRunToCompletionMock(
@@ -115,12 +111,30 @@ def test_pullPolicyAlways() -> None:
     ),
 )
 @patch("tesk_core.taskmaster.logger", newLogger(logging.DEBUG))
-@patch("tesk_core.taskmaster.PVC.create", pvcCreateMock)
-@patch("tesk_core.taskmaster.PVC.delete", pvcDeleteMock)
+@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.PVC.create")
 @patch("tesk_core.taskmaster.Job.run_to_completion", jobRunToCompletionMock)
-def test_run_task() -> None:
-    """Test that `run_task` runs the task from the input file."""
+def test_run_task(mock_create: MagicMock, mock_delete: MagicMock) -> None:
+    """Test that `run_task` runs the task from the input file.
+
+    The inputs filer, the executor and the outputs filer run in this order,
+    in a claim that is created first and deleted at the end.
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+    """
     with (RESOURCES / "inputFile.json").open() as fh:
         data = json.load(fh)
 
     run_task(data, "filer_name", "filer_version")
+
+    assert [job.name for job in taskmaster.created_jobs] == [
+        "task-1000-inputs-filer",
+        "task-1000-ex-00",
+        "task-1000-outputs-filer",
+    ]
+    assert taskmaster.created_pvc is not None
+    assert taskmaster.created_pvc.name == "task-1000-pvc"
+    mock_create.assert_called_once_with()
+    mock_delete.assert_called_once_with()

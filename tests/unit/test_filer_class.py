@@ -95,8 +95,11 @@ class TestFilerClassEnv:
         ]
 
 
+@patch("tesk_core.path.HOST_BASE_PATH", None)
+@patch("tesk_core.path.CONTAINER_BASE_PATH", None)
+@patch("tesk_core.path.TRANSFER_PVC_NAME", None)
 class TestFilerClassNoEnv:
-    """Tests without the base paths."""
+    """Tests without the base paths, whatever the environment of the run."""
 
     def test_mounts_file_disabled(self) -> None:
         """Test that only the AWS volume is mounted without base paths."""

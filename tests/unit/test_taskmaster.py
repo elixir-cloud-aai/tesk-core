@@ -50,6 +50,7 @@ def taskmaster_state(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     monkeypatch.setattr(taskmaster, "created_jobs", [])
+    monkeypatch.setattr(taskmaster, "created_pvc", None)
 
 
 @pytest.fixture

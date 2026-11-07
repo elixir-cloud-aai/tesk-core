@@ -8,6 +8,7 @@ from unittest import mock
 from pyfakefs.fake_filesystem import FakeFilesystem
 import pytest
 from pytest_mock import MockerFixture
+import requests
 from requests import Response
 
 from tesk_core.filer import HTTPTransput, Type, http_join
@@ -101,6 +102,17 @@ def test_upload_dir(mocker: MockerFixture, fs: FakeFilesystem) -> None:
         endpoint + "/dir1/dir2/file4.txt": b"took me a while",
         endpoint + "/dir1/file1": b"this is random",
     }
+
+
+def test_upload_dir_error(mocker: MockerFixture, fs: FakeFilesystem) -> None:
+    """Test that a directory upload fails if the upload of a file fails."""
+    fs.create_dir("dir1")
+    fs.create_file("dir1/file1", contents="this is random")
+    mocker.patch("requests.put", side_effect=requests.ConnectionError)
+
+    http_obj = HTTPTransput("dir1", "http://example.org/dir1", Type.Directory)
+
+    assert http_obj.upload_dir() == 1
 
 
 @pytest.mark.parametrize(
