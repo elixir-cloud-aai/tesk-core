@@ -11,6 +11,7 @@ from pytest_mock import MockerFixture
 from tesk_core.filer import (
     FTPTransput,
     Type,
+    ftp_login,
     ftp_make_dirs,
 )
 
@@ -159,3 +160,156 @@ def test_ftp_make_dirs_error(
 
     assert ftp_make_dirs(conn, "dir1") == 1
     assert "Unable to create directory" in caplog.text
+
+
+@pytest.fixture
+def ftp_redirect(mocker: MockerFixture, ftpserver: Any) -> dict[str, Any]:
+    """Send the filer's own FTP connections to the local server.
+
+    The filer connects to the URL's host on the default port and logs in
+    with the credentials it finds; the local server listens on another port
+    and has a user of its own.
+
+    Args:
+        mocker: The mocker fixture.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+
+    Returns:
+        The server's login data.
+    """
+    login = ftpserver.get_login_data()
+    connect = ftplib.FTP.connect
+    log_in = ftplib.FTP.login
+
+    def redirect_connect(self: ftplib.FTP, *args: Any, **kwargs: Any) -> str:
+        return connect(self, login["host"], login["port"])
+
+    def redirect_login(self: ftplib.FTP, *args: Any, **kwargs: Any) -> str:
+        return log_in(self, login["user"], login["passwd"])
+
+    mocker.patch.object(ftplib.FTP, "connect", redirect_connect)
+    mocker.patch.object(ftplib.FTP, "login", redirect_login)
+    return login
+
+
+def test_ftp_upload_dir_keeps_empty_dirs(
+    tmp_path: Path, ftpserver: Any, ftp_redirect: dict[str, Any]
+) -> None:
+    """Test that uploading a directory creates its empty directories.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    (tmp_path / "dir1" / "empty").mkdir(parents=True)
+    (tmp_path / "dir1" / "dir2" / "empty").mkdir(parents=True)
+    (tmp_path / "dir1" / "dir2" / "file").write_text("content")
+
+    with FTPTransput(
+        str(tmp_path / "dir1"),
+        "ftp://" + ftp_redirect["host"] + "/up",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.upload_dir() == 0
+
+    home = Path(ftpserver.server_home)
+    assert (home / "up" / "empty").is_dir()
+    assert (home / "up" / "dir2" / "empty").is_dir()
+    assert (home / "up" / "dir2" / "file").read_text() == "content"
+
+
+def test_ftp_upload_empty_dir(
+    tmp_path: Path, ftpserver: Any, ftp_redirect: dict[str, Any]
+) -> None:
+    """Test that uploading an empty directory creates it.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    (tmp_path / "empty").mkdir()
+
+    with FTPTransput(
+        str(tmp_path / "empty"),
+        "ftp://" + ftp_redirect["host"] + "/a/b",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.upload_dir() == 0
+
+    assert (Path(ftpserver.server_home) / "a" / "b").is_dir()
+
+
+def test_ftp_download_dir_keeps_empty_dirs(
+    tmp_path: Path, ftpserver: Any, ftp_redirect: dict[str, Any]
+) -> None:
+    """Test that downloading a directory creates its empty directories.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`.
+        ftp_redirect: The server's login data, with the filer's connections
+            sent to it.
+    """
+    home = Path(ftpserver.server_home)
+    (home / "down" / "empty").mkdir(parents=True)
+    (home / "down" / "dir2" / "empty").mkdir(parents=True)
+    (home / "down" / "dir2" / "file").write_text("content")
+
+    with FTPTransput(
+        str(tmp_path / "local"),
+        "ftp://" + ftp_redirect["host"] + "/down",
+        Type.Directory,
+    ) as transfer:
+        assert transfer.download_dir() == 0
+
+    assert (tmp_path / "local" / "empty").is_dir()
+    assert (tmp_path / "local" / "dir2" / "empty").is_dir()
+    assert (tmp_path / "local" / "dir2" / "file").read_text() == "content"
+
+
+@pytest.mark.parametrize("hosts", ["LOCALHOST", "localhost:21", ""])
+def test_ftp_login_env_credentials(tmp_path: Path, ftpserver: Any, hosts: str) -> None:
+    """Test that the env credentials are sent only to listed hosts.
+
+    The local FTP server has an account that may upload, and a read-only
+    anonymous user with another home directory: an upload shows which one
+    the filer logged in as.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        ftpserver: The local FTP server, from `pytest-localftpserver`, which
+            ships no type information.
+        hosts: The value of `TESK_FTP_HOSTS`; only the first lists the
+            server's host and port.
+    """
+    login = ftpserver.get_login_data()
+    # The server is shared by the tests of the session
+    target = Path(ftpserver.server_home) / "probe.txt"
+    target.unlink(missing_ok=True)
+    source = tmp_path / "probe.txt"
+    source.write_text("probe")
+    env = {
+        "TESK_FTP_USERNAME": login["user"],
+        "TESK_FTP_PASSWORD": login["passwd"],
+        "TESK_FTP_HOSTS": hosts,
+    }
+    conn = ftplib.FTP()  # noqa: S321  # plain FTP to a local test server
+    conn.connect(host="localhost", port=login["port"])
+    try:
+        with mock.patch.dict("os.environ", env, clear=True):
+            ftp_login(conn, f"localhost:{login['port']}", None)
+        with source.open("rb") as file:
+            if hosts == "LOCALHOST":
+                conn.storbinary("STOR probe.txt", file)
+            else:
+                with pytest.raises(ftplib.error_perm):
+                    conn.storbinary("STOR probe.txt", file)
+    finally:
+        conn.close()
+        uploaded = target.exists()
+        target.unlink(missing_ok=True)
+    assert uploaded is (hosts == "LOCALHOST")

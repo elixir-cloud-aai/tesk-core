@@ -32,7 +32,7 @@ dynamic = ["version"]
 dependencies = [
     # 3.x and 2.x are the supported major versions of boto3 and urllib3
     "boto3>=1.28,<2",
-    "kubernetes>=35.0.0,<36",
+    "kubernetes>=35.0.0,<38",
     "requests>=2.32.4,<3",
     "urllib3>=2.6.0,<3",
 ]
@@ -44,8 +44,7 @@ dev = [
     "boto3-stubs[s3]>=1.28",
     "coverage>=7.10",
     "fsspec>=2025.3",
-    # moto 5 replaced `mock_s3`, which the S3 tests use
-    "moto>=4.2,<5",
+    "moto>=5,<6",
     "mypy>=1.18",
     "pre-commit>=4.3",
     "pyfakefs>=5.9",
@@ -146,10 +145,13 @@ disallow_untyped_defs = true
 disallow_any_generics = true
 warn_unused_ignores = true
 
-# The Kubernetes client ships no type information
+# The Kubernetes client is not checked: older versions ship no type
+# information, and the typed models of newer ones (37) don't fit the dicts
+# and the `None` handling of the job and PVC code
 [[tool.mypy.overrides]]
 module = ["kubernetes", "kubernetes.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,7 +27,7 @@ writes to `path`. The scheme of the URL selects the protocol.
 | Scheme | Inputs | Outputs |
 |---|---|---|
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
-| `ftp` | Files and directories (not empty ones) | Files and directories (not empty ones; creating the remote directories) |
+| `ftp` | Files and directories, including empty ones | Files and directories, including empty ones (creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
 | `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
 
@@ -44,20 +44,51 @@ reads for the URL's host.
 
 ### FTP
 
+Directory downloads skip, with a warning, listing entries whose names aren't
+a single path component (empty, `.`, `..`, or with `/` or `\`).
+
 The filer logs in with the first credentials it finds:
 
 1. The entry in a mounted `.netrc` file for the URL's host and port (e.g.
    `machine ftp.example.org:2121`) or for its host (`machine
    ftp.example.org`), matched as written, including case; otherwise its
    `default` entry.
-2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set.
+2. `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD`, if both are set (the user
+   name not empty) and the URL's host is in `TESK_FTP_HOSTS` (see below).
 3. Anonymously.
 
-If the server refuses the credentials, the filer logs in anonymously. TESK's
-Helm chart sets the two variables from a Kubernetes secret
-(`ftp.classic_ftp_secret`; see
+If the server refuses the credentials, the filer logs in anonymously.
+TESK's Helm chart sets the credentials from a Kubernetes secret
+(`ftp.classicFtpSecret`) and `TESK_FTP_HOSTS` from `ftp.hosts` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
+
+`TESK_FTP_HOSTS` lists the hosts that the credentials are sent to,
+separated by commas, e.g. `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
+
+- Each entry is `host` or `host:port`; IPv6 addresses go in brackets.
+  Spaces around entries are ignored.
+- Hosts match exactly, ignoring case: `ftp.example.org` matches neither
+  `example.org` nor `ftp.example.org.other.org`. There are no wildcards.
+- An entry without a port matches the host on any port; one with a port
+  matches only that port (`ftp.example.org:21` also matches URLs without
+  a port).
+- Entries with user information, a path, whitespace or control characters
+  inside, or an empty, invalid or zero port (e.g. `ftp.example.org:`)
+  match nothing;
+  the filer logs an error, once per run, with their number (not their
+  text).
+
+The filer can't connect to FTP URLs with a port yet
+([#89](https://github.com/elixir-cloud-aai/tesk-core/issues/89)); entries
+with a port are for when it can.
+
+If `TESK_FTP_USERNAME` and `TESK_FTP_PASSWORD` are set, but
+`TESK_FTP_HOSTS` is not (or has no entries), the credentials are sent to no
+host:
+the filer logs in anonymously and logs an error, once per run, that says to
+set `TESK_FTP_HOSTS` or to use a `.netrc` file. Log messages contain neither
+the credentials nor the user information of URLs.
 
 ### S3
 
@@ -84,6 +115,12 @@ S3 API requires them (`AWS_REQUEST_CHECKSUM_CALCULATION` and
 `AWS_RESPONSE_CHECKSUM_VALIDATION` set to `WHEN_REQUIRED`), for stores that
 don't support the newer checksums.
 
+Only `s3://` URLs use S3. The bucket is the URL's host part, taken as
+written, so bucket names may contain `s3` (e.g. `s3://mys3data/out.txt`).
+`http(s)://` URLs are transferred over HTTP, even if they point to an S3
+endpoint (e.g. `https://mybucket.s3.amazonaws.com/file.txt`); to use S3 for
+them, rewrite them as `s3://mybucket/file.txt`.
+
 ### Shared volume (`file:`)
 
 With `file:` URLs, the filer copies files between the task's volume and a
@@ -109,7 +146,7 @@ If the taskmaster has the environment variable `NETRC_SECRET_NAME`, it mounts
 the key `.netrc` of that Kubernetes secret into the filer as
 `/opt/home/.netrc`, and sets `HOME` to `/opt/home`. The filer then uses it
 for FTP and HTTP(S), as described above. TESK's Helm chart creates such a
-secret with `ftp.netrc_secret`. A `.netrc` file has one entry per host:
+secret with `ftp.netrcSecret`. A `.netrc` file has one entry per host:
 
 ```text
 machine ftp.example.org
