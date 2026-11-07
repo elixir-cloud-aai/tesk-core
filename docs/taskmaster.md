@@ -66,11 +66,17 @@ executor fails. TESK's Helm chart sets `EXECUTOR_BACKOFF_LIMIT` from
 API creates executor jobs with the restart policy `Never`; with `OnFailure`,
 Kubernetes would also restart failed containers within the pod.
 
-To cancel a task, the TESK API labels the taskmaster's pod: the taskmaster
-reads its labels from `/podinfo/labels` (a Kubernetes downward API volume)
-while it polls, and when it finds the value `Cancelled`, it deletes the
-running job, also one that it is failing, and stops. If the taskmaster is
-interrupted (`SIGINT`), it deletes the jobs it created.
+To cancel a task, the TESK API labels the taskmaster's job and, if it runs,
+its pod with `task-status: Cancelled`. The taskmaster checks for this label
+before it creates the first job and while it polls: on its pod, through
+`/podinfo/labels` (a Kubernetes downward API volume), and on its job, read
+from the Kubernetes API (the job's name is in the pod's `job-name` label). A
+task that was cancelled while its taskmaster's pod was pending, or before the
+pod existed, has the label only on its job; its taskmaster stops before it
+creates any job. When the taskmaster finds the label while a job runs, it
+deletes that job, also one that it is failing, and stops. If it can't read
+its job, it logs a warning and checks again at the next poll. If the
+taskmaster is interrupted (`SIGINT`), it deletes the jobs it created.
 
 ## Options
 

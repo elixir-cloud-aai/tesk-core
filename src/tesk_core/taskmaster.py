@@ -14,7 +14,8 @@ import re
 import sys
 from typing import Any, NoReturn
 
-from kubernetes import config
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from tesk_core.filer_class import Filer
 from tesk_core.job import Job
@@ -24,6 +25,15 @@ created_jobs: list[Job] = []
 created_pvc: PVC | None = None
 poll_interval = 5
 task_volume_basename = "task-volume"
+# The labels of the taskmaster's pod (Downward API volume of the TESK API's
+# taskmaster job)
+pod_labels_file = "/podinfo/labels"
+# The label and value with which the TESK API cancels a task
+cancel_label = "task-status"
+cancel_value = "Cancelled"
+# The labels with the name of the job that created a pod: the first since
+# Kubernetes 1.27, the second also before
+job_name_labels = ("batch.kubernetes.io/job-name", "job-name")
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -443,28 +453,72 @@ def exit_cancelled(reason: str = "Unknown reason") -> NoReturn:
     sys.exit(0)
 
 
+def read_pod_labels() -> dict[str, str]:
+    """Read the labels of the taskmaster's pod.
+
+    The Downward API writes them as one `key="value"` line per label.
+
+    Returns:
+        The labels, or none if there is no labels file (e.g. outside a pod).
+    """
+    if not os.path.exists(pod_labels_file):
+        return {}
+
+    labels = {}
+    with open(pod_labels_file) as fh:
+        for line in fh.read().splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                labels[key] = value.strip('"')
+    return labels
+
+
+def is_job_cancelled(job_name: str) -> bool:
+    """Tell whether the TESK API labelled the taskmaster's job as cancelled.
+
+    An error reading the job is logged, and counts as not cancelled: the job
+    is read again at the next check.
+
+    Args:
+        job_name: The name of the taskmaster's job.
+
+    Returns:
+        Whether the job has the cancel label.
+    """
+    try:
+        job = client.BatchV1Api().read_namespaced_job(job_name, args.namespace)
+    except ApiException as ex:
+        logger.warning(
+            "Can't read job '%s' to check for cancellation: %s %s",
+            job_name,
+            ex.status,
+            ex.reason,
+        )
+        return False
+    job_labels = job.metadata.labels or {}
+    return bool(job_labels.get(cancel_label) == cancel_value)
+
+
 def check_cancelled() -> bool:
     """Tell whether the task was cancelled.
 
-    The TESK API labels the taskmaster's pod; the labels are mounted as
-    `/podinfo/labels` (Downward API).
+    The TESK API labels the taskmaster's job and, if it runs, its pod. The
+    pod's labels are mounted as `pod_labels_file` (Downward API). A pod that
+    was pending or not created yet when the task was cancelled has no label,
+    so the job's label is read from the Kubernetes API as well.
 
     Returns:
-        Whether a label has the value `"Cancelled"`.
+        Whether the pod or the job has the cancel label.
     """
-    labelInfoFile = "/podinfo/labels"
+    labels = read_pod_labels()
+    logger.debug("Got pod labels: %s", labels)
+    if labels.get(cancel_label) == cancel_value:
+        return True
 
-    if not os.path.exists(labelInfoFile):
+    job_name = next((labels[key] for key in job_name_labels if key in labels), None)
+    if job_name is None:
         return False
-
-    with open(labelInfoFile) as fh:
-        for line in fh.readlines():
-            _, label = line.split("=")
-            logging.debug("Got label: %s", label)
-            if label == '"Cancelled"':
-                return True
-
-    return False
+    return is_job_cancelled(job_name)
 
 
 if __name__ == "__main__":
