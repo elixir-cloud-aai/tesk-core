@@ -192,6 +192,21 @@ def test_run_executor_failure(
         run_executor(data["executors"][0], taskmaster.args.namespace)
 
 
+@patch("tesk_core.taskmaster.Job.delete")
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="PodTimeout")
+@patch("tesk_core.taskmaster.logger")
+def test_run_executor_pod_timeout(
+    mock_logger: MagicMock,
+    mock_run_to_compl: MagicMock,
+    mock_job_delete: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that an executor whose pod can't start exits, keeping its job."""
+    with pytest.raises(SystemExit):
+        run_executor(data["executors"][0], taskmaster.args.namespace)
+    mock_job_delete.assert_not_called()
+
+
 @patch("tesk_core.taskmaster.PVC")
 @patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
 @patch("tesk_core.taskmaster.logger")

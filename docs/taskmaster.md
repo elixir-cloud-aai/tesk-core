@@ -33,8 +33,10 @@ container configuration (`CreateContainerConfigError`, e.g. a missing secret
 or ConfigMap). The timeout is measured from the pod's start, or from its
 creation if it hasn't started; the taskmaster checks the pods only once the
 job has been active for longer than `--pod-timeout`, and stops checking once
-none of them is pending. It then deletes an executor's job (status
-`Error`); a filer's job is kept. Pods that are pending for other reasons,
+none of them is pending. It deletes an executor's job only if the pod has
+started and its first container can't pull its image (`ImagePullBackOff`,
+status `Error`); in the other cases (status `PodTimeout`), and for filers,
+it keeps the job. Pods that are pending for other reasons,
 e.g. waiting to be scheduled or pulling a large image, are queued and keep
 waiting.
 

@@ -46,6 +46,29 @@ def cannot_start(pod: client.V1Pod) -> client.V1ContainerStateWaiting | None:
     return None
 
 
+def pod_timeout_status(pod: client.V1Pod) -> str:
+    """Get the status of a job whose pending pod can't start.
+
+    Args:
+        pod: The pod, after the timeout.
+
+    Returns:
+        `Error` for a started pod whose first container can't pull its image
+        (`ImagePullBackOff`), the only case that timed out before, and whose
+        executor job is deleted; otherwise `PodTimeout`, and the job is kept.
+    """
+    statuses = pod.status.container_statuses or []
+    state = statuses[0].state if statuses else None
+    waiting = state.waiting if state is not None else None
+    if (
+        pod.status.start_time is not None
+        and waiting is not None
+        and waiting.reason == "ImagePullBackOff"
+    ):
+        return "Error"
+    return "PodTimeout"
+
+
 class Job:
     """A Kubernetes job, run to completion.
 
@@ -53,7 +76,7 @@ class Job:
         name: Name of the job.
         namespace: Namespace of the job.
         status: Last known status: `Initialized`, `Running`, `Complete`,
-            `Failed` or `Error`.
+            `Failed`, `Error` or `PodTimeout`.
         bv1: Client of the Kubernetes batch API.
         cv1: Client of the Kubernetes core API.
         timeout: Seconds after which pending pods that can't start (see
@@ -96,7 +119,8 @@ class Job:
                 (see `CANNOT_START_REASONS`) fail the job.
 
         Returns:
-            The final status: `Complete`, `Failed`, `Error` or `Cancelled`.
+            The final status: `Complete`, `Failed`, `Error`, `PodTimeout`
+            or `Cancelled`.
 
         Raises:
             ApiException: The Kubernetes API returned an error other than a
@@ -132,8 +156,8 @@ class Job:
                 running (no longer pending) by an earlier call.
 
         Returns:
-            The status (`Running`, `Complete`, `Failed` or `Error`) and
-            whether all pods of the job are running.
+            The status (`Running`, `Complete`, `Failed`, `Error` or
+            `PodTimeout`) and whether all pods of the job are running.
         """
         job = self.bv1.read_namespaced_job(self.name, self.namespace)
         try:
@@ -178,7 +202,7 @@ class Job:
                     waiting = cannot_start(pod)
                     if delta > self.timeout and waiting is not None:
                         logging.info(waiting)
-                        return "Error", is_all_pods_runnning
+                        return pod_timeout_status(pod), is_all_pods_runnning
 
         return self.status, is_all_pods_runnning
 

@@ -583,14 +583,20 @@ def test_get_status_pod_cannot_start(
 ) -> None:
     """Test that pods that can't start fail the job after the timeout.
 
-    Whether or not they have a start time, and for init containers too.
+    Whether or not they have a start time, and for init containers too. A
+    started pod whose first container can't pull its image
+    (`ImagePullBackOff`) gives `Error`, as before; the other cases give
+    `PodTimeout`.
     """
     mock_list_namespaced_pod.return_value = pending_pod(reason, 10, started, init)
     executor = data["executors"][0]
     job = Job(executor, executor["metadata"]["name"], taskmaster.args.namespace)
     job.timeout = 50
     status, _ = job.get_status(False)
-    assert status == "Error"
+    if reason == "ImagePullBackOff" and started and not init:
+        assert status == "Error"
+    else:
+        assert status == "PodTimeout"
 
 
 @pytest.mark.parametrize(
@@ -694,4 +700,4 @@ def test_get_status_unscheduled_then_cannot_start(
     job.timeout = 50
     status, all_running = job.get_status(False)
     assert (status, all_running) == ("Running", False)
-    assert job.get_status(all_running)[0] == "Error"
+    assert job.get_status(all_running)[0] == "PodTimeout"
