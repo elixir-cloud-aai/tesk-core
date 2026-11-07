@@ -36,6 +36,8 @@ cancel_value = "Cancelled"
 # The labels with the name of the job that created a pod: the first since
 # Kubernetes 1.27, the second also before
 job_name_labels = ("batch.kubernetes.io/job-name", "job-name")
+# The labels with the UID of that job, likewise
+job_uid_labels = ("batch.kubernetes.io/controller-uid", "controller-uid")
 # Reads the taskmaster's job; created at the first check, after the
 # Kubernetes configuration is loaded, and reused at every poll
 batch_api: client.BatchV1Api | None = None
@@ -617,10 +619,24 @@ def log_job_read_error(job_name: str, ex: Exception) -> None:
     global job_read_error_logged  # noqa: PLW0603 -- once per run
     level = logging.DEBUG if job_read_error_logged else logging.ERROR
     job_read_error_logged = True
-    reason = f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else str(ex)
     logger.log(
-        level, "Can't read job '%s' to check for cancellation: %s", job_name, reason
+        level,
+        "Can't read job '%s' to check for cancellation: %s",
+        job_name,
+        error_reason(ex),
     )
+
+
+def error_reason(ex: Exception) -> str:
+    """Describe an error of the Kubernetes API, without its response body.
+
+    Args:
+        ex: The error.
+
+    Returns:
+        The status and reason of an API error, or the error's text.
+    """
+    return f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else str(ex)
 
 
 def is_job_cancelled(job_name: str) -> bool:
@@ -725,56 +741,37 @@ def task_ttl_seconds() -> int | None:
 def init_own_job() -> None:
     """Make the taskmaster's job own the task's jobs, and set its TTL.
 
-    Reads the taskmaster's job, so that the jobs that the taskmaster creates
-    (`new_job`) get an owner reference to it: Kubernetes deletes them, and
-    their pods, with it. With `TASK_TTL_SECONDS`, sets the job's
+    The jobs that the taskmaster creates (`new_job`) get an owner reference
+    to its job, with the job's name and UID from its pod's labels (no API
+    call, so that every attempt of the pod sets it): Kubernetes deletes them,
+    and their pods, with it. With `TASK_TTL_SECONDS`, sets the job's
     `ttlSecondsAfterFinished`, so that Kubernetes deletes it that many
-    seconds after it finished. Errors are logged, not raised: the task runs
-    without owner references or TTL, as before.
+    seconds after it finished; an error is logged, not raised, and the task
+    runs without a TTL, as before.
     """
     global owner_references  # noqa: PLW0603 -- module state of the run
-    ttl = task_ttl_seconds()
-    job_name = own_job_name(read_pod_labels())
-    if job_name is None:
-        logger.debug("No job name in the pod's labels; jobs get no owner")
-        return
-
-    api = get_batch_api()
-    try:
-        job = api.read_namespaced_job(
-            job_name, args.namespace, _request_timeout=job_read_timeout
-        )
-    except (ApiException, HTTPError) as ex:
-        logger.error(
-            "Can't read job '%s'; the task's jobs get no owner and no TTL: %s",
-            job_name,
-            f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else ex,
-        )
+    labels = read_pod_labels()
+    job_name = own_job_name(labels)
+    job_uid = next((labels[key] for key in job_uid_labels if key in labels), None)
+    if job_name is None or job_uid is None:
+        logger.debug("No job name or UID in the pod's labels; jobs get no owner")
         return
     owner_references = [
-        {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "name": job.metadata.name,
-            "uid": job.metadata.uid,
-        }
+        {"apiVersion": "batch/v1", "kind": "Job", "name": job_name, "uid": job_uid}
     ]
 
+    ttl = task_ttl_seconds()
     if ttl is None:
         return
     try:
-        api.patch_namespaced_job(
+        get_batch_api().patch_namespaced_job(
             job_name,
             args.namespace,
             {"spec": {"ttlSecondsAfterFinished": ttl}},
             _request_timeout=job_read_timeout,
         )
     except (ApiException, HTTPError) as ex:
-        logger.error(
-            "Can't set the TTL of job '%s': %s",
-            job_name,
-            f"{ex.status} {ex.reason}" if isinstance(ex, ApiException) else ex,
-        )
+        logger.error("Can't set the TTL of job '%s': %s", job_name, error_reason(ex))
 
 
 def new_job(body: dict[str, Any], name: str, namespace: str | None = None) -> Job:

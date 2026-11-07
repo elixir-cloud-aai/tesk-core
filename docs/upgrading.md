@@ -16,11 +16,14 @@ that many seconds after it finished (see
 default: nothing is deleted, as before. Deleted tasks disappear from the
 TESK API (`ListTasks`, `GetTask`), as TESK keeps no database.
 
-The taskmaster reads its own job for this, with `get` on `jobs`, and sets
+The taskmaster takes its job's name and UID from its pod's labels, and sets
 the TTL with `patch` on `jobs`, which the role of TESK's Helm chart already
-grants; deployments with their own role must grant them too. Without them,
-it logs an error and runs the task as before. Jobs of tasks that started
-before the upgrade have no owner, and stay.
+grants (`charts/tesk/templates/common/taskmaster-rbac.yaml`); deployments
+with their own role must grant it too. Without it, the taskmaster logs an
+error and runs the task without a TTL. Jobs of tasks that started before
+the upgrade have no owner, and stay. The task's ConfigMap, and PVCs that
+are kept, aren't deleted with the jobs; pick a TTL of hours rather than
+seconds (see the linked section).
 
 ### Filers run only when they have something to stage
 

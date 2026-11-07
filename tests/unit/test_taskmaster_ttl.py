@@ -14,7 +14,14 @@ from tesk_core import taskmaster
 from tesk_core.taskmaster import init_own_job, new_job, run_task, task_ttl_seconds
 
 RESOURCES = Path(__file__).parent / "resources"
-POD_LABELS = 'batch.kubernetes.io/job-name="task-1234"\napp="tesk"'
+# As the Downward API writes them (see `test_taskmaster_cancel.py`), with
+# the job's UID
+POD_LABELS = (
+    'batch.kubernetes.io/controller-uid="0a1b2c3d"\n'
+    'batch.kubernetes.io/job-name="task-1234"\napp="tesk"'
+)
+# The labels of Kubernetes before 1.27
+OLD_POD_LABELS = 'app="tesk"\ncontroller-uid="0a1b2c3d"\njob-name="task-1234"'
 OWNER = {
     "apiVersion": "batch/v1",
     "kind": "Job",
@@ -52,18 +59,6 @@ def labels_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     path = tmp_path / "labels"
     monkeypatch.setattr(taskmaster, "pod_labels_file", str(path))
     return path
-
-
-def own_job() -> MagicMock:
-    """Make the taskmaster's job, as read from the Kubernetes API.
-
-    Returns:
-        The job.
-    """
-    job = MagicMock()
-    job.metadata.name = "task-1234"
-    job.metadata.uid = "0a1b2c3d"
-    return job
 
 
 @pytest.mark.parametrize(
@@ -126,24 +121,24 @@ def test_task_ttl_seconds_invalid(
     assert taskmaster.task_ttl_env in caplog.text
 
 
+@pytest.mark.parametrize("labels", [POD_LABELS, OLD_POD_LABELS])
 @patch("tesk_core.taskmaster.client.BatchV1Api")
-def test_init_own_job(mock_api: MagicMock, labels_file: Path) -> None:
+def test_init_own_job(mock_api: MagicMock, labels_file: Path, labels: str) -> None:
     """Test that the taskmaster's job owns the task's jobs, without a TTL.
+
+    The owner comes from the pod's labels, without an API call.
 
     Args:
         mock_api: The mocked batch API.
         labels_file: The pod labels file.
+        labels: The pod's labels, of current or older Kubernetes.
     """
-    labels_file.write_text(POD_LABELS)
-    mock_api.return_value.read_namespaced_job.return_value = own_job()
+    labels_file.write_text(labels)
 
     init_own_job()
 
     assert taskmaster.owner_references == [OWNER]
-    mock_api.return_value.read_namespaced_job.assert_called_once_with(
-        "task-1234", "tesk", _request_timeout=taskmaster.job_read_timeout
-    )
-    mock_api.return_value.patch_namespaced_job.assert_not_called()
+    mock_api.assert_not_called()
 
 
 @patch("tesk_core.taskmaster.client.BatchV1Api")
@@ -159,7 +154,6 @@ def test_init_own_job_ttl(
     """
     labels_file.write_text(POD_LABELS)
     monkeypatch.setenv(taskmaster.task_ttl_env, "3600")
-    mock_api.return_value.read_namespaced_job.return_value = own_job()
 
     init_own_job()
 
@@ -172,47 +166,40 @@ def test_init_own_job_ttl(
     assert taskmaster.owner_references == [OWNER]
 
 
+@pytest.mark.parametrize(
+    "labels",
+    [None, 'batch.kubernetes.io/job-name="task-1234"', 'controller-uid="0a1b2c3d"'],
+)
 @patch("tesk_core.taskmaster.client.BatchV1Api")
-def test_init_own_job_without_labels(mock_api: MagicMock) -> None:
-    """Test that without the pod's labels (e.g. outside a pod), nothing is read.
-
-    Args:
-        mock_api: The mocked batch API.
-    """
-    init_own_job()
-
-    assert taskmaster.owner_references == []
-    mock_api.return_value.read_namespaced_job.assert_not_called()
-
-
-@patch("tesk_core.taskmaster.client.BatchV1Api")
-def test_init_own_job_read_error(
+def test_init_own_job_without_labels(
     mock_api: MagicMock,
     labels_file: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    labels: str | None,
 ) -> None:
-    """Test that a job that can't be read is logged, and owns nothing.
+    """Test that without the job's name and UID, jobs get no owner and no TTL.
+
+    E.g. outside a pod, without the labels file; the TTL setting isn't read
+    then, so an invalid one isn't logged either.
 
     Args:
         mock_api: The mocked batch API.
         labels_file: The pod labels file.
         monkeypatch: The fixture that sets the environment.
         caplog: The fixture that captures the log.
+        labels: The pod's labels, or `None` for no labels file.
     """
-    labels_file.write_text(POD_LABELS)
-    monkeypatch.setenv(taskmaster.task_ttl_env, "60")
-    mock_api.return_value.read_namespaced_job.side_effect = ApiException(
-        status=403, reason="Forbidden"
-    )
+    if labels is not None:
+        labels_file.write_text(labels)
+    monkeypatch.setenv(taskmaster.task_ttl_env, "invalid")
 
     with caplog.at_level(logging.ERROR, logger=taskmaster.__name__):
         init_own_job()
 
     assert taskmaster.owner_references == []
-    mock_api.return_value.patch_namespaced_job.assert_not_called()
-    assert "Can't read job 'task-1234'" in caplog.text
-    assert "403 Forbidden" in caplog.text
+    mock_api.assert_not_called()
+    assert not caplog.records
 
 
 @patch("tesk_core.taskmaster.client.BatchV1Api")
@@ -232,7 +219,6 @@ def test_init_own_job_patch_error(
     """
     labels_file.write_text(POD_LABELS)
     monkeypatch.setenv(taskmaster.task_ttl_env, "60")
-    mock_api.return_value.read_namespaced_job.return_value = own_job()
     mock_api.return_value.patch_namespaced_job.side_effect = ApiException(
         status=403, reason="Forbidden"
     )
@@ -241,7 +227,7 @@ def test_init_own_job_patch_error(
         init_own_job()
 
     assert taskmaster.owner_references == [OWNER]
-    assert "Can't set the TTL of job 'task-1234'" in caplog.text
+    assert "Can't set the TTL of job 'task-1234': 403 Forbidden" in caplog.text
 
 
 def test_new_job_owner_references(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,3 +292,37 @@ def test_run_task_jobs_owned(
     ]
     for job in jobs:
         assert job.body["metadata"]["ownerReferences"] == [OWNER]
+
+
+@patch("tesk_core.taskmaster.run_task")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=True)
+@patch("tesk_core.taskmaster.config.load_incluster_config")
+@patch("tesk_core.taskmaster.client.BatchV1Api")
+def test_main_sets_ttl_before_cancel_check(
+    mock_api: MagicMock,
+    mock_config: MagicMock,
+    mock_cancelled: MagicMock,
+    mock_run_task: MagicMock,
+    labels_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a task cancelled before it starts still gets its TTL.
+
+    Args:
+        mock_api: The mocked batch API.
+        mock_config: The mocked loading of the Kubernetes configuration.
+        mock_cancelled: The mocked check for cancellation.
+        mock_run_task: The mocked run of the task.
+        labels_file: The pod labels file.
+        monkeypatch: The fixture that sets the environment.
+    """
+    labels_file.write_text(POD_LABELS)
+    monkeypatch.setenv(taskmaster.task_ttl_env, "60")
+    monkeypatch.setattr("sys.argv", ["taskmaster", "-n", "tesk", "{}"])
+
+    with pytest.raises(SystemExit):
+        taskmaster.main()
+
+    mock_api.return_value.patch_namespaced_job.assert_called_once()
+    assert taskmaster.owner_references == [OWNER]
+    mock_run_task.assert_not_called()
