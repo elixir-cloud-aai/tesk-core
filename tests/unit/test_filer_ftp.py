@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from unittest import mock
 from unittest.mock import MagicMock
+from urllib.parse import urlsplit
 
 import pytest
 from pytest_mock import MockerFixture
@@ -24,6 +25,7 @@ from tesk_core.filer import (
     log_invalid_ftp_hosts,
     log_missing_ftp_hosts,
     netloc_host,
+    process_file,
 )
 
 CREDENTIALS = {"TESK_FTP_USERNAME": "test", "TESK_FTP_PASSWORD": "test_pass"}
@@ -48,12 +50,12 @@ def _reset_missing_hosts_log() -> Iterator[None]:
     [
         ("ftp.example.org", "ftp.example.org"),
         ("FTP.Example.org", "ftp.example.ORG"),
-        ("ftp.example.org", "ftp.example.org:2121"),
+        ("ftp.example.org", "ftp.example.org:21"),
         ("ftp.example.org:2121", "ftp.example.org:2121"),
         ("ftp.example.org:21", "ftp.example.org"),
         ("ftp.example.org", "user:secret@ftp.example.org"),
         ("other.example.org, ftp.example.org ,", "ftp.example.org"),
-        ("[::1]", "[::1]:2121"),
+        ("[::1]", "[::1]"),
         ("[::1]:2121", "[::1]:2121"),
         ("192.0.2.1", "192.0.2.1"),
     ],
@@ -75,6 +77,8 @@ def test_ftp_host_allowed(hosts: str, netloc: str) -> None:
         ("ftp.example.org", "ftp.example.org.attacker.example"),
         ("example.org", "ftp.example.org"),
         ("ftp.example.org:2121", "ftp.example.org"),
+        ("ftp.example.org", "ftp.example.org:2121"),
+        ("[::1]", "[::1]:2121"),
         ("ftp.example.org:2121", "ftp.example.org:2122"),
         ("ftp.example.org", "ftp.example.org@other.example.org"),
         ("ftp.example.org", "ftp.example.org:abc"),
@@ -247,7 +251,7 @@ def netrc_file(tmp_path: Path) -> netrc.netrc:
 
 
 @pytest.mark.parametrize(
-    "netloc", ["FTP.example.org", "FTP.example.org:2121", "user@FTP.example.org"]
+    "netloc", ["FTP.example.org", "FTP.example.org:21", "user@FTP.example.org"]
 )
 def test_ftp_login_netrc_entry(netrc_file: netrc.netrc, netloc: str) -> None:
     """Test that the `.netrc` entry for the host wins over the environment.
@@ -336,6 +340,148 @@ def test_ftp_login_netrc_default_wins(tmp_path: Path) -> None:
     conn.login.assert_called_once_with("default_user", "default_pass")
 
 
+def test_ftp_login_netrc_other_port(netrc_file: netrc.netrc) -> None:
+    """Test that an entry for the host isn't used for other ports.
+
+    Args:
+        netrc_file: The `.netrc` file, with an entry for `FTP.example.org`.
+    """
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, "FTP.example.org:2121", netrc_file)
+    conn.login.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "netloc", ["FTP.example.org:[2001:db8::1]", "FTP.example.org:21[v1.x]"]
+)
+def test_ftp_login_unparsable_netloc(
+    netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture, netloc: str
+) -> None:
+    """Test that no credentials are sent for a host that can't be parsed.
+
+    The `.netrc` lookup and the connection must agree on the host; Python
+    versions without strict checks of brackets read these differently.
+
+    Args:
+        netrc_file: The `.netrc` file, with an entry for `FTP.example.org`.
+        caplog: The log capture fixture.
+        netloc: A network location with brackets in the port.
+    """
+    conn = MagicMock()
+    env = {**CREDENTIALS, "TESK_FTP_HOSTS": "ftp.example.org"}
+    with mock.patch.dict("os.environ", env, clear=True):
+        ftp_login(conn, netloc, netrc_file)
+    conn.login.assert_called_once_with()
+    assert "Invalid host in FTP URL" in caplog.text
+
+
+def test_ftp_login_host_mismatch(
+    mocker: MockerFixture, netrc_file: netrc.netrc, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that no credentials are sent if the two parses of a host differ.
+
+    The connection's host (`split_host_port`) and the `.netrc` lookup's
+    (`netloc_host`) must agree, ignoring case.
+
+    Args:
+        mocker: The mocker fixture.
+        netrc_file: The `.netrc` file, with an entry for `FTP.example.org`.
+        caplog: The log capture fixture.
+    """
+    mocker.patch(
+        "tesk_core.filer.split_host_port", return_value=("other.example.org", None)
+    )
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, "FTP.example.org", netrc_file)
+    conn.login.assert_called_once_with()
+    assert "Invalid host in FTP URL" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("machine", "netloc"),
+    [
+        ("ftp.example.org:21", "ftp.example.org"),
+        ("ftp.example.org:21", "u@ftp.example.org:021"),
+        ("[::1]:21", "[::1]"),
+        ("[::1]", "[::1]:21"),
+    ],
+)
+def test_ftp_login_netrc_default_port(
+    tmp_path: Path, machine: str, netloc: str
+) -> None:
+    """Test that entries for port 21 match URLs with or without it.
+
+    Args:
+        tmp_path: The temporary directory of the test.
+        machine: The host of the `.netrc` entry.
+        netloc: The network location of the URL.
+    """
+    path = tmp_path / ".netrc"
+    path.write_text(f"machine {machine} login port_user password port_pass\n")
+    path.chmod(0o600)
+    conn = MagicMock()
+    with mock.patch.dict("os.environ", {}, clear=True):
+        ftp_login(conn, netloc, netrc.netrc(str(path)))
+    conn.login.assert_called_once_with("port_user", "port_pass")
+
+
+@pytest.mark.parametrize(
+    ("url", "host", "port"),
+    [
+        ("ftp://h.example.org/x", "h.example.org", 0),
+        ("ftp://h.example.org:2121/x", "h.example.org", 2121),
+        ("ftp://u:p@h.example.org:2121/x", "h.example.org", 2121),
+        ("ftp://[::1]:2121/x", "::1", 2121),
+        ("ftp://H.Example.org/x", "h.example.org", 0),
+    ],
+)
+def test_ftp_connect_host_port(
+    mocker: MockerFixture, url: str, host: str, port: int
+) -> None:
+    """Test that the filer connects to the URL's host and port.
+
+    Without user information; port 0 makes `ftplib` use its default port.
+
+    Args:
+        mocker: The mocker fixture.
+        url: The URL.
+        host: The expected host.
+        port: The expected port.
+    """
+    conn = mocker.MagicMock()
+    mocker.patch("tesk_core.filer.FTP", return_value=conn)
+    login = mocker.patch("tesk_core.filer.ftp_login")
+    with FTPTransput("/tmp/x", url, Type.File):
+        pass
+    conn.connect.assert_called_once_with(host, port)
+    # The credentials are looked up for the network location as written
+    login.assert_called_once_with(conn, urlsplit(url).netloc, mocker.ANY)
+
+
+@pytest.mark.parametrize(
+    "url", ["ftp://h.example.org:99999/x", "ftp://h.example.org:abc/x", "ftp:///x"]
+)
+def test_process_file_invalid_ftp_url(
+    mocker: MockerFixture, caplog: pytest.LogCaptureFixture, url: str
+) -> None:
+    """Test that an FTP URL without a valid host or port fails the transfer.
+
+    With a logged error, without connecting.
+
+    Args:
+        mocker: The mocker fixture.
+        caplog: The log capture fixture.
+        url: The URL.
+    """
+    ftp = mocker.patch("tesk_core.filer.FTP")
+    filedata = {"path": "/tmp/x", "url": url, "type": "FILE"}
+    assert process_file("inputs", filedata) == 1
+    ftp.return_value.connect.assert_not_called()
+    assert "Invalid host or port" in caplog.text
+
+
 def test_ftp_login_netrc_entry_with_port(tmp_path: Path) -> None:
     """Test that an entry for the host and port wins over the host's.
 
@@ -355,11 +501,15 @@ def test_ftp_login_netrc_entry_with_port(tmp_path: Path) -> None:
     conn = MagicMock()
     with mock.patch.dict("os.environ", {}, clear=True):
         ftp_login(conn, "user@ftp.example.org:2121", netrc_file)
+        ftp_login(conn, "ftp.example.org", netrc_file)
+        ftp_login(conn, "ftp.example.org:21", netrc_file)
         ftp_login(conn, "ftp.example.org:2122", netrc_file)
         ftp_login(conn, "other.example.org", netrc_file)
     assert conn.login.call_args_list == [
         mock.call("port_user", "port_pass"),
         mock.call("host_user", "host_pass"),
+        mock.call("host_user", "host_pass"),
+        mock.call("default_user", "default_pass"),
         mock.call("default_user", "default_pass"),
     ]
 
