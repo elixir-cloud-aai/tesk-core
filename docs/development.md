@@ -40,14 +40,26 @@ checks; after changing a dependency, update the lock with `uv lock`.
 
 ## Tests and lint
 
-The tests in `tests/` use pytest. With uv, which creates `.venv` with the
-locked versions:
+The tests use pytest and are split by level:
+
+- `tests/unit/`: the modules on their own, with Kubernetes, S3 (moto) and
+  the network mocked; their test files lie in `tests/unit/resources/`.
+- `tests/integration/`: the FTP and HTTP transfers of the filer against
+  local servers (`pytest-localftpserver` and a local HTTP server), started
+  by the tests.
+
+With uv, which creates `.venv` with the locked versions:
 
 ```bash
 uv sync --extra dev
 uv run coverage run -m pytest
 uv run coverage report -m
 ```
+
+`uv run pytest tests/unit` or `uv run pytest tests/integration` runs one
+level. New tests are plain pytest functions (or classes without
+`unittest.TestCase`) in a file `test_<module>.py` of the matching level;
+they are linted and type-checked like the package.
 
 [ruff](https://docs.astral.sh/ruff/) lints and formats the code, and
 [mypy](https://mypy.readthedocs.io/) checks its type hints (complete type
