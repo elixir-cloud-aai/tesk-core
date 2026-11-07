@@ -80,8 +80,9 @@ it starts no other job.
 
 Reading the job adds one `get` request per check, which needs `get` on
 `jobs` for the taskmaster's service account (granted by the role of TESK's
-Helm chart, `charts/tesk/templates/common/taskmaster-rbac.yaml`). The
-request times out after 5 seconds to connect and 10 seconds to answer. If
+Helm chart, `charts/tesk/templates/common/taskmaster-rbac.yaml`). Each
+attempt of the request times out after 5 seconds to connect and 10 seconds
+to answer; the Kubernetes client tries up to 4 times. If
 the taskmaster can't read its job, also if the job doesn't exist, it logs an
 error (once; later ones only with `--debug`) and checks again at the next
 poll. Without `/podinfo/labels` (e.g. when run by hand), it doesn't check

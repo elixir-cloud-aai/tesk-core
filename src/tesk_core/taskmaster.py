@@ -42,7 +42,8 @@ batch_api: client.BatchV1Api | None = None
 # `--debug`); later ones are logged at `DEBUG`, not at every poll
 job_read_error_logged = False
 # Seconds to connect to and to wait for the Kubernetes API when reading the
-# job, so that a stalled API server can't block the cancellation check
+# job, per attempt (the client tries up to 4 times), so that a stalled API
+# server can't block the cancellation check for long
 job_read_timeout = (5, 10)
 # Set by `main`
 args = argparse.Namespace()
