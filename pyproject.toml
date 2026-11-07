@@ -145,10 +145,13 @@ disallow_untyped_defs = true
 disallow_any_generics = true
 warn_unused_ignores = true
 
-# The Kubernetes client ships no type information
+# The Kubernetes client is not checked: older versions ship no type
+# information, and the typed models of newer ones (37) don't fit the dicts
+# and the `None` handling of the job and PVC code
 [[tool.mypy.overrides]]
 module = ["kubernetes", "kubernetes.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
