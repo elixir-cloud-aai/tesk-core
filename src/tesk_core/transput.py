@@ -173,8 +173,11 @@ class Transput:
             netrc_path = "/.netrc"
         try:
             self.netrc_file = netrc.netrc(netrc_path)
-        except OSError as fnfe:
-            logging.error(fnfe)
+        except FileNotFoundError:
+            # The default: no `.netrc` mounted
+            logging.debug("No .netrc at %s", netrc_path)
+        except OSError as err:
+            logging.error(err)
         except netrc.NetrcParseError as err:
             logging.error("netrc.NetrcParseError")
             logging.error(err)

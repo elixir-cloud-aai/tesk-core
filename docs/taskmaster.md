@@ -45,7 +45,7 @@ client); the taskmaster goes on as it would
 (e.g. stops, or ends a completed task). An unexpected error of the
 taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
 reuses it; if every retry fails, the PVC is left behind. An interrupt
-(`SIGINT`, see below) keeps it too.
+(`SIGINT` or `SIGTERM`, see below) keeps it too.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
@@ -134,8 +134,14 @@ API (the job's name is in the pod's `job-name` label). A task that was
 cancelled while its taskmaster's pod was pending, or before the pod existed,
 has the label only on its job; its taskmaster stops before it creates any
 job. When the taskmaster finds the label while a job runs, it deletes that
-job, also one that it is failing, and stops; when it finds it between jobs,
-it starts no other job.
+job, also one that it is failing, and stops; when it finds it between jobs
+or before the first, it starts no other job, and deletes the task's jobs
+that are still running (by name, also those that an earlier attempt of its
+pod started), keeping the jobs that ended, with their logs. Each request to
+read or delete a job times out after 5 seconds to connect and 10 (read) or
+30 (delete) seconds to answer, per attempt; the Kubernetes client tries up
+to 4 times. A job that is already gone counts as deleted, and other errors
+are logged: the taskmaster then deletes the PVC and stops as cancelled.
 
 Reading the job adds one `get` request per check, which needs `get` on
 `jobs` for the taskmaster's service account (granted by the role of TESK's
@@ -145,8 +151,18 @@ to answer; the Kubernetes client tries up to 4 times. If
 the taskmaster can't read its job, also if the job doesn't exist, it logs an
 error (once; later ones only with `--debug`) and checks again at the next
 poll. Without `/podinfo/labels` (e.g. when run by hand), it doesn't check
-for cancellation at all. If the taskmaster is interrupted (`SIGINT`), it
-deletes the jobs it created.
+for cancellation at all.
+
+On `SIGINT` (e.g. Ctrl-C when run by hand), the taskmaster deletes the jobs
+that it created and exits with code 130. On `SIGTERM`, which Kubernetes
+sends when it stops the taskmaster's pod (e.g. when its job is deleted, or
+its node is drained), it logs an error and exits with code 143, and keeps
+the jobs: a new attempt of the pod, if the taskmaster's job has retries
+left, continues with them; otherwise they run until the taskmaster's job is
+deleted, by hand or after `TASK_TTL_SECONDS`, which deletes them with it (see
+[Deleting finished tasks](#deleting-finished-tasks)). Deleting them on
+`SIGTERM` would restart a running executor from scratch after, e.g., a
+node drain; a run by hand has no new attempt that would continue them.
 
 ## Options
 
@@ -157,16 +173,20 @@ development and debugging.
 |---|---|---|
 | `JSON` (positional) or `-f`, `--file FILE` | | The task: as a JSON string, or as a file (gzipped if it ends with `.gz`; `-` for stdin). The TESK API passes `/jsoninput/JSON_INPUT.gz`. |
 | `-n`, `--namespace` | `default` | Kubernetes namespace of the jobs and the PVC. |
-| `-fn`, `--filer-name` | `eu.gcr.io/tes-wes/filer` | Image of the filer, without its tag. |
-| `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
-| `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
+| `-fn`, `--filer-name` | `docker.io/elixircloud/tesk-core-filer` | Image of the filer, without its tag. |
+| `-fv`, `--filer-version` | `latest` | Tag of the filer image. |
+| `-p`, `--poll-interval` | `5` | Seconds between polls of a job, from 0.1 to 3600 (e.g. `0.5`). |
 | `-pt`, `--pod-timeout` | `240` | Seconds after which a pending pod that can't start fails its job (see above). |
-| `-d`, `--debug` | off | Debug logging, also of the filer. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. |
+| `-d`, `--debug` | off | Debug logging, also of the filer; without it, the taskmaster logs info messages, warnings and errors, the filer only errors. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. The HTTP and S3 libraries log only warnings and errors, also with `--debug`. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
 
-The defaults of `--filer-name` and `--filer-version` are outdated; the TESK
-API always passes the filer image of its configuration.
+The TESK API always passes the filer image of its configuration; the
+defaults of `--filer-name` and `--filer-version` are for running the
+taskmaster by hand. `latest` is the newest release and changes with each
+one, so it need not match the taskmaster's version: pass the tag of the
+taskmaster's release (e.g. `-fv 0.11.0`) for matching and reproducible
+runs.
 
 ## Environment variables
 
@@ -177,8 +197,8 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 
 | Variable | Description |
 |---|---|
-| `EXECUTOR_BACKOFF_LIMIT` | Retries of each executor's job (`backoffLimit`); 0 if unset, unless the TESK API sets a limit in the job. |
-| `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`); Kubernetes' default if unset. |
+| `EXECUTOR_BACKOFF_LIMIT` | Retries of each executor's job (`backoffLimit`), from 0 to 2147483647; unset or empty, 0, unless the TESK API sets a limit in the job. Other values log an error and are ignored. |
+| `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`), from 0 to 2147483647; unset or empty, Kubernetes' default. Other values log an error and are ignored. |
 | `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests (not FTP or S3), in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
 | `TESK_MAX_QUEUE_SECONDS` | Seconds after which a pod that the scheduler can't place ends the task with `SYSTEM_ERROR` (see [What it does](#what-it-does)), from 1 to 2147483647; unset or empty waits forever. Other values log an error and wait forever. |
@@ -191,6 +211,12 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 
 The taskmaster also mounts the secret `aws-secret` into the filer, if it
 exists, for S3 (see [Filer](filer.md#s3)).
+
+Numbers may have spaces around them; an empty value counts as unset, so
+that a chart value left empty keeps the default. The names are the ones
+that TESK's Helm chart (0.3.0 and later) and the TESK API set; they are
+kept as they are, also the ones without the `TESK_` prefix, as renaming
+them would break existing deployments.
 
 ## Deleting finished tasks
 

@@ -100,7 +100,10 @@ class PVC:
                 return self.cv1.read_namespaced_persistent_volume_claim(
                     self.name, self.namespace
                 )
-            logging.debug(ex.body)
+            # Without the response body, which can repeat the request
+            logging.debug(
+                "Can't create PVC '%s': %s %s", self.name, ex.status, ex.reason
+            )
             raise ApiException(ex.status, ex.reason) from ex
 
     def delete(self, request_timeout: tuple[float, float] | None = None) -> None:
