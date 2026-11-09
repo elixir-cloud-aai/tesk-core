@@ -35,8 +35,10 @@ its configuration (`/aws`, `/opt/home/.netrc`, `/jsoninput`, the shared
 volume). Paths are normalized first, for the filer and the executors'
 mounts: `..` and `.` components are resolved (`..` as far as the root, so
 `/../etc` is `/tesk/task/etc`), and repeated and trailing slashes dropped,
-so `/out/` and `/out` share one mount. Log messages show the paths in the
-filer. The filer pod doesn't mount a service account token, and the
+so `/out/` and `/out` share one mount. Glob patterns of `file:` outputs
+are normalized the same way, and expanded in the filer only. Log messages
+of the transfers show the paths in the filer, the debug messages
+"Processing file" and "Processed file" the task's. The filer pod doesn't mount a service account token, and the
 image's entrypoint is the absolute path `/usr/bin/filer`.
 
 The taskmaster and the filer must be of the same version: with an older
