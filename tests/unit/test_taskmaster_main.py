@@ -1,8 +1,10 @@
 """Tests for how the taskmaster's `main` reads its configuration and task."""
 
+from collections.abc import Iterator
 import gzip
 import io
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -37,8 +39,11 @@ def task() -> dict[str, Any]:
 
 
 @pytest.fixture
-def mocks() -> Any:
+def mocks() -> Iterator[tuple[MagicMock, MagicMock]]:
     """Mock what `main` calls besides reading the task.
+
+    Also its signal handler and logging setup, which would change the
+    process's handler and the root logger for the tests that follow.
 
     Yields:
         The mocked Kubernetes configuration and run of the task.
@@ -48,6 +53,11 @@ def mocks() -> Any:
         patch("tesk_core.taskmaster.init_own_job"),
         patch("tesk_core.taskmaster.check_cancelled", return_value=False),
         patch("tesk_core.taskmaster.run_task") as mock_run_task,
+        patch("tesk_core.taskmaster.signal.signal"),
+        patch(
+            "tesk_core.taskmaster.newLogger",
+            return_value=logging.getLogger("tesk_core.taskmaster"),
+        ),
     ):
         yield mock_config, mock_run_task
 

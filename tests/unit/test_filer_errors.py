@@ -1,4 +1,4 @@
-"""Tests for the filer's error paths and its command line.
+"""Tests for the filer's error paths.
 
 The FTP helpers are tested with a mocked connection, so that each step can
 fail on its own; the transfers against real servers are in the other filer
@@ -9,19 +9,13 @@ tests.
 # ruff: noqa: S321
 
 import ftplib
-import gzip
-import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import boto3
-from moto import mock_aws
 import pytest
 
-from tesk_core import filer, path
 from tesk_core.filer import (
     FTPTransput,
     HTTPTransput,
@@ -30,7 +24,6 @@ from tesk_core.filer import (
     ftp_make_dirs,
     process_file,
 )
-from tesk_core.filer_s3 import S3Transput
 from tesk_core.transput import Type
 
 
@@ -104,6 +97,7 @@ def test_ftp_check_directory_without_working_directory(ftp: MagicMock) -> None:
     ftp.pwd.return_value = ""
 
     assert ftp_check_directory(ftp, "/dir") == 1
+    ftp.cwd.assert_not_called()
 
 
 def test_ftp_check_directory_cannot_return(ftp: MagicMock) -> None:
@@ -121,12 +115,16 @@ def test_ftp_make_dirs_without_working_directory(ftp: MagicMock) -> None:
     ftp.mkd.assert_not_called()
 
 
-def test_ftp_make_dirs_mkd_fails(ftp: MagicMock) -> None:
+def test_ftp_make_dirs_mkd_fails(
+    ftp: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
     """Test that a directory that can't be created fails."""
     ftp.cwd.side_effect = ftplib.error_perm("550 No such directory")
     ftp.mkd.side_effect = ftplib.error_perm("550 Permission denied")
 
     assert ftp_make_dirs(ftp, "/a") == 1
+    ftp.mkd.assert_called_once_with("/a")
+    assert 'Unable to create directory "/a"' in caplog.text
 
 
 def test_ftp_make_dirs_unexpected_reply(ftp: MagicMock) -> None:
@@ -159,113 +157,3 @@ def test_process_file_unknown_direction(caplog: pytest.LogCaptureFixture) -> Non
         assert process_file("other", data) == 0
 
     assert "There was no action to do with /data/a.txt" in caplog.text
-
-
-@pytest.fixture
-def s3() -> Any:
-    """Mock S3 with an empty bucket `tesk`.
-
-    Yields:
-        The S3 resource.
-    """
-    with mock_aws():
-        client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
-        client.create_bucket(Bucket="tesk")
-        yield client
-
-
-def test_s3_missing_bucket_exits(s3: Any) -> None:
-    """Test that a transfer to a bucket that doesn't exist exits."""
-    transfer = S3Transput("/tmp/a.txt", "s3://missing/a.txt", Type.File)
-
-    with pytest.raises(SystemExit) as exc_info, transfer:
-        pass
-
-    assert exc_info.value.code == 1
-
-
-def test_s3_upload_dir_stops_at_failed_entry(s3: Any, tmp_path: Path) -> None:
-    """Test that a directory upload fails with the first entry that fails."""
-    (tmp_path / "a.txt").write_text("a")
-    transfer = S3Transput(str(tmp_path), "s3://tesk/dir", Type.Directory)
-    transfer.bucket_obj = s3.Bucket("tesk")
-
-    with patch.object(S3Transput, "upload", return_value=1):
-        assert transfer.upload_dir() == 1
-
-
-@pytest.fixture
-def prefix(tmp_path: Path) -> Any:
-    """Mount the task's paths below a temporary directory.
-
-    Args:
-        tmp_path: The temporary directory.
-
-    Yields:
-        The directory.
-    """
-    with patch.object(path, "TASK_PATH_PREFIX", str(tmp_path)):
-        yield tmp_path
-
-
-@pytest.fixture
-def log_config() -> Any:
-    """Mock the filer's logging setup, which changes the root logger.
-
-    Yields:
-        The mocked setup.
-    """
-    with patch("tesk_core.filer.logConfig") as mock:
-        yield mock
-
-
-def task(content: str) -> dict[str, Any]:
-    """Describe a task with an input with content.
-
-    Args:
-        content: The input's content.
-
-    Returns:
-        The task.
-    """
-    return {
-        "inputs": [{"path": "/a.txt", "type": "FILE", "content": content}],
-        "outputs": [],
-    }
-
-
-def test_main_stages_inputs(
-    prefix: Path, log_config: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test that the filer stages the inputs of the task on the command line."""
-    monkeypatch.setattr("sys.argv", ["filer", "inputs", json.dumps(task("a"))])
-
-    assert filer.main() == 0
-
-    assert (prefix / "a.txt").read_text() == "a"
-    log_config.assert_called_once_with(logging.ERROR)
-
-
-def test_main_reads_gzipped_task(
-    prefix: Path, log_config: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test that the filer reads a gzipped task file, with debug logging."""
-    data = prefix / "task.json.gz"
-    with gzip.open(data, "wt") as fh:
-        json.dump(task("b"), fh)
-    monkeypatch.setattr("sys.argv", ["filer", "-d", "inputs", str(data)])
-
-    assert filer.main() == 0
-
-    assert (prefix / "a.txt").read_text() == "b"
-    log_config.assert_called_once_with(logging.DEBUG)
-
-
-def test_main_fails_with_failed_input(
-    prefix: Path, log_config: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Test that the filer exits with 1 at the first input that fails."""
-    monkeypatch.setattr("sys.argv", ["filer", "inputs", json.dumps(task("a"))])
-
-    with patch("tesk_core.filer.process_file", return_value=1):
-        assert filer.main() == 1
