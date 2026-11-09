@@ -1,15 +1,16 @@
 # Everything that must pass on pull requests and pushes to `dev`: the pull
-# request title, lint, the tests, the docs, a scan of the taskmaster and
-# filer images for known vulnerabilities, and, on pushes, push each image by
-# digest (with SBOM and provenance attestations), scan exactly that digest,
-# then attest, sign (Sigstore) and tag it `dev` and `sha-<commit>`. Forks,
-# which have none of the secrets, run the same checks without these side
-# effects and without uploads to code scanning (as for pull requests from
-# forks), unless they set the repository variable `DOCKERHUB_ORG` to publish
-# to their own organization. `github.repository_owner == 'elixir-cloud-aai'`
-# marks runs of the upstream repository. The gate `passed` ("CI passed") is
-# the only required check. No `paths:` filters, so that the gate always
-# reports; skip jobs with `if:` instead (and allow the skip in the gate).
+# request title, lint, the tests, end-to-end tests on a kind cluster, the docs,
+# a scan of the taskmaster and filer images for known vulnerabilities, and, on
+# pushes, push each image by digest (with SBOM and provenance attestations),
+# scan exactly that digest, then attest, sign (Sigstore) and tag it `dev` and
+# `sha-<commit>`. Forks, which have none of the secrets, run the same checks
+# without these side effects and without uploads to code scanning (as for
+# pull requests from forks), unless they set the repository variable
+# `DOCKERHUB_ORG` to publish to their own organization.
+# `github.repository_owner == 'elixir-cloud-aai'` marks runs of the upstream
+# repository. The gate `passed` ("CI passed") is the only required check. No
+# `paths:` filters, so that the gate always reports; skip jobs with `if:`
+# instead (and allow the skip in the gate).
 # Runs also when a pull request is edited, so that the title check follows
 # the title; all jobs run then, as a run that skipped the tests would report
 # "CI passed" for the commit
@@ -173,6 +174,76 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: ${{ github.event_name == 'push' && github.repository_owner == 'elixir-cloud-aai' }}
           verbose: true
+
+  # The end-to-end tests (`tests/e2e/`) on a kind cluster: builds both images
+  # from the commit and loads them into the cluster's node (pushed nowhere, so
+  # the job needs no secrets and runs for pull requests from forks), applies
+  # the taskmaster's role (the rules of TESK's Helm chart) and a small HTTP
+  # server (`tests/e2e/manifests/`), and runs tasks through taskmaster jobs as
+  # the TESK API creates them. See "End-to-end tests" in `docs/development.md`
+  # for running them locally
+  e2e:
+    name: End-to-end test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLUSTER: tesk-core-e2e
+      TESK_E2E: "1"
+      # The image names of `tests/e2e/cluster.py`
+      TASKMASTER_IMAGE: tesk-core-taskmaster:e2e
+      FILER_IMAGE: tesk-core-filer:e2e
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history and tags, as in `push`
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      # As in `lint`
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version-file: uv.lock
+      - name: Install dependencies
+        run: |
+          uv sync --locked --extra dev --python "$(which python)"
+          echo "${PWD}/.venv/bin" >> "$GITHUB_PATH"
+      # Dependabot updates the action, but not the kind version: bump it by
+      # hand (the same version as in trs-filer)
+      - name: Create kind cluster
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          cluster_name: ${{ env.CLUSTER }}
+      - name: Build and load images
+        run: |
+          docker build --file containers/taskmaster.Dockerfile \
+            --tag "${TASKMASTER_IMAGE}" .
+          docker build --file containers/filer.Dockerfile \
+            --tag "${FILER_IMAGE}" .
+          kind load docker-image "${TASKMASTER_IMAGE}" "${FILER_IMAGE}" \
+            --name "${CLUSTER}"
+      - name: Apply manifests
+        run: |
+          kubectl apply -f tests/e2e/manifests/
+          kubectl wait --for=condition=Ready pod/tesk-e2e-http --timeout=120s
+      - name: Run end-to-end tests
+        run: pytest tests/e2e
+      # The jobs, pods and PVCs, and the logs of the taskmaster pods, to
+      # debug a failure
+      - name: Show cluster state
+        if: failure()
+        run: |
+          kubectl get jobs,pods,pvc -o wide
+          for pod in $(kubectl get pods -l job-type=taskmaster -o name); do
+            echo "::group::${pod}"
+            kubectl logs "${pod}" || true
+            echo "::endgroup::"
+          done
 
   # Builds these docs (`docs/`, `mkdocs.yml`) strictly: fails on warnings,
   # e.g. of broken links and anchors. They are published as part of the TESK
@@ -355,7 +426,7 @@ jobs:
     timeout-minutes: 30
     # The same expression as `PUBLISH` (checked in `lint`)
     if: ${{ github.event_name == 'push' && (github.repository_owner == 'elixir-cloud-aai' || vars.DOCKERHUB_ORG != '') }}
-    needs: [lint, test, docs, push, scan]
+    needs: [lint, test, e2e, docs, push, scan]
     # Docker Hub secrets; the environment only allows branch `dev`
     environment: dev-images
     permissions:
@@ -479,7 +550,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [title, lint, test, docs, push, scan, publish]
+    needs: [title, lint, test, e2e, docs, push, scan, publish]
     permissions: {}
     steps:
       - name: Check results of all jobs
