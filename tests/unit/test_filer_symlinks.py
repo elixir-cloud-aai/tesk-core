@@ -287,6 +287,8 @@ class TestFile:
         assert transfer.upload() == 1
         assert list(shared.iterdir()) == []
 
+    # Task paths as in the filer (test_filer_paths.py tests the prefix)
+    @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
     def test_regular_outputs_copied(self, tree: Path, shared: Path) -> None:
         """Test that outputs without links are still copied."""
         data = {"path": str(tree / "regular.txt"), "type": "FILE"}
@@ -300,7 +302,9 @@ class TestFile:
 def test_outputs_filer_mounts_task_paths_read_only() -> None:
     """Test that only the outputs filer mounts the task's paths read-only."""
     filer = Filer("name", {"a": 1})
-    pvc = MagicMock(spec=PVC, volume_mounts=[{"name": "task-volume"}])
+    pvc = MagicMock(
+        spec=PVC, volume_mounts=[{"name": "task-volume", "mountPath": "/data"}]
+    )
     pvc.name = "task-pvc"
     filer.add_volume_mount(pvc)
 
@@ -318,8 +322,9 @@ def test_outputs_filer_mounts_task_paths_read_only() -> None:
         ]
         return [mount for mount in mounts if mount["name"] == "task-volume"]
 
-    assert task_mounts("inputs") == [{"name": "task-volume"}]
-    assert task_mounts("outputs") == [{"name": "task-volume", "readOnly": True}]
-    assert task_mounts("inputs") == [{"name": "task-volume"}]
-    # The claim's mounts, which the executors use, stay writable
-    assert pvc.volume_mounts == [{"name": "task-volume"}]
+    mount = {"name": "task-volume", "mountPath": "/tesk/task/data"}
+    assert task_mounts("inputs") == [mount]
+    assert task_mounts("outputs") == [{**mount, "readOnly": True}]
+    # The claim's mounts, which the executors use, stay as they are and writable
+    assert task_mounts("inputs") == [mount]
+    assert pvc.volume_mounts == [{"name": "task-volume", "mountPath": "/data"}]

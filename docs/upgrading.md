@@ -6,12 +6,22 @@ to the filer.
 
 ## Unreleased
 
+### The filer mounts task paths below `/tesk/task`
+
+The filer's pod used to mount the task's volumes, inputs and outputs at the
+task's paths; now it mounts them below `/tesk/task` (see
+[Filer](filer.md#task-paths-in-the-filer)). Executors still see the task's
+paths. The taskmaster and filer images must now be of the same version.
+`CONTAINER_BASE_PATH` must be outside `/tesk/task` and not contain it
+(TESK's Helm chart uses `/transfer`). The filer pod no longer mounts a
+service account token, and the filer image's entrypoint is the absolute
+path `/usr/bin/filer`.
+
 ### Outputs can't contain symbolic links
 
 The filer used to follow symbolic links in outputs, resolving them in its
 own container. Now it fails an output whose path goes through a link, or a
-directory output with a link anywhere below it, and an output path with
-`..` components, and logs why (see
+directory output with a link anywhere below it, and logs why (see
 [Filer](filer.md#symbolic-links-in-outputs)); the task fails. Executors
 that leave links in their outputs must copy the targets instead (e.g.
 `cp -L`). The outputs filer mounts the task's paths read-only.

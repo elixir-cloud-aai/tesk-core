@@ -28,13 +28,36 @@ Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
 writes to `path`. The scheme of the URL selects the protocol.
 
+## Task paths in the filer
+
+The filer's pod mounts the task's paths below `/tesk/task`, not at the
+task's paths themselves: the input `/data/in.txt` is
+`/tesk/task/data/in.txt` in the filer, and `/data/in.txt` in the
+executors, which mount the same directory of the task's volume. Task
+paths therefore can't overlay the filer's own files (e.g. its program) or
+its configuration (`/aws`, `/opt/home/.netrc`, `/jsoninput`, the shared
+volume). Paths are normalized first, for the filer and the executors'
+mounts: `..` and `.` components are resolved (`..` as far as the root, so
+`/../etc` is `/tesk/task/etc`), and repeated and trailing slashes dropped,
+so `/out/` and `/out` share one mount. Glob patterns of `file:` outputs
+are normalized the same way, and expanded in the filer only. Log messages
+of the transfers show the paths in the filer, the debug messages
+"Processing file" and "Processed file" the task's. The filer pod doesn't
+mount a service account token, and the image's entrypoint is the absolute
+path `/usr/bin/filer`.
+
+The taskmaster and the filer must be of the same version: with an older
+taskmaster, a newer filer looks for the task's paths below `/tesk/task`,
+where nothing is mounted, and the other way round. Inputs then don't reach
+the executors and outputs aren't found, so tasks fail.
+
 ## Symbolic links in outputs
 
 Outputs can't be or contain symbolic links. The filer fails an output, with
 an error that names the link, if any component of its path is a link (e.g.
 `/data/out` for the output `/data/out/result.txt`), or, for a directory, if
-any file or directory below it is one. Output paths with `..` components
-fail in the same way. For `file:` outputs with a glob, a link in any match
+any file or directory below it is one (output paths are normalized first,
+see [Task paths in the filer](#task-paths-in-the-filer)). For `file:` outputs with a glob, a link in any match
 fails the whole output. Links are not followed, as the filer would resolve
 them in its own container rather than the executor's; nothing of such an
 output is uploaded. Executors that create links in
@@ -165,7 +188,7 @@ environment variables, which it passes on to the filer:
 | Variable | Description |
 |---|---|
 | `HOST_BASE_PATH` | Absolute base path of the shared volume in the URLs. The path of every `file:` URL must be absolute and, after resolving `..` segments, be this path or below it, e.g. `/tmp/a` for `/tmp`, but not `/tmp2/a` or `/tmp/../a`. |
-| `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume. |
+| `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume; neither in nor around `/tesk/task` (the taskmaster fails with an error otherwise). |
 | `TRANSFER_PVC_NAME` | Name of the PVC of the shared volume. |
 
 A URL `file://<HOST_BASE_PATH>/a/b` refers to `<CONTAINER_BASE_PATH>/a/b`

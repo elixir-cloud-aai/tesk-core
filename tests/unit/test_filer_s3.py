@@ -335,6 +335,8 @@ def moto_s3_in_bucket_names() -> Iterator[None]:
         yield
 
 
+# Task paths as in the filer (test_filer_paths.py tests the prefix)
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
 @pytest.mark.parametrize("bucket", S3_IN_BUCKET_NAMES)
 def test_process_file_output_to_bucket_with_s3_in_name(
     moto_s3_in_bucket_names: None, bucket: str, tmp_path: Path
@@ -352,6 +354,8 @@ def test_process_file_output_to_bucket_with_s3_in_name(
     assert [obj.key for obj in client.Bucket(bucket).objects.all()] == ["out/file.txt"]
 
 
+# Task paths as in the filer (test_filer_paths.py tests the prefix)
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
 @pytest.mark.parametrize("bucket", S3_IN_BUCKET_NAMES)
 def test_process_file_output_dir_to_bucket_with_s3_in_name(
     moto_s3_in_bucket_names: None, bucket: str
