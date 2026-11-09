@@ -21,6 +21,8 @@ FTYPE = Type.File
 
 resp = Response()
 resp._content = b'{ "foo" : "bar" }'
+# As read: `iter_content` gives the content without a connection
+resp._content_consumed = True  # type: ignore[attr-defined]
 
 
 def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
@@ -31,7 +33,7 @@ def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
     mock_get = mocker.patch("requests.get", return_value=resp)
 
     assert http_obj.download_file() == 0
-    mock_get.assert_called_once_with(URL, timeout=HTTP_TIMEOUT_DEFAULT)
+    mock_get.assert_called_once_with(URL, timeout=HTTP_TIMEOUT_DEFAULT, stream=True)
     assert path.read_bytes() == resp._content
 
 

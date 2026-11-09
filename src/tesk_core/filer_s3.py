@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import boto3
 import botocore.exceptions
 
-from tesk_core.transput import Transput, Type
+from tesk_core.transput import Transput, Type, within
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import Bucket, S3ServiceResource
@@ -195,6 +195,10 @@ class S3Transput(Transput):
     def download_dir(self) -> int:
         """Download the objects below the prefix to `path`.
 
+        Objects whose local path would not be below `path` (e.g., keys
+        with `..` segments) are skipped with a warning. Keys that end with
+        `/` (folder markers) create their directory.
+
         Returns:
             0 on success, otherwise 1.
         """
@@ -223,8 +227,20 @@ class S3Transput(Transput):
             prefix = re.escape(self.file_path.strip("/"))
             path_to_create = re.sub(r"^" + prefix, "", dir_name).strip("/")
             path_to_create = os.path.join(self.path, path_to_create)
+            if file_name:
+                target = os.path.join(path_to_create, file_name)
+                inside = within(self.path, target)
+            else:
+                # A folder marker: only its directory, which may be `path`
+                target = None
+                inside = within(self.path, path_to_create) or (
+                    os.path.realpath(path_to_create) == os.path.realpath(self.path)
+                )
+            if not inside:
+                logging.warning("Skipping object %r outside the directory", key)
+                continue
             os.makedirs(path_to_create, exist_ok=True)
-            if self.get_s3_file(os.path.join(path_to_create, file_name), key):
+            if target is not None and self.get_s3_file(target, key):
                 return 1
         return 0
 

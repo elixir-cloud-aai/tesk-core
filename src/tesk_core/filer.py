@@ -8,6 +8,7 @@ JSON file (`*.gz`).
 import argparse
 import base64
 from collections.abc import Callable
+import contextlib
 import ftplib
 from ftplib import FTP
 import functools
@@ -29,7 +30,7 @@ import requests
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, getPath
-from tesk_core.transput import Transput, Type, body_for_log, url_for_log
+from tesk_core.transput import Transput, Type, body_for_log, url_for_log, within
 
 
 def http_join(url: str, name: str) -> str:
@@ -58,6 +59,8 @@ HTTP_TIMEOUT_ENV = "FILER_HTTP_TIMEOUT"
 HTTP_TIMEOUT_DEFAULT = 300.0
 # Longer timeouts (about 11 days) are invalid: sockets can't take any length
 HTTP_TIMEOUT_MAX = 1_000_000.0
+# Bytes of an HTTP(S) download held in memory at a time
+HTTP_CHUNK_SIZE = 1024 * 1024
 
 
 @functools.cache
@@ -162,22 +165,44 @@ class HTTPTransput(Transput):
         return 1
 
     def download_file(self) -> int:
-        """Download the file with `GET`.
+        """Download the file with `GET`, streamed to disk.
+
+        The body is written in chunks of `HTTP_CHUNK_SIZE` bytes, so that
+        large files don't have to fit in memory. If the body breaks off, or
+        the file can't be written (e.g., a full volume), the partial file is
+        removed.
 
         Returns:
             0 on success, otherwise 1.
         """
+        opened = False
         try:
-            req = requests.get(self.url, timeout=http_timeout())
+            with requests.get(self.url, timeout=http_timeout(), stream=True) as req:
+                if not self._status_ok(req):
+                    return 1
+                with open(self.path, "wb") as file:
+                    opened = True
+                    for chunk in req.iter_content(chunk_size=HTTP_CHUNK_SIZE):
+                        file.write(chunk)
+        # Before `OSError`, which `RequestException` derives from
         except requests.exceptions.RequestException as err:
+            self._remove_partial(opened)
             return self._request_failed(err)
-
-        if not self._status_ok(req):
+        except OSError as err:
+            self._remove_partial(opened)
+            logging.error("Unable to write input %s: %s", self.path, err.strerror)
             return 1
-
-        with open(self.path, "wb") as file:
-            file.write(req.content)
         return 0
+
+    def _remove_partial(self, opened: bool) -> None:
+        """Remove the file of a failed download, if it was opened.
+
+        Args:
+            opened: Whether the download opened (and so created) the file.
+        """
+        if opened:
+            with contextlib.suppress(OSError):
+                os.remove(self.path)
 
     def upload_file(self) -> int:
         """Upload the file with `PUT`, as bytes.
@@ -238,45 +263,27 @@ class HTTPTransput(Transput):
         return 1
 
 
-def copyContent(
-    src: str,
-    dst: str,
-    symlinks: bool = False,
-    ignore: Callable[[str, list[str]], list[str]] | None = None,
-) -> None:
-    """Copy the content of a directory into an existing directory.
-
-    See https://stackoverflow.com/a/12514470/1553043.
-
-    Args:
-        src: The source directory.
-        dst: The destination directory.
-        symlinks: Whether to copy symbolic links as links.
-        ignore: Selects the names to leave out (as for `shutil.copytree`).
-    """
-    for item in os.listdir(src):
-        s = os.path.join(src, item)
-        d = os.path.join(dst, item)
-        if os.path.isdir(s):
-            shutil.copytree(s, d, symlinks, ignore)
-        else:
-            shutil.copy2(s, d)
-
-
 def copyDir(src: str, dst: str) -> None:
     """Copy a directory, also into an existing one.
 
-    `shutil.copytree` needs a destination that doesn't exist yet.
+    Directories that don't exist yet are copied whole (`shutil.copytree`);
+    existing ones are merged, entry by entry, and keep their own mode and
+    times (e.g., of a mount point the filer doesn't own); existing files
+    are replaced.
 
     Args:
         src: The source directory.
         dst: The destination directory.
     """
-    if os.path.exists(dst):
-        copyContent(src, dst)
-
-    else:
+    if not os.path.isdir(dst):
         shutil.copytree(src, dst)
+        return
+    for entry in os.scandir(src):
+        target = os.path.join(dst, entry.name)
+        if entry.is_dir():
+            copyDir(entry.path, target)
+        else:
+            shutil.copy2(entry.path, target)
 
 
 def copyFile(src: str, dst: str) -> None:
@@ -574,8 +581,7 @@ def valid_entry_name(name: str, parent: str, path: str) -> bool:
     """
     if name in {"", ".", ".."} or "/" in name or "\\" in name:
         return False
-    parent_real = os.path.realpath(parent)
-    return os.path.realpath(path).startswith(parent_real.rstrip(os.sep) + os.sep)
+    return within(parent, path)
 
 
 FTP_HOSTS_ENV = "TESK_FTP_HOSTS"
