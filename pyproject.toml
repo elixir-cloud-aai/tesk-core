@@ -158,3 +158,10 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 source = ["tesk_core"]
+
+[tool.coverage.report]
+# The whole package is covered by the tests (`codecov.yml` requires the same
+# of each pull request); script entry points are left out, as the tests call
+# `main` directly
+fail_under = 100
+exclude_also = ['if __name__ == "__main__":']
