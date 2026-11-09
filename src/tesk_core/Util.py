@@ -1,12 +1,39 @@
 """Helpers for log messages."""
 
 import json
-from typing import Any
+import logging
+from typing import Any, TextIO
 
 from tesk_core.transput import redact_urls, url_for_log
 
 # Environment variables of job manifests whose values aren't logged
 SECRET_ENV = frozenset({"TESK_FTP_USERNAME", "TESK_FTP_PASSWORD"})
+# Loggers of the HTTP and S3 libraries, which log every request with its
+# full URL and headers at `DEBUG`; they are kept at `WARNING` or above, so
+# that debug logs show the messages of the taskmaster and the filer, whose
+# URLs leave out queries and user info (see `url_for_log`)
+LIBRARY_LOGGERS = ("urllib3", "botocore", "boto3", "s3transfer")
+LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def configure_logging(level: int, stream: TextIO | None = None) -> None:
+    """Configure the root logger, replacing any earlier configuration.
+
+    Args:
+        level: The log level of the root logger. The loggers in
+            `LIBRARY_LOGGERS` get this level too, but at least `WARNING`.
+        stream: The stream to log to; standard error if `None`.
+    """
+    logging.basicConfig(
+        format=LOG_FORMAT,
+        datefmt=LOG_DATE_FORMAT,
+        level=level,
+        stream=stream,
+        force=True,
+    )
+    for name in LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
 
 
 def redact(data: Any) -> Any:

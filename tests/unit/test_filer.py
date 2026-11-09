@@ -83,7 +83,7 @@ class TestFiler:
         Yields:
             Nothing, while the tests run.
         """
-        logConfig(logging.DEBUG)  # Doesn't work...
+        logConfig(logging.DEBUG)
         yield
 
     @patch("tesk_core.filer.copyDir")

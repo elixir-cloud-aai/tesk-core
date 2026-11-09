@@ -12,8 +12,6 @@ from urllib3.exceptions import HTTPError
 
 from tesk_core.Util import pprint
 
-logging.basicConfig(format="%(message)s", level=logging.INFO)
-
 # Job conditions that end a job, when their status is "True"
 JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})

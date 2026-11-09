@@ -13,12 +13,16 @@ filer [-d] {inputs|outputs} DATA
 taskmaster passes `/jsoninput/JSON_INPUT.gz`, from a ConfigMap, or the JSON
 in the environment variable `JSON_INPUT`). The filer processes the entries of
 `inputs` or `outputs` one after another, and stops with exit code 1 at the
-first that fails. `-d` turns on debug logging. The filer's own log messages
-show URLs without their query strings (e.g. the parameters of a presigned
-URL) and user info (`user:password@`). Response bodies of HTTP errors are
-logged in the same way, with the query values and user info of the request
-(and of redirects) and `.netrc` credentials redacted wherever they appear
-(values of at least 4 characters), and cut after 1000 characters.
+first that fails. Without `-d`, the filer logs errors only; `-d` turns on
+debug logging of the filer's own messages, while the HTTP and S3 libraries
+(`urllib3`, `botocore`, `boto3`, `s3transfer`) still log only warnings and
+errors. A missing `.netrc` file is logged at debug level only. The filer's
+own log messages show URLs without their query strings (e.g. the parameters
+of a presigned URL) and user info (`user:password@`). Response bodies of HTTP
+errors are logged in the same way, with the query values and user info of
+the request (and of redirects) and `.netrc` credentials redacted wherever
+they appear (values of at least 4 characters), and cut after 1000
+characters.
 
 Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
