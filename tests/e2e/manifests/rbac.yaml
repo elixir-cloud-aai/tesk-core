@@ -1,8 +1,8 @@
 # The taskmaster's service account and role for the end-to-end tests: the
 # rules of the role in TESK's Helm chart
-# (`charts/tesk/templates/common/taskmaster-rbac.yaml`, chart 0.3.0, from
-# elixir-cloud-aai/TESK#270), so that the tests fail if the taskmaster needs
-# a permission that the chart doesn't grant. Keep both in sync
+# (`charts/tesk/templates/common/taskmaster-rbac.yaml` in
+# elixir-cloud-aai/TESK), so that the tests fail if the taskmaster needs a
+# permission that the chart doesn't grant. Keep both in sync
 apiVersion: v1
 kind: ServiceAccount
 metadata:

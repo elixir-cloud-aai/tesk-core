@@ -54,6 +54,7 @@ metadata:
 spec:
   containers:
     - name: http
+      # `FILER_IMAGE` of `tests/e2e/cluster.py`
       image: tesk-core-filer:e2e
       imagePullPolicy: Never
       command: [python3, -u, /server/server.py]

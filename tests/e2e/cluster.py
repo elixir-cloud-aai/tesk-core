@@ -13,12 +13,14 @@ import pytest
 
 # Namespace of the tests, with the manifests of `tests/e2e/manifests/`
 NAMESPACE = os.environ.get("TESK_E2E_NAMESPACE", "default")
-# Images loaded into the cluster's nodes; the filer image also runs the
-# executors and the HTTP server, so that the tests pull no other image
-TASKMASTER_IMAGE = os.environ.get(
-    "TESK_E2E_TASKMASTER_IMAGE", "tesk-core-taskmaster:e2e"
-)
-FILER_IMAGE = os.environ.get("TESK_E2E_FILER_IMAGE", "tesk-core-filer:e2e")
+# Images loaded into the cluster's nodes (also named in `.github/workflows/
+# ci.yml` and `tests/e2e/manifests/http-server.yaml`); the filer image also
+# runs the executors and the HTTP server, so that the tests pull no other
+# image
+TASKMASTER_IMAGE = "tesk-core-taskmaster:e2e"
+FILER_NAME = "tesk-core-filer"
+FILER_TAG = "e2e"
+FILER_IMAGE = f"{FILER_NAME}:{FILER_TAG}"
 SERVICE_ACCOUNT = "tesk-e2e-taskmaster"
 HTTP_URL = f"http://tesk-e2e-http.{NAMESPACE}.svc.cluster.local:8080"
 HTTP_POD = "tesk-e2e-http"
@@ -120,9 +122,9 @@ class Task:
                 "-n",
                 NAMESPACE,
                 "-fn",
-                FILER_IMAGE.rsplit(":", 1)[0],
+                FILER_NAME,
                 "-fv",
-                FILER_IMAGE.rsplit(":", 1)[1],
+                FILER_TAG,
                 "-pt",
                 "120",
                 "-d",
@@ -201,19 +203,14 @@ class Task:
         Returns:
             The condition that ended it: `Complete` or `Failed`.
         """
-        result: list[str] = []
-
-        def finished() -> bool:
-            conditions = (self.job().status.conditions) or []
-            result.extend(
-                c.type
-                for c in conditions
-                if c.status == "True" and c.type in ("Complete", "Failed")
-            )
-            return bool(result)
-
-        self.wait(finished, f"taskmaster job {self.name}")
-        return result[0]
+        self.wait(
+            lambda: (
+                (job := self.job()) is not None
+                and (condition(job, "Complete") or condition(job, "Failed"))
+            ),
+            f"taskmaster job {self.name}",
+        )
+        return "Complete" if condition(self.job(), "Complete") else "Failed"
 
     def logs(self) -> str:
         """Read the logs of the taskmaster's pods, for errors.
@@ -224,10 +221,16 @@ class Task:
         pods = self.core.list_namespaced_pod(
             NAMESPACE, label_selector=f"job-name={self.name}"
         )
-        return "\n".join(
-            self.core.read_namespaced_pod_log(pod.metadata.name, NAMESPACE)
-            for pod in pods.items
-        )
+        logs = []
+        for pod in pods.items:
+            try:
+                logs.append(
+                    self.core.read_namespaced_pod_log(pod.metadata.name, NAMESPACE)
+                )
+            except ApiException as ex:
+                # E.g. a container that hasn't started
+                logs.append(f"No log of pod {pod.metadata.name}: {ex.reason}")
+        return "\n".join(logs)
 
     def gone(self, suffix: str) -> bool:
         """Tell whether a job of the task is deleted, or being deleted.
@@ -258,12 +261,27 @@ class Task:
         return pvc.metadata.deletion_timestamp is not None
 
     def delete(self) -> None:
-        """Delete the taskmaster's job, and with it the task's jobs."""
-        self.batch.delete_namespaced_job(
-            self.name,
-            NAMESPACE,
-            body=client.V1DeleteOptions(propagation_policy="Background"),
+        """Delete the taskmaster's job, with it the task's jobs, and the PVC.
+
+        Objects that are already gone are skipped, so that a test that
+        failed leaves nothing behind and its error isn't hidden.
+        """
+        deletes = (
+            lambda: self.batch.delete_namespaced_job(
+                self.name,
+                NAMESPACE,
+                body=client.V1DeleteOptions(propagation_policy="Background"),
+            ),
+            lambda: self.core.delete_namespaced_persistent_volume_claim(
+                self.name + "-pvc", NAMESPACE
+            ),
         )
+        for delete in deletes:
+            try:
+                delete()
+            except ApiException as ex:
+                if ex.status != 404:
+                    raise
 
 
 def condition(job: Any, kind: str) -> bool:

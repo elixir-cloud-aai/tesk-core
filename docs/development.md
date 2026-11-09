@@ -91,10 +91,12 @@ check the manifests against the Kubernetes client's models without a
 cluster.
 
 With [kind](https://kind.sigs.k8s.io/) and Docker, from the root of the
-repository (a separate kubeconfig leaves your own untouched):
+repository (a separate kubeconfig, outside the repository and so outside
+the images' build context, leaves your own untouched; the tests use its
+current context, which `kind create cluster` sets):
 
 ```bash
-export KUBECONFIG="$PWD/.kind-kubeconfig"
+export KUBECONFIG="$HOME/.kube/kind-tesk-core-e2e"
 kind create cluster --name tesk-core-e2e
 docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:e2e .
 docker build --file containers/filer.Dockerfile --tag tesk-core-filer:e2e .
@@ -103,12 +105,15 @@ kubectl apply -f tests/e2e/manifests/
 kubectl wait --for=condition=Ready pod/tesk-e2e-http --timeout=120s
 TESK_E2E=1 uv run pytest tests/e2e
 kind delete cluster --name tesk-core-e2e
+rm "$KUBECONFIG"
 ```
 
-Other image names can be set with `TESK_E2E_TASKMASTER_IMAGE` and
-`TESK_E2E_FILER_IMAGE`, another namespace with `TESK_E2E_NAMESPACE`. The
-role in `tests/e2e/manifests/rbac.yaml` grants what the role of TESK's
-chart grants: update both together.
+The tests use the namespace `default`; for another one, apply the manifests
+and wait for the server with `-n <namespace>`, and set
+`TESK_E2E_NAMESPACE`. The image
+names are fixed (`tests/e2e/cluster.py`). The role in
+`tests/e2e/manifests/rbac.yaml` grants what the role of TESK's chart
+grants: update both together.
 
 ## Continuous integration
 

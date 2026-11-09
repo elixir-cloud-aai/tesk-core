@@ -44,7 +44,11 @@ def test_task_with_inputs_and_outputs(
 
 
 def test_failing_executor(run_task: Callable[..., Task]) -> None:
-    """Test that a failed executor is kept failed, and no later job runs."""
+    """Test that a failed executor is kept failed, and no later job runs.
+
+    The taskmaster's own job completes: the TESK API derives the task's
+    state (`EXECUTOR_ERROR`) from the executor's failed job.
+    """
     task = run_task(["exit 3", "true"])
 
     assert task.wait_finished() == "Complete", task.logs()
@@ -54,7 +58,11 @@ def test_failing_executor(run_task: Callable[..., Task]) -> None:
 
 
 def test_cancel_running_task(run_task: Callable[..., Task]) -> None:
-    """Test that a task cancelled while an executor runs deletes that job."""
+    """Test that a task cancelled while an executor runs deletes that job.
+
+    The taskmaster's own job completes; the TESK API reports the task as
+    cancelled from the label.
+    """
     task = run_task(["sleep 600"])
     task.wait(
         lambda: (job := task.job("-ex-00")) is not None and bool(job.status.active),
@@ -72,8 +80,9 @@ def test_cancel_running_task(run_task: Callable[..., Task]) -> None:
 def test_unschedulable_task_times_out(run_task: Callable[..., Task]) -> None:
     """Test that an executor that can't be scheduled ends the task.
 
-    With `TESK_MAX_QUEUE_SECONDS`, its job is deleted, so that the TESK API
-    reports `SYSTEM_ERROR`.
+    With `TESK_MAX_QUEUE_SECONDS`, the taskmaster logs why and deletes the
+    executor's job, from which the TESK API derives `SYSTEM_ERROR` (a
+    missing executor); the taskmaster's own job completes.
     """
     task = run_task(
         ["true"],
@@ -83,3 +92,4 @@ def test_unschedulable_task_times_out(run_task: Callable[..., Task]) -> None:
 
     assert task.wait_finished() == "Complete", task.logs()
     task.wait(lambda: task.gone("-ex-00"), "the executor job to be deleted")
+    assert "wasn't scheduled within 10 s" in task.logs()

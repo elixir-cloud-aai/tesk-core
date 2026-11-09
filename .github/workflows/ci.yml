@@ -1,6 +1,6 @@
 # Everything that must pass on pull requests and pushes to `dev`: the pull
-# request title, lint, the tests, end-to-end tests on a kind cluster, the
-# docs, a scan of the taskmaster and
+# request title, lint, the tests, end-to-end tests on a kind cluster, the docs,
+# a scan of the taskmaster and
 # filer images for known vulnerabilities, and, on pushes, push each image by
 # digest (with SBOM and provenance attestations), scan exactly that digest,
 # then attest, sign (Sigstore) and tag it `dev` and `sha-<commit>`. Forks,
@@ -189,8 +189,9 @@ jobs:
     env:
       CLUSTER: tesk-core-e2e
       TESK_E2E: "1"
-      TESK_E2E_TASKMASTER_IMAGE: tesk-core-taskmaster:e2e
-      TESK_E2E_FILER_IMAGE: tesk-core-filer:e2e
+      # The image names of `tests/e2e/cluster.py`
+      TASKMASTER_IMAGE: tesk-core-taskmaster:e2e
+      FILER_IMAGE: tesk-core-filer:e2e
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -221,11 +222,11 @@ jobs:
       - name: Build and load images
         run: |
           docker build --file containers/taskmaster.Dockerfile \
-            --tag "${TESK_E2E_TASKMASTER_IMAGE}" .
+            --tag "${TASKMASTER_IMAGE}" .
           docker build --file containers/filer.Dockerfile \
-            --tag "${TESK_E2E_FILER_IMAGE}" .
-          kind load docker-image "${TESK_E2E_TASKMASTER_IMAGE}" \
-            "${TESK_E2E_FILER_IMAGE}" --name "${CLUSTER}"
+            --tag "${FILER_IMAGE}" .
+          kind load docker-image "${TASKMASTER_IMAGE}" "${FILER_IMAGE}" \
+            --name "${CLUSTER}"
       - name: Apply manifests
         run: |
           kubectl apply -f tests/e2e/manifests/
@@ -240,7 +241,7 @@ jobs:
           kubectl get jobs,pods,pvc -o wide
           for pod in $(kubectl get pods -l job-type=taskmaster -o name); do
             echo "::group::${pod}"
-            kubectl logs "${pod}"
+            kubectl logs "${pod}" || true
             echo "::endgroup::"
           done
 

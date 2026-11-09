@@ -10,6 +10,7 @@ context with the images and manifests that `docs/development.md` describes
 
 from collections.abc import Callable, Iterator
 import os
+from pathlib import Path
 from typing import Any
 
 from kubernetes import client, config
@@ -17,38 +18,48 @@ import pytest
 
 from tests.e2e.cluster import Task
 
+HERE = Path(__file__).parent
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Skip the end-to-end tests unless `TESK_E2E` is set.
 
     Args:
-        items: The collected tests.
+        items: The collected tests (of all levels, as the hook sees them all).
     """
     if os.environ.get("TESK_E2E"):
         return
     skip = pytest.mark.skip(reason="end-to-end tests need TESK_E2E and a cluster")
     for item in items:
-        if "tests/e2e/" in str(item.path).replace(os.sep, "/"):
+        if item.path.is_relative_to(HERE):
             item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")
-def batch() -> client.BatchV1Api:
-    """Load the kubeconfig and get the client of the batch API.
+def kube_config() -> None:
+    """Load the kubeconfig (its current context) for the clients."""
+    config.load_kube_config()
+
+
+@pytest.fixture(scope="session")
+def batch(kube_config: None) -> client.BatchV1Api:
+    """Get the client of the batch API.
+
+    Args:
+        kube_config: The loaded kubeconfig.
 
     Returns:
         The client.
     """
-    config.load_kube_config()
     return client.BatchV1Api()
 
 
 @pytest.fixture(scope="session")
-def core(batch: client.BatchV1Api) -> client.CoreV1Api:
-    """Get the client of the core API (after `batch` loaded the kubeconfig).
+def core(kube_config: None) -> client.CoreV1Api:
+    """Get the client of the core API.
 
     Args:
-        batch: The client of the batch API.
+        kube_config: The loaded kubeconfig.
 
     Returns:
         The client.

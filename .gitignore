@@ -74,6 +74,3 @@ venv.bak/
 
 # vim
 .swp
-
-# Kubeconfig of the local end-to-end tests (docs/development.md)
-/.kind-kubeconfig
