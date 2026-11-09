@@ -90,6 +90,10 @@ class Filer:
             filer_version: Tag of the filer image.
             pullPolicyAlways: Whether to always pull the image.
             json_pvc: Name of the ConfigMap with the gzipped task, if any.
+
+        Raises:
+            ValueError: `CONTAINER_BASE_PATH` is inside or contains
+                `path.TASK_PATH_PREFIX`.
         """
         self.name = name
         self.json_pvc = json_pvc
@@ -115,6 +119,8 @@ class Filer:
                         ],
                         "volumes": [],
                         "restartPolicy": "Never",
+                        # The filer doesn't use the Kubernetes API
+                        "automountServiceAccountToken": False,
                     },
                 }
             },
@@ -141,6 +147,7 @@ class Filer:
             )
 
         if fileEnabled():
+            path.checkBasePaths()
             self.getVolumeMounts().append(
                 {"name": "transfer-volume", "mountPath": path.CONTAINER_BASE_PATH}
             )
@@ -218,10 +225,17 @@ class Filer:
     def add_volume_mount(self, pvc: "PVC") -> None:
         """Mount the task's paths on its persistent volume claim.
 
+        Each path is mounted below `path.TASK_PATH_PREFIX` (see
+        `path.filerPath`), where the filer reads and writes it.
+
         Args:
             pvc: The claim, with its volume mounts set.
         """
-        self.getVolumeMounts().extend(pvc.volume_mounts)
+        # Copies: the executors mount the claim's mounts at the task's paths
+        self.getVolumeMounts().extend(
+            {**mount, "mountPath": path.filerPath(mount["mountPath"])}
+            for mount in pvc.volume_mounts
+        )
         self.getVolumes().append(
             {"name": "task-volume", "persistentVolumeClaim": {"claimName": pvc.name}}
         )

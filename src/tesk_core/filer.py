@@ -28,7 +28,7 @@ import requests
 
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
-from tesk_core.path import containerPath, fileEnabled, getPath
+from tesk_core.path import containerPath, fileEnabled, filerPath, getPath
 from tesk_core.transput import Transput, Type, body_for_log, url_for_log
 
 
@@ -1057,15 +1057,18 @@ def newTransput(scheme: str, netloc: str) -> type[Transput]:
 def process_file(ttype: str, filedata: dict[str, Any]) -> int:
     """Stage an input or output.
 
+    The task's `path` is staged at its place in the filer, below
+    `TASK_PATH_PREFIX` (see `filerPath`), where the taskmaster mounts it.
+
     Args:
         ttype: `inputs` or `outputs`.
-        filedata: The input or output.
+        filedata: The input or output, with the task's path.
 
     Returns:
         0 on success, otherwise 1.
     """
     if "content" in filedata:
-        return file_from_content(filedata)
+        return file_from_content({**filedata, "path": filerPath(filedata["path"])})
     parsed_url = urlparse(filedata["url"])
     scheme = parsed_url.scheme
     netloc = parsed_url.netloc
@@ -1077,11 +1080,10 @@ def process_file(ttype: str, filedata: dict[str, Any]) -> int:
         scheme = "file"
 
     trans = newTransput(scheme, netloc)
+    path = filerPath(filedata["path"])
 
     try:
-        with trans(
-            filedata["path"], filedata["url"], Type(filedata["type"])
-        ) as transfer:
+        with trans(path, filedata["url"], Type(filedata["type"])) as transfer:
             if ttype == "inputs":
                 return transfer.download()
             if ttype == "outputs":

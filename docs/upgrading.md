@@ -6,6 +6,17 @@ to the filer.
 
 ## Unreleased
 
+### The filer mounts task paths below `/tesk/task`
+
+The filer's pod used to mount the task's volumes, inputs and outputs at the
+task's paths; now it mounts them below `/tesk/task` (see
+[Filer](filer.md#task-paths-in-the-filer)). Executors still see the task's
+paths. The taskmaster and filer images must now be of the same version.
+`CONTAINER_BASE_PATH` must be outside `/tesk/task` and not contain it
+(TESK's Helm chart uses `/transfer`). The filer pod no longer mounts a
+service account token, and the filer image's entrypoint is the absolute
+path `/usr/bin/filer`.
+
 ### Tasks that can't be scheduled can time out
 
 A task whose pod the scheduler can't place, e.g. because it asks for more
