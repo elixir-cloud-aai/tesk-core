@@ -13,7 +13,7 @@ import pytest
 from urllib3.exceptions import HTTPError
 
 from tesk_core import taskmaster
-from tesk_core.job import Job
+from tesk_core.job import DELETE_TIMEOUT, Job
 from tesk_core.pvc import PVC
 from tesk_core.taskmaster import (
     clean_on_interrupt,
@@ -130,6 +130,7 @@ def test_failed_job_deletes_pvc(
     assert taskmaster.created_pvc is None
 
 
+@patch("tesk_core.taskmaster.stop_task_jobs", MagicMock())
 @patch("tesk_core.taskmaster.check_cancelled")
 @patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")
@@ -213,6 +214,7 @@ def test_completed_task_delete_error_is_logged(
     assert "Can't delete PVC 'task-1000-pvc': 500 Server Error" in caplog.text
 
 
+@patch("tesk_core.taskmaster.stop_task_jobs", MagicMock())
 @patch("tesk_core.taskmaster.client")
 @patch("tesk_core.taskmaster.config")
 @patch("tesk_core.taskmaster.check_cancelled", return_value=True)
@@ -441,10 +443,11 @@ def test_interrupt_keeps_pvc(
         run_task(data, "filer_name", "filer_version")
     clean_on_interrupt()
 
-    mock_job_delete.assert_called_once_with()
+    mock_job_delete.assert_called_once_with(request_timeout=DELETE_TIMEOUT)
     mock_delete.assert_not_called()
 
 
+@patch("tesk_core.taskmaster.stop_task_jobs", MagicMock())
 @patch("tesk_core.taskmaster.check_cancelled")
 @patch("tesk_core.taskmaster.PVC.delete", autospec=True)
 @patch("tesk_core.taskmaster.PVC.create")

@@ -274,23 +274,30 @@ def executors_task(count: int, outputs: bool = False) -> dict[str, Any]:
     }
 
 
+@patch("tesk_core.taskmaster.stop_task_jobs")
 @patch("tesk_core.taskmaster.run_executor")
 @patch("tesk_core.taskmaster.check_cancelled", side_effect=[False, True])
 def test_run_task_cancelled_between_executors(
-    mock_check_cancelled: MagicMock, mock_run_executor: MagicMock
+    mock_check_cancelled: MagicMock,
+    mock_run_executor: MagicMock,
+    mock_stop: MagicMock,
 ) -> None:
     """Test that a task cancelled while an executor ended starts no other.
 
     An executor job that completes between two polls isn't checked for
-    cancellation while it runs.
+    cancellation while it runs. The task's running jobs are stopped, also
+    those of an earlier attempt of the taskmaster's pod.
     """
+    task = executors_task(2)
     with pytest.raises(SystemExit) as exc_info:
-        run_task(executors_task(2), "filer", "v0")
+        run_task(task, "filer", "v0")
 
     assert exc_info.value.code == 0
     mock_run_executor.assert_called_once()
+    mock_stop.assert_called_once_with(task)
 
 
+@patch("tesk_core.taskmaster.stop_task_jobs")
 @patch("tesk_core.taskmaster.Job")
 @patch("tesk_core.taskmaster.init_pvc")
 @patch("tesk_core.taskmaster.Filer")
@@ -302,6 +309,7 @@ def test_run_task_cancelled_before_outputs(
     mock_filer: MagicMock,
     mock_init_pvc: MagicMock,
     mock_job: MagicMock,
+    mock_stop: MagicMock,
 ) -> None:
     """Test that a task cancelled after its last executor uploads nothing."""
     with pytest.raises(SystemExit) as exc_info:
@@ -310,3 +318,4 @@ def test_run_task_cancelled_before_outputs(
     assert exc_info.value.code == 0
     mock_run_executor.assert_called_once()
     mock_job.assert_not_called()
+    mock_stop.assert_called_once()
