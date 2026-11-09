@@ -15,15 +15,15 @@ from tesk_core.filer_s3 import S3Transput
 from tesk_core.pvc import PVC
 from tesk_core.transput import Type, open_for_upload, symlink_in
 
-SECRET = b"machine example.org login user password secret\n"
+OUTSIDE = b"a file outside the work directory\n"
 
 
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
-    """Create a work directory and a secret file outside it.
+    """Create a work directory and a file outside it.
 
-    The work directory has a regular file, a link to the secret, a link to
-    the secret's directory, and a directory with a link inside.
+    The work directory has a regular file, a link to the outside file, a link to
+    the outside file's directory, and a directory with a link inside.
 
     Args:
         tmp_path: The temporary directory of the test.
@@ -32,17 +32,17 @@ def tree(tmp_path: Path) -> Path:
         The work directory, without links in its own path.
     """
     root = Path(os.path.realpath(tmp_path))
-    secrets = root / "secrets"
-    secrets.mkdir()
-    (secrets / "netrc").write_bytes(SECRET)
+    outside = root / "outside"
+    outside.mkdir()
+    (outside / "target").write_bytes(OUTSIDE)
     work = root / "work"
     work.mkdir()
     (work / "regular.txt").write_text("data\n")
-    (work / "file_link").symlink_to(secrets / "netrc")
-    (work / "dir_link").symlink_to(secrets)
+    (work / "file_link").symlink_to(outside / "target")
+    (work / "dir_link").symlink_to(outside)
     (work / "nested" / "deeper").mkdir(parents=True)
     (work / "nested" / "ok.txt").write_text("ok\n")
-    (work / "nested" / "deeper" / "inner_link").symlink_to(secrets / "netrc")
+    (work / "nested" / "deeper" / "inner_link").symlink_to(outside / "target")
     (work / "clean").mkdir()
     (work / "clean" / "a.txt").write_text("a\n")
     return work
@@ -66,7 +66,7 @@ class TestSymlinkIn:
 
     def test_link_in_parent(self, tree: Path) -> None:
         """Test that a link to a directory in the path is found."""
-        path = tree / "dir_link" / "netrc"
+        path = tree / "dir_link" / "target"
         assert symlink_in(str(path)) == str(tree / "dir_link")
 
     def test_dot_dot_refused(self, tree: Path) -> None:
@@ -76,7 +76,7 @@ class TestSymlinkIn:
         the parent of the link's target, not `tree`.
         """
         with pytest.raises(ValueError, match=r"\.\."):
-            symlink_in(f"{tree}/dir_link/../secrets/netrc")
+            symlink_in(f"{tree}/dir_link/../outside/target")
         with pytest.raises(ValueError, match=r"\.\."):
             symlink_in(f"{tree}/clean/../regular.txt")
 
@@ -101,11 +101,11 @@ def test_open_for_upload_refuses_link(tree: Path) -> None:
         assert file.read() == b"data\n"
 
 
-# Each resolves to the secret, or a directory with it, through a link
+# Each resolves to the outside file, or a directory with it, through a link
 LINKED_OUTPUTS = [
     pytest.param("file_link", Type.File, id="file-link"),
-    pytest.param("dir_link/../secrets/netrc", Type.File, id="dot-dot-after-link"),
-    pytest.param("dir_link/netrc", Type.File, id="file-in-dir-link"),
+    pytest.param("dir_link/../outside/target", Type.File, id="dot-dot-after-link"),
+    pytest.param("dir_link/target", Type.File, id="file-in-dir-link"),
     pytest.param("dir_link", Type.Directory, id="dir-link"),
     pytest.param("nested", Type.Directory, id="link-below-dir"),
 ]
