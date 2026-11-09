@@ -10,7 +10,10 @@
 build/
 dist/
 site/
-# Secrets never go into the images
-.env
-.env.*
-!.env.example
+# Secrets never go into the images, nor into the build stages and their
+# cache: at any depth
+**/.env
+**/.env.*
+!**/.env.example
+**/.netrc
+**/*.pem
