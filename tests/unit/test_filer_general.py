@@ -6,6 +6,7 @@
 # test deeper down the call tree.
 
 from pathlib import Path
+import stat
 
 import pytest
 from pytest_mock import MockerFixture
@@ -55,18 +56,67 @@ def test_process_file_from_content(tmp_path: Path) -> None:
 
 
 def test_copyDir_merges_existing_directories(tmp_path: Path) -> None:
-    """Test that a copy into existing nested directories merges them."""
+    """Test that a copy into existing nested directories merges them.
+
+    Directories that exist keep their mode; new ones are copied whole.
+    """
     src = tmp_path / "src"
     (src / "sub").mkdir(parents=True)
     (src / "sub" / "new.txt").write_text("new")
     (src / "top.txt").write_text("top")
+    (src / "added").mkdir()
+    (src / "added" / "b.txt").write_text("b")
+    src.chmod(0o700)
+    (src / "sub").chmod(0o750)
     dst = tmp_path / "dst"
     (dst / "sub").mkdir(parents=True)
     (dst / "sub" / "old.txt").write_text("old")
     (dst / "top.txt").write_text("replaced")
+    dst.chmod(0o777)
+    (dst / "sub").chmod(0o777)
 
     copyDir(str(src), str(dst))
 
     assert (dst / "sub" / "old.txt").read_text() == "old"
     assert (dst / "sub" / "new.txt").read_text() == "new"
     assert (dst / "top.txt").read_text() == "top"
+    assert (dst / "added" / "b.txt").read_text() == "b"
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o777
+    assert stat.S_IMODE((dst / "sub").stat().st_mode) == 0o777
+
+
+def test_copyDir_replaces_links(tmp_path: Path) -> None:
+    """Test that links in the destination are replaced, not written through."""
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "f.txt").write_text("f")
+    (src / "x.txt").write_text("new")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "x.txt").write_text("old")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "x.txt").symlink_to(elsewhere / "x.txt")
+    (dst / "sub").symlink_to(elsewhere)
+
+    copyDir(str(src), str(dst))
+
+    assert not (dst / "x.txt").is_symlink()
+    assert (dst / "x.txt").read_text() == "new"
+    assert not (dst / "sub").is_symlink()
+    assert (dst / "sub" / "f.txt").read_text() == "f"
+    assert sorted(p.name for p in elsewhere.iterdir()) == ["x.txt"]
+    assert (elsewhere / "x.txt").read_text() == "old"
+
+
+def test_copyDir_file_over_directory(tmp_path: Path) -> None:
+    """Test that a file doesn't land inside a directory of its name."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a").write_text("file")
+    dst = tmp_path / "dst"
+    (dst / "a").mkdir(parents=True)
+
+    with pytest.raises(IsADirectoryError):
+        copyDir(str(src), str(dst))
+    assert list((dst / "a").iterdir()) == []

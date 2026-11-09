@@ -156,6 +156,8 @@ def test_upload_dir_stops_at_first_failure(
     (tmp_path / "b.txt").write_bytes(b"b")
     resp_fail = Response()
     resp_fail.status_code = 500
+    resp_fail._content = b""
+    resp_fail._content_consumed = True  # type: ignore[attr-defined]
     put_mock = mocker.patch("requests.put", return_value=resp_fail)
 
     http_obj = HTTPTransput(str(tmp_path), URL, Type.Directory)

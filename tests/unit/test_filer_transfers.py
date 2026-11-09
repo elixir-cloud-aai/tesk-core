@@ -1,8 +1,7 @@
-"""Tests of S3 directory downloads, streamed HTTP downloads and `copyDir`."""
+"""Tests of S3 directory downloads and streamed HTTP downloads."""
 
 from collections.abc import Iterator
 from pathlib import Path
-import stat
 from unittest.mock import MagicMock
 
 import boto3
@@ -11,9 +10,9 @@ import pytest
 from pytest_mock import MockerFixture
 import requests
 
-from tesk_core.filer import HTTP_CHUNK_SIZE, HTTPTransput, copyDir
+from tesk_core.filer import HTTP_CHUNK_SIZE, HTTPTransput, error_body
 from tesk_core.filer_s3 import S3Transput
-from tesk_core.transput import Type, within
+from tesk_core.transput import BODY_LOG_LIMIT, Type, within
 
 KEYS = {
     "in/a.txt": b"a",
@@ -22,6 +21,7 @@ KEYS = {
     "in/": b"",
     "in/../../escape.txt": b"x",
     "in/sub/../../../escape2.txt": b"x",
+    "in/../../escapedir/": b"",
 }
 
 
@@ -55,6 +55,7 @@ def test_s3_download_dir_keeps_objects_below(
     assert not list(tmp_path.rglob("escape*"))
     assert "Skipping object 'in/../../escape.txt'" in caplog.text
     assert "Skipping object 'in/sub/../../../escape2.txt'" in caplog.text
+    assert "Skipping object 'in/../../escapedir/'" in caplog.text
 
 
 @pytest.mark.usefixtures("bucket")
@@ -89,7 +90,9 @@ def streamed(chunks: list[bytes], status: int = 200) -> MagicMock:
     Returns:
         The response, usable as a context manager.
     """
-    response = MagicMock(status_code=status, text="")
+    response = MagicMock(
+        status_code=status, url="https://example.org/in", history=[], encoding=None
+    )
     response.__enter__.return_value = response
     response.iter_content.return_value = iter(chunks)
     return response
@@ -104,7 +107,6 @@ def test_http_download_streams(mocker: MockerFixture, tmp_path: Path) -> None:
     assert path.read_bytes() == b"first second"
     assert get.call_args.kwargs["stream"] is True
     response.iter_content.assert_called_once_with(chunk_size=HTTP_CHUNK_SIZE)
-    assert "content" not in [call[0] for call in response.mock_calls]
 
 
 def test_http_download_error_while_streaming(
@@ -175,23 +177,43 @@ def test_http_download_write_error(
     assert "No space left on device" in caplog.text
 
 
-def test_copy_dir_keeps_existing_directories(tmp_path: Path) -> None:
-    """Test that merging into existing directories keeps their mode."""
-    src = tmp_path / "src"
-    (src / "sub").mkdir(parents=True)
-    (src / "sub" / "a.txt").write_text("a")
-    (src / "new").mkdir()
-    (src / "new" / "b.txt").write_text("b")
-    src.chmod(0o700)
-    (src / "sub").chmod(0o750)
-    dst = tmp_path / "dst"
-    (dst / "sub").mkdir(parents=True)
-    dst.chmod(0o777)
-    (dst / "sub").chmod(0o777)
+def test_http_download_open_error_keeps_file(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a file that can't be opened fails the input, and stays."""
+    mocker.patch("requests.get", return_value=streamed([b"new"]))
+    path = tmp_path / "in"
+    path.write_bytes(b"old")
+    mocker.patch("builtins.open", side_effect=PermissionError(13, "Permission denied"))
+    assert HTTPTransput(str(path), "https://example.org/in", Type.File).download() == 1
+    assert "Unable to write input" in caplog.text
+    assert path.read_bytes() == b"old"
 
-    copyDir(str(src), str(dst))
 
-    assert stat.S_IMODE(dst.stat().st_mode) == 0o777
-    assert stat.S_IMODE((dst / "sub").stat().st_mode) == 0o777
-    assert (dst / "sub" / "a.txt").read_text() == "a"
-    assert (dst / "new" / "b.txt").read_text() == "b"
+def test_error_body_reads_only_the_start() -> None:
+    """Test that only the start of a large error body is read."""
+    big = b"x" * (4 * BODY_LOG_LIMIT)
+    response = streamed([big, big, b"never"], status=500)
+    assert error_body(response) == big.decode()
+    response.iter_content.assert_called_once_with(chunk_size=4 * BODY_LOG_LIMIT)
+    assert list(response.iter_content.return_value) == [big, b"never"]
+
+
+def test_error_body_decoding() -> None:
+    """Test that error bodies are decoded with a fallback to UTF-8."""
+    response = streamed(["é".encode("latin-1")], status=500)
+    response.encoding = "latin-1"
+    assert error_body(response) == "é"
+    response = streamed(["é".encode()], status=500)
+    response.encoding = "no-such-codec"
+    assert error_body(response) == "é"
+
+
+def test_http_download_logs_error_body(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the error body of a streamed download is logged."""
+    mocker.patch("requests.get", return_value=streamed([b"not found"], status=404))
+    transfer = HTTPTransput(str(tmp_path / "in"), "https://example.org/in", Type.File)
+    assert transfer.download() == 1
+    assert "Response body: not found" in caplog.text

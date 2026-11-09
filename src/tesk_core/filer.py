@@ -9,6 +9,7 @@ import argparse
 import base64
 from collections.abc import Callable
 import contextlib
+import errno
 import ftplib
 from ftplib import FTP
 import functools
@@ -30,7 +31,14 @@ import requests
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, getPath
-from tesk_core.transput import Transput, Type, body_for_log, url_for_log, within
+from tesk_core.transput import (
+    BODY_LOG_LIMIT,
+    Transput,
+    Type,
+    body_for_log,
+    url_for_log,
+    within,
+)
 
 
 def http_join(url: str, name: str) -> str:
@@ -118,6 +126,31 @@ def netrc_secrets(url: str) -> list[str]:
     return [user, password, basic]
 
 
+def error_body(req: requests.Response) -> str:
+    """Read the start of the body of an error response, for log messages.
+
+    Reads at most 4 bytes per character that `body_for_log` keeps, so that
+    a large error body of a streamed response isn't read into memory whole.
+
+    Args:
+        req: The response.
+
+    Returns:
+        The start of the body, decoded with the response's encoding (UTF-8
+        if it has none or an unknown one), with undecodable bytes replaced.
+    """
+    limit = 4 * BODY_LOG_LIMIT
+    data = b""
+    for chunk in req.iter_content(chunk_size=limit):
+        data += chunk
+        if len(data) >= limit:
+            break
+    try:
+        return data[:limit].decode(req.encoding or "utf-8", errors="replace")
+    except LookupError:
+        return data[:limit].decode("utf-8", errors="replace")
+
+
 class HTTPTransput(Transput):
     """Transfer of an input or output over HTTP(S)."""
 
@@ -134,13 +167,14 @@ class HTTPTransput(Transput):
         """
         if req.status_code < 200 or req.status_code >= 300:
             logging.error("Got status code: %d", req.status_code)
-            if req.text:
+            text = error_body(req)
+            if text:
                 sent = [req.url, *(item.url for item in req.history)]
                 urls = [self.url, *(url for url in sent if url)]
                 logging.error(
                     "Response body: %s",
                     body_for_log(
-                        req.text,
+                        text,
                         *urls,
                         secrets=[s for url in urls for s in netrc_secrets(url)],
                     ),
@@ -269,19 +303,27 @@ def copyDir(src: str, dst: str) -> None:
     Directories that don't exist yet are copied whole (`shutil.copytree`);
     existing ones are merged, entry by entry, and keep their own mode and
     times (e.g., of a mount point the filer doesn't own); existing files
-    are replaced.
+    are replaced. Links inside the destination are replaced, not followed.
 
     Args:
         src: The source directory.
         dst: The destination directory.
+
+    Raises:
+        IsADirectoryError: If a file of the source meets a directory of the
+            same name in the destination.
     """
     if not os.path.isdir(dst):
         shutil.copytree(src, dst)
         return
     for entry in os.scandir(src):
         target = os.path.join(dst, entry.name)
+        if os.path.islink(target):
+            os.unlink(target)
         if entry.is_dir():
             copyDir(entry.path, target)
+        elif os.path.isdir(target):
+            raise IsADirectoryError(errno.EISDIR, "Is a directory", target)
         else:
             shutil.copy2(entry.path, target)
 
