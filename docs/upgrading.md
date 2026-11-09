@@ -52,8 +52,9 @@ more. Deployments with their own role must grant them too:
 | `pods` | `list` | The pods of a job, to time out pods that can't start. |
 | `persistentvolumeclaims` | `create`, `get`, `delete` | The task's volume. |
 
-Without `patch` or `get` on `jobs`, the taskmaster logs an error and falls
-back to the earlier behaviour, as each section below describes.
+Roles that already let the taskmaster run tasks have the `get`; without
+`patch` on `jobs`, the taskmaster logs an error and falls back to the
+earlier behaviour, as the sections below describe.
 
 ### The filer mounts task paths below `/tesk/task`
 
