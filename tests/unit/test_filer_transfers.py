@@ -1,4 +1,4 @@
-"""Tests of S3 directory downloads and streamed HTTP downloads."""
+"""Tests of S3 directory downloads, HTTP downloads and FTP file uploads."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,6 +15,7 @@ from tesk_core.filer import (
     HTTP_CHUNK_SIZE,
     HTTPTransput,
     error_body,
+    ftp_upload_file,
 )
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.transput import BODY_LOG_LIMIT, Type, within
@@ -254,3 +255,42 @@ def test_http_download_logs_error_body(
     transfer = HTTPTransput(str(tmp_path / "in"), "https://example.org/in", Type.File)
     assert transfer.download() == 1
     assert "Response body: not found" in caplog.text
+
+
+def test_ftp_upload_file_reads_only(tmp_path: Path) -> None:
+    """Test that an FTP upload opens its source read-only.
+
+    The source is read-only, as an output on a read-only mount, so opening
+    it for writing too would fail.
+    """
+    source = tmp_path / "out.txt"
+    source.write_bytes(b"out")
+    source.chmod(0o400)
+    conn = MagicMock()
+
+    def store(command: str, file: object) -> None:
+        """Check the command and that the file is open for reading only.
+
+        Args:
+            command: The FTP command.
+            file: The open file.
+        """
+        assert command == "STOR /out.txt"
+        assert file.mode == "rb"  # type: ignore[attr-defined]
+        assert file.read() == b"out"  # type: ignore[attr-defined]
+
+    conn.storbinary.side_effect = store
+    assert ftp_upload_file(conn, str(source), "out.txt") == 0
+    conn.storbinary.assert_called_once()
+
+
+def test_ftp_upload_file_open_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a source that can't be opened fails the upload, logged."""
+    conn = MagicMock(host="ftp.example.org")
+    missing = tmp_path / "missing.txt"
+    assert ftp_upload_file(conn, str(missing), "out.txt") == 1
+    conn.storbinary.assert_not_called()
+    assert f'Unable to upload file "{missing}"' in caplog.text
+    assert "FileNotFoundError" in caplog.text
