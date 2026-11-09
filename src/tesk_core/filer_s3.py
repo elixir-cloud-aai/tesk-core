@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import boto3
 import botocore.exceptions
 
-from tesk_core.transput import Transput, Type
+from tesk_core.transput import Transput, Type, open_for_upload
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import Bucket, S3ServiceResource
@@ -143,12 +143,15 @@ class S3Transput(Transput):
         logging.debug("Guessed Content-Type: %s for file: %s", content_type, self.path)
         try:
             # Pass ContentType via ExtraArgs so the object is uploaded with the
-            # right MIME type. `bucket_obj` is set on entering the context
-            self.bucket_obj.upload_file(  # type: ignore[union-attr]
-                Filename=self.path,
-                Key=self.file_path,
-                ExtraArgs={"ContentType": content_type},
-            )
+            # right MIME type. `bucket_obj` is set on entering the context.
+            # Opened here, so that a link isn't followed (see
+            # `open_for_upload`)
+            with open_for_upload(self.path) as file:
+                self.bucket_obj.upload_fileobj(  # type: ignore[union-attr]
+                    Fileobj=file,
+                    Key=self.file_path,
+                    ExtraArgs={"ContentType": content_type},
+                )
         except (botocore.exceptions.ClientError, OSError) as err:
             logging.error(
                 "File upload failed for '%s'", self.bucket + "/" + self.file_path
@@ -182,7 +185,7 @@ class S3Transput(Transput):
                     raise OSError
                 file_path = os.path.join(self.url, item)
                 with S3Transput(path, file_path, file_type) as transfer:
-                    if transfer.upload():
+                    if transfer.upload(check_links=False):
                         return 1
         except OSError as err:
             logging.error(
