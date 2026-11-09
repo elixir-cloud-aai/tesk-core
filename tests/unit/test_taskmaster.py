@@ -357,13 +357,25 @@ def test_init_pvc_mounts_netrc(
     filer: Filer,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test that the filer mounts the `.netrc` secret named in the environment."""
-    monkeypatch.setenv("NETRC_SECRET_NAME", "netrc")
+    """Test that the filer mounts the `.netrc` secret named in the environment.
 
-    with patch.object(Filer, "add_netrc_mount") as mock_netrc:
-        init_pvc(data, filer)
+    The secret's `.netrc` key becomes `$HOME/.netrc`, with `HOME` set.
+    """
+    monkeypatch.setenv("NETRC_SECRET_NAME", "my-netrc")
 
-    mock_netrc.assert_called_once_with("netrc")
+    init_pvc(data, filer)
+
+    spec = filer.get_spec("inputs")["spec"]["template"]["spec"]
+    volume = next(v for v in spec["volumes"] if v["name"] == "netrc")
+    assert volume["secret"]["secretName"] == "my-netrc"
+    assert volume["secret"]["items"] == [{"key": ".netrc", "path": ".netrc"}]
+    container = spec["containers"][0]
+    assert {
+        "name": "netrc",
+        "mountPath": "/opt/home/.netrc",
+        "subPath": ".netrc",
+    } in container["volumeMounts"]
+    assert {"name": "HOME", "value": "/opt/home"} in container["env"]
 
 
 @patch("tesk_core.taskmaster.PVC.create")
