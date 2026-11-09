@@ -13,7 +13,10 @@ outputs, volumes and resources.
    persistent volume claim (PVC) of the task's disk size
    (`resources.disk_gb`) for them. If it has inputs, it then runs the
    [filer](filer.md) as a job (`<task>-inputs-filer`) that downloads them
-   onto that volume.
+   onto that volume. Each volume, and the directory of each input and
+   output, is a directory of the PVC, mounted at the task's path in the
+   executors and below `/tesk/task` in the filer (see
+   [Task paths in the filer](filer.md#task-paths-in-the-filer)).
 2. It runs the executors, one after another, each as a job with the task's
    volume mounted. If an executor has resource requests but no limits, the
    requests also become its limits.

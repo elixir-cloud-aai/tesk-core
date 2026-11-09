@@ -28,6 +28,42 @@ Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
 writes to `path`. The scheme of the URL selects the protocol.
 
+## Task paths in the filer
+
+The filer's pod mounts the task's paths below `/tesk/task`, not at the
+task's paths themselves: the input `/data/in.txt` is
+`/tesk/task/data/in.txt` in the filer, and `/data/in.txt` in the
+executors, which mount the same directory of the task's volume. Task
+paths therefore can't overlay the filer's own files (e.g. its program) or
+its configuration (`/aws`, `/opt/home/.netrc`, `/jsoninput`, the shared
+volume). Paths are normalized first, for the filer and the executors'
+mounts: `..` and `.` components are resolved (`..` as far as the root, so
+`/../etc` is `/tesk/task/etc`), and repeated and trailing slashes dropped,
+so `/out/` and `/out` share one mount. Glob patterns of `file:` outputs
+are normalized the same way, and expanded in the filer only. Log messages
+of the transfers show the paths in the filer, the debug messages
+"Processing file" and "Processed file" the task's. The filer pod doesn't
+mount a service account token, and the image's entrypoint is the absolute
+path `/usr/bin/filer`.
+
+The taskmaster and the filer must be of the same version: with an older
+taskmaster, a newer filer looks for the task's paths below `/tesk/task`,
+where nothing is mounted, and the other way round. Inputs then don't reach
+the executors and outputs aren't found, so tasks fail.
+
+## Symbolic links in outputs
+
+Outputs can't be or contain symbolic links. The filer fails an output, with
+an error that names the link, if any component of its path is a link (e.g.
+`/data/out` for the output `/data/out/result.txt`), or, for a directory, if
+any file or directory below it is one (output paths are normalized first,
+see [Task paths in the filer](#task-paths-in-the-filer)). For `file:` outputs with a glob, a link in any match
+fails the whole output. Links are not followed, as the filer would resolve
+them in its own container rather than the executor's; nothing of such an
+output is uploaded. Executors that create links in
+their outputs should copy the files they point to instead (e.g. `cp -L`).
+The outputs filer mounts the task's paths read-only.
+
 ## Protocols
 
 | Scheme | Inputs | Outputs |
@@ -39,12 +75,19 @@ writes to `path`. The scheme of the URL selects the protocol.
 
 ### HTTP(S)
 
-Inputs are downloaded with `GET`. Outputs are uploaded with `PUT`, as bytes,
-streamed from disk: a directory is uploaded file by file (stopping at the
-first that fails), each to the directory's URL plus the escaped file name
-(the query of the URL, e.g. a token of a presigned URL, is kept). Any status
-other than 2xx fails the transfer, as does a request error (e.g. a failed
-connection or a timeout), which is logged with its type.
+Inputs are downloaded with `GET`, streamed to disk in chunks of 1 MiB, so
+that large files don't need memory of their size. A connection that breaks
+off during the body, or a failed write (e.g. a full volume), fails the
+input, and its partial file is removed.
+
+Outputs are uploaded with `PUT`, as bytes, streamed from disk: a directory
+is uploaded file by file (stopping at the first that fails), each to the
+directory's URL plus the escaped file name (the query of the URL, e.g. a
+token of a presigned URL, is kept).
+
+Any status other than 2xx fails the transfer, as does a request error (e.g.
+a failed connection or a timeout), which is logged with its type. Of the
+body of an error response, only the start is read for the log.
 
 Requests time out after `FILER_HTTP_TIMEOUT` seconds (default 300) without
 progress: when connecting, and between the parts of a response or upload,
@@ -130,6 +173,12 @@ aws_access_key_id = <key id>
 aws_secret_access_key = <secret>
 ```
 
+Directory inputs download every object below the URL's key prefix (all
+pages of the listing, also beyond 1000 objects), keeping the paths below
+it. Objects whose local path would not be below the input's directory (e.g.
+keys with `..` segments) are skipped with a warning; keys that end with `/`
+(folder markers) create their directory.
+
 The bucket must exist. Outputs are uploaded with a `Content-Type` guessed
 from the file name. Checksums are calculated and validated only where the
 S3 API requires them (`AWS_REQUEST_CHECKSUM_CALCULATION` and
@@ -152,7 +201,7 @@ environment variables, which it passes on to the filer:
 | Variable | Description |
 |---|---|
 | `HOST_BASE_PATH` | Absolute base path of the shared volume in the URLs. The path of every `file:` URL must be absolute and, after resolving `..` segments, be this path or below it, e.g. `/tmp/a` for `/tmp`, but not `/tmp2/a` or `/tmp/../a`. |
-| `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume. |
+| `CONTAINER_BASE_PATH` | Path where the filer mounts the shared volume; neither in nor around `/tesk/task` (the taskmaster fails with an error otherwise). |
 | `TRANSFER_PVC_NAME` | Name of the PVC of the shared volume. |
 
 A URL `file://<HOST_BASE_PATH>/a/b` refers to `<CONTAINER_BASE_PATH>/a/b`
@@ -160,6 +209,14 @@ in the filer: with `HOST_BASE_PATH=/tmp` and `CONTAINER_BASE_PATH=/transfer`,
 `file:///tmp/a/b` is `/transfer/a/b`. TESK's Helm chart sets these with `transfer.active` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
+
+Directories are copied recursively. A directory copied to one that exists
+is merged into it: subdirectories that exist on both sides are merged, and
+files that exist on both sides replaced. Directories that exist keep their
+own mode (their metadata isn't copied). Links in the existing directory,
+and the destination itself if it is a link, are replaced by the copied file
+or directory, not followed. A file that meets a directory of its name fails
+the copy.
 
 ## Credentials from `.netrc`
 

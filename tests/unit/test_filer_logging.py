@@ -45,6 +45,8 @@ def _response(status: int) -> Response:
     resp = Response()
     resp.status_code = status
     resp._content = b""
+    # As read: `iter_content` gives the content without a connection
+    resp._content_consumed = True  # type: ignore[attr-defined]
     return resp
 
 

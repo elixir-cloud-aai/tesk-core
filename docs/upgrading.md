@@ -6,6 +6,26 @@ to the filer.
 
 ## Unreleased
 
+### The filer mounts task paths below `/tesk/task`
+
+The filer's pod used to mount the task's volumes, inputs and outputs at the
+task's paths; now it mounts them below `/tesk/task` (see
+[Filer](filer.md#task-paths-in-the-filer)). Executors still see the task's
+paths. The taskmaster and filer images must now be of the same version.
+`CONTAINER_BASE_PATH` must be outside `/tesk/task` and not contain it
+(TESK's Helm chart uses `/transfer`). The filer pod no longer mounts a
+service account token, and the filer image's entrypoint is the absolute
+path `/usr/bin/filer`.
+
+### Outputs can't contain symbolic links
+
+The filer used to follow symbolic links in outputs, resolving them in its
+own container. Now it fails an output whose path goes through a link, or a
+directory output with a link anywhere below it, and logs why (see
+[Filer](filer.md#symbolic-links-in-outputs)); the task fails. Executors
+that leave links in their outputs must copy the targets instead (e.g.
+`cp -L`). The outputs filer mounts the task's paths read-only.
+
 ### Tasks that can't be scheduled can time out
 
 A task whose pod the scheduler can't place, e.g. because it asks for more
@@ -44,6 +64,24 @@ seconds (see the linked section).
 The filer uploads a directory over a single FTP connection; before, it
 connected and logged in again for each file and subdirectory, which FTP
 servers that limit connections or logins could refuse. Nothing to change.
+
+### Streamed HTTP downloads, S3 directory inputs, merged `file:` copies
+
+Nothing to change:
+
+- The filer streams HTTP(S) inputs to disk instead of holding them in
+  memory whole, so the filer's memory no longer limits the size of inputs,
+  and reads only the start of error responses for its log (see
+  [HTTP(S)](filer.md#https)).
+- S3 directory inputs skip, with a warning, objects whose keys would place
+  them outside the input's directory (e.g. with `..` segments), and create
+  the directories of folder markers (keys that end with `/`). They also
+  download objects beyond the first 1000 of the listing, which were
+  missing before (see [S3](filer.md#s3)).
+- `file:` directories copied into existing ones now merge subdirectories
+  that exist on both sides at any depth, instead of failing; directories
+  that exist keep their mode, and links in them are replaced (see
+  [Shared volume](filer.md#shared-volume-file)).
 
 ### Filers run only when they have something to stage
 

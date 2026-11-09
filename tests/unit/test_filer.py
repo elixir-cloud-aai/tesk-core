@@ -91,7 +91,7 @@ class TestFiler:
 
         copyMock.assert_called_once_with(
             "/transfer/tmphrtip1o8/md5",
-            "/var/lib/cwl/stgda974802-fa81-4f0b-8fe4-341d5655af4b/md5",
+            "/tesk/task/var/lib/cwl/stgda974802-fa81-4f0b-8fe4-341d5655af4b/md5",
         )
 
     @patch("tesk_core.filer.copyDir")
@@ -109,7 +109,9 @@ class TestFiler:
 
         copyMock.assert_not_called()
 
-        copyDirMock.assert_called_once_with("/transfer/tmphrtip1o8", "/TclSZU")
+        copyDirMock.assert_called_once_with(
+            "/transfer/tmphrtip1o8", "/tesk/task/TclSZU"
+        )
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.shutil.copy")
@@ -126,7 +128,9 @@ class TestFiler:
 
         copyMock.assert_not_called()
 
-        copyDirMock.assert_called_once_with("/TclSZU", "/transfer/tmphrtip1o8")
+        copyDirMock.assert_called_once_with(
+            "/tesk/task/TclSZU", "/transfer/tmphrtip1o8"
+        )
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.copyFile")
@@ -143,7 +147,9 @@ class TestFiler:
 
         copyDirMock.assert_not_called()
 
-        copyFileMock.assert_called_once_with("/TclSZU/md5", "/transfer/tmphrtip1o8/md5")
+        copyFileMock.assert_called_once_with(
+            "/tesk/task/TclSZU/md5", "/transfer/tmphrtip1o8/md5"
+        )
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.copyFile")
@@ -163,7 +169,7 @@ class TestFiler:
         copyDirMock.assert_not_called()
 
         copyFileMock.assert_called_once_with(
-            "/TclSZU/md5*", "/transfer/tmphrtip1o8/md5*"
+            "/tesk/task/TclSZU/md5*", "/transfer/tmphrtip1o8/md5*"
         )
 
     def test_copyDir(self, tmp_path: Path) -> None:

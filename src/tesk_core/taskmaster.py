@@ -29,6 +29,7 @@ from tesk_core.job import (
     Job,
     delete_job_quietly,
 )
+from tesk_core.path import taskPath
 from tesk_core.pvc import PVC
 from tesk_core.Util import configure_logging
 
@@ -176,12 +177,16 @@ def append_mount(
 ) -> None:
     """Add a volume mount on a new subpath of the claim, unless the path has one.
 
+    The path is normalized (see `taskPath`), so that spellings of the same
+    directory (e.g., `/out/` and `/out`) share one mount, also in the filer.
+
     Args:
         volume_mounts: The volume mounts, changed in place.
         name: Name of the volume.
         path: The mount path.
         pvc: The claim.
     """
+    path = taskPath(path)
     # Checks all mount paths in volume_mounts if the path given is already in
     # there
     duplicate = next(

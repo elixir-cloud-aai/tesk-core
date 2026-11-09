@@ -21,6 +21,8 @@ FTYPE = Type.File
 
 resp = Response()
 resp._content = b'{ "foo" : "bar" }'
+# As read: `iter_content` gives the content without a connection
+resp._content_consumed = True  # type: ignore[attr-defined]
 
 
 def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
@@ -31,7 +33,7 @@ def test_download_file(mocker: MockerFixture, tmp_path: Path) -> None:
     mock_get = mocker.patch("requests.get", return_value=resp)
 
     assert http_obj.download_file() == 0
-    mock_get.assert_called_once_with(URL, timeout=HTTP_TIMEOUT_DEFAULT)
+    mock_get.assert_called_once_with(URL, timeout=HTTP_TIMEOUT_DEFAULT, stream=True)
     assert path.read_bytes() == resp._content
 
 
@@ -154,6 +156,8 @@ def test_upload_dir_stops_at_first_failure(
     (tmp_path / "b.txt").write_bytes(b"b")
     resp_fail = Response()
     resp_fail.status_code = 500
+    resp_fail._content = b""
+    resp_fail._content_consumed = True  # type: ignore[attr-defined]
     put_mock = mocker.patch("requests.put", return_value=resp_fail)
 
     http_obj = HTTPTransput(str(tmp_path), URL, Type.Directory)
