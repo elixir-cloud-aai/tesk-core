@@ -13,7 +13,7 @@ filer [-d] {inputs|outputs} DATA
 taskmaster passes `/jsoninput/JSON_INPUT.gz`, from a ConfigMap, or the JSON
 in the environment variable `JSON_INPUT`). The filer processes the entries of
 `inputs` or `outputs` one after another, and stops with exit code 1 at the
-first that fails. Without `-d`, the filer logs errors only; `-d` turns on
+first that fails. Without `-d`, the filer logs only errors; `-d` turns on
 debug logging of the filer's own messages, while the HTTP and S3 libraries
 (`urllib3`, `botocore`, `boto3`, `s3transfer`) still log only warnings and
 errors. A missing `.netrc` file is logged at debug level only. The filer's

@@ -1,4 +1,4 @@
-"""Helpers for log messages."""
+"""Helpers for log messages and the log configuration."""
 
 import json
 import logging

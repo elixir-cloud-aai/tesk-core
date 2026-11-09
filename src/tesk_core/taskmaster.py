@@ -449,6 +449,20 @@ def newParser() -> argparse.ArgumentParser:
     return parser
 
 
+def log_level(debug: bool) -> int:
+    """Get the log level of the taskmaster.
+
+    Args:
+        debug: Whether `--debug` is set.
+
+    Returns:
+        `DEBUG` with `--debug`, otherwise `INFO`, so that the reasons why
+        jobs fail or are deleted (e.g. a pod that can't start) and warnings
+        about the settings show by default.
+    """
+    return logging.DEBUG if debug else logging.INFO
+
+
 def newLogger(loglevel: int) -> logging.Logger:
     """Configure logging, with the Kubernetes client's messages left out.
 
@@ -478,11 +492,7 @@ def main() -> None:
     # `--poll-interval` is not applied: the jobs are polled every 5 seconds
     # (`poll_interval` of the module)
 
-    loglevel = logging.ERROR
-    if args.debug:
-        loglevel = logging.DEBUG
-
-    logger = newLogger(loglevel)
+    logger = newLogger(log_level(args.debug))
     logger.debug("Starting taskmaster")
 
     # Load kubernetes config file

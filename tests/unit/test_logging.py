@@ -11,7 +11,7 @@ import threading
 import pytest
 
 from tesk_core.filer import HTTPTransput, Type, logConfig
-from tesk_core.taskmaster import newLogger
+from tesk_core.taskmaster import log_level, newLogger
 from tesk_core.transput import Transput
 from tesk_core.Util import LIBRARY_LOGGERS
 
@@ -61,6 +61,29 @@ def test_taskmaster_log_level(level: int) -> None:
     assert logging.getLogger().level == level
     assert logger.getEffectiveLevel() == level
     assert logging.getLogger("tesk_core.job").getEffectiveLevel() == level
+
+
+@pytest.mark.parametrize(
+    "debug, shown, hidden",
+    [(False, ["info", "warning", "error"], ["debug"]), (True, ["debug"], [])],
+)
+def test_taskmaster_default_level(
+    debug: bool,
+    shown: list[str],
+    hidden: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test that warnings and info show without `--debug`, debug only with it."""
+    logger = logging.getLogger("tesk_core.job")
+    newLogger(log_level(debug))
+    for name in ("debug", "info", "warning", "error"):
+        getattr(logger, name)(f"message-{name}")
+
+    err = capsys.readouterr().err
+    for name in shown:
+        assert f"message-{name}" in err
+    for name in hidden:
+        assert f"message-{name}" not in err
 
 
 def test_taskmaster_log_format(capsys: pytest.CaptureFixture[str]) -> None:

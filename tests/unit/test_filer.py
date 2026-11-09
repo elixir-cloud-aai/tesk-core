@@ -1,8 +1,6 @@
 """Tests for the transfers of the filer and its helpers."""
 
-from collections.abc import Iterator
 from io import StringIO
-import logging
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,7 +16,6 @@ from tesk_core.filer import (
     copyDir,
     ftp_check_directory,
     getPath,
-    logConfig,
     newTransput,
     process_file,
     subfolders_in,
@@ -74,17 +71,6 @@ def normalize_tree(tree_str: str, abs_root: str, prefix: str) -> str:
 @patch("tesk_core.path.CONTAINER_BASE_PATH", "/transfer")
 class TestFiler:
     """Tests with the base paths set."""
-
-    @pytest.fixture(scope="class", autouse=True)
-    @classmethod
-    def log_config(cls) -> Iterator[None]:
-        """Configure the logging of the filer for the tests of the class.
-
-        Yields:
-            Nothing, while the tests run.
-        """
-        logConfig(logging.DEBUG)
-        yield
 
     @patch("tesk_core.filer.copyDir")
     @patch("tesk_core.filer.shutil.copy")

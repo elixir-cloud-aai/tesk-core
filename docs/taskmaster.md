@@ -161,7 +161,7 @@ development and debugging.
 | `-fv`, `--filer-version` | `v0.1.9` | Tag of the filer image. |
 | `-p`, `--poll-interval` | `5` | Seconds between polls of a job. |
 | `-pt`, `--pod-timeout` | `240` | Seconds after which a pending pod that can't start fails its job (see above). |
-| `-d`, `--debug` | off | Debug logging, also of the filer; without it, only errors are logged. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. The HTTP and S3 libraries log only warnings and errors, also with `--debug`. |
+| `-d`, `--debug` | off | Debug logging, also of the filer; without it, the taskmaster logs info messages, warnings and errors, the filer only errors. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. The HTTP and S3 libraries log only warnings and errors, also with `--debug`. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |
 | `--localKubeConfig` | off | Use the local kubeconfig instead of the in-cluster configuration (for running the taskmaster outside a cluster). |
 
