@@ -126,6 +126,31 @@ Also, HTTP error bodies in the filer's log are cut after 1000 characters,
 and job manifests in the taskmaster's debug log show URLs without queries
 and user info, and no FTP credentials.
 
+### Cancellation, signals and settings
+
+- A task cancelled before the taskmaster starts a job, between jobs, or
+  before the outputs filer now also deletes the task's jobs that are still
+  running, e.g. an executor that an earlier attempt of the taskmaster's pod
+  started. Jobs that ended are kept. Deleting a job on cancellation times
+  out (5 seconds to connect, 30 to answer, per attempt of the Kubernetes
+  client), a job that is already gone is no error, and other errors are
+  logged; before, they failed the taskmaster's pod and kept the PVC.
+- `-p`/`--poll-interval` is now applied (before, jobs were polled every 5
+  seconds regardless), and must be from 0.1 to 3600: other and
+  non-numeric values now stop the taskmaster at start with a usage error
+  (exit code 2). The TESK API doesn't pass it.
+- On `SIGTERM`, the taskmaster logs an error, exits with code 143 and keeps
+  the jobs; on `SIGINT`, it deletes the jobs it created, also when started
+  through the `taskmaster` command (before, only as a script).
+- The defaults of `--filer-name` and `--filer-version` are now
+  `docker.io/elixircloud/tesk-core-filer` and `latest`. The TESK API
+  passes both, so deployments are not affected.
+- An empty `EXECUTOR_BACKOFF_LIMIT` or `FILER_BACKOFF_LIMIT` (e.g. a chart
+  value left empty) now counts as unset, and an invalid one logs an error
+  and is ignored; before, both stopped the taskmaster with an error.
+
+Deployments through the TESK API need no change.
+
 ### Log levels
 
 The taskmaster's `-d`/`--debug` (the chart value `tesk.debug`) now turns on
