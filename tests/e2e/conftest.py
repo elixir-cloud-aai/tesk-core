@@ -84,7 +84,10 @@ def run_task(
 
     def start(scripts: list[str], **kwargs: Any) -> Task:
         task = Task(batch, core, scripts, **kwargs)
+        # Before the job is created, so that a create that fails after the
+        # cluster accepted it is cleaned up too
         tasks.append(task)
+        task.submit()
         return task
 
     yield start

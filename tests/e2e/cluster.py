@@ -89,7 +89,7 @@ class Task:
         env: dict[str, str] | None = None,
         resources: dict[str, Any] | None = None,
     ) -> None:
-        """Create the taskmaster job of the task.
+        """Describe the task and its taskmaster job; `submit` creates the job.
 
         Args:
             batch: The client of the batch API.
@@ -134,7 +134,7 @@ class Task:
                 {"name": "podinfo", "mountPath": "/podinfo", "readOnly": True}
             ],
         }
-        body = {
+        self.body = {
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {"name": self.name, "labels": {"job-type": "taskmaster"}},
@@ -165,7 +165,10 @@ class Task:
                 },
             },
         }
-        batch.create_namespaced_job(NAMESPACE, body)
+
+    def submit(self) -> None:
+        """Create the taskmaster job of the task."""
+        self.batch.create_namespaced_job(NAMESPACE, self.body)
 
     def job(self, suffix: str = "") -> Any:
         """Read a job of the task.
@@ -212,17 +215,44 @@ class Task:
         )
         return "Complete" if condition(self.job(), "Complete") else "Failed"
 
+    def pods(self, suffix: str = "") -> list[Any]:
+        """List the pods of a job of the task.
+
+        Args:
+            suffix: The suffix of the job's name; none for the taskmaster's job.
+
+        Returns:
+            The pods.
+        """
+        return list(
+            self.core.list_namespaced_pod(
+                NAMESPACE, label_selector=f"job-name={self.name}{suffix}"
+            ).items
+        )
+
+    def running(self, suffix: str) -> bool:
+        """Tell whether a pod of a job of the task is running.
+
+        Args:
+            suffix: The suffix of the job's name.
+
+        Returns:
+            Whether one of its pods is in the phase `Running` (`active` of the
+            job also counts pending pods).
+        """
+        return any(
+            pod.status is not None and pod.status.phase == "Running"
+            for pod in self.pods(suffix)
+        )
+
     def logs(self) -> str:
         """Read the logs of the taskmaster's pods, for errors.
 
         Returns:
             The logs.
         """
-        pods = self.core.list_namespaced_pod(
-            NAMESPACE, label_selector=f"job-name={self.name}"
-        )
         logs = []
-        for pod in pods.items:
+        for pod in self.pods():
             try:
                 logs.append(
                     self.core.read_namespaced_pod_log(pod.metadata.name, NAMESPACE)
@@ -263,25 +293,32 @@ class Task:
     def delete(self) -> None:
         """Delete the taskmaster's job, with it the task's jobs, and the PVC.
 
-        Objects that are already gone are skipped, so that a test that
-        failed leaves nothing behind and its error isn't hidden.
+        The task's jobs are owned by the taskmaster's job, so Kubernetes
+        deletes them with it. The PVC is deleted once the taskmaster's pods
+        are gone (or after `TASK_TIMEOUT` seconds), so that a taskmaster that
+        still runs can't create it afterwards. Objects that are already gone
+        (or were never created) are skipped, so that a test that failed
+        leaves nothing behind and its error isn't hidden.
         """
-        deletes = (
-            lambda: self.batch.delete_namespaced_job(
+        try:
+            self.batch.delete_namespaced_job(
                 self.name,
                 NAMESPACE,
                 body=client.V1DeleteOptions(propagation_policy="Background"),
-            ),
-            lambda: self.core.delete_namespaced_persistent_volume_claim(
+            )
+        except ApiException as ex:
+            if ex.status != 404:
+                raise
+        deadline = time.monotonic() + TASK_TIMEOUT
+        while self.pods() and time.monotonic() < deadline:
+            time.sleep(2)
+        try:
+            self.core.delete_namespaced_persistent_volume_claim(
                 self.name + "-pvc", NAMESPACE
-            ),
-        )
-        for delete in deletes:
-            try:
-                delete()
-            except ApiException as ex:
-                if ex.status != 404:
-                    raise
+            )
+        except ApiException as ex:
+            if ex.status != 404:
+                raise
 
 
 def condition(job: Any, kind: str) -> bool:
@@ -292,8 +329,7 @@ def condition(job: Any, kind: str) -> bool:
         kind: The type of the condition.
 
     Returns:
-        Whether the condition is `True`.
+        Whether the condition is `True`; False for a job without a status yet.
     """
-    return any(
-        c.type == kind and c.status == "True" for c in job.status.conditions or []
-    )
+    conditions = (job.status.conditions if job.status else None) or []
+    return any(c.type == kind and c.status == "True" for c in conditions)

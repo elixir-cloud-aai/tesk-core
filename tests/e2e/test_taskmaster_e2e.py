@@ -64,10 +64,7 @@ def test_cancel_running_task(run_task: Callable[..., Task]) -> None:
     cancelled from the label.
     """
     task = run_task(["sleep 600"])
-    task.wait(
-        lambda: (job := task.job("-ex-00")) is not None and bool(job.status.active),
-        "the executor to run",
-    )
+    task.wait(lambda: task.running("-ex-00"), "the executor to run")
 
     task.batch.patch_namespaced_job(
         task.name, NAMESPACE, {"metadata": {"labels": {"task-status": "Cancelled"}}}
