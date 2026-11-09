@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import boto3
 from moto import mock_aws
 import pytest
+from pytest_mock import MockerFixture
 
 from tesk_core.filer import process_file, url_join
 from tesk_core.path import hasWildcards, wildcardRoot
@@ -272,3 +273,19 @@ def test_pattern_without_prefix_is_taken_as_before(tmp_path: Path) -> None:
     assert process_file("outputs", filedata) == 0
     assert keys() == ["out[1].txt"]
     assert body("out[1].txt") == b"literal"
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+def test_invalid_url_fails_the_output(
+    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a URL the transfer refuses fails the output, without connecting."""
+    ftp = mocker.patch("tesk_core.filer.FTP")
+    write(tmp_path / "a.txt")
+
+    filedata = output(
+        f"{tmp_path}/*.txt", str(tmp_path), "ftp://h.example.org:99999/out"
+    )
+    assert process_file("outputs", filedata) == 1
+    ftp.return_value.connect.assert_not_called()
+    assert "Invalid host or port" in caplog.text
