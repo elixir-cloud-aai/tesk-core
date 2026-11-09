@@ -29,7 +29,7 @@ from tesk_core.job import (
     Job,
     delete_job_quietly,
 )
-from tesk_core.path import taskPath
+from tesk_core.path import hasWildcards, taskPath, wildcardRoot
 from tesk_core.pvc import PVC
 from tesk_core.Util import configure_logging
 
@@ -210,13 +210,19 @@ def dirname(iodata: dict[str, Any]) -> str:
         iodata: The input or output.
 
     Returns:
-        The directory of a file, or the directory itself.
+        The directory of a file, or the directory itself; for a path with
+        wildcards (outputs of TES 1.1), its deepest directory without
+        wildcards, below which every match is.
     """
-    if iodata["type"] == "FILE":
+    dirname: str
+    if hasWildcards(iodata["path"]):
+        dirname = wildcardRoot(iodata["path"])
+        logger.debug("dirname of pattern %s is: %s", iodata["path"], dirname)
+    elif iodata["type"] == "FILE":
         # strip filename from path
         r = "(.*)/"
         # Paths without `/` don't match and raise `AttributeError`, as before
-        dirname: str = re.match(r, iodata["path"]).group(1)  # type: ignore[union-attr]
+        dirname = re.match(r, iodata["path"]).group(1)  # type: ignore[union-attr]
         logger.debug("dirname of %sis: %s", iodata["path"], dirname)
     elif iodata["type"] == "DIRECTORY":
         dirname = iodata["path"]
