@@ -17,6 +17,15 @@ paths. The taskmaster and filer images must now be of the same version.
 service account token, and the filer image's entrypoint is the absolute
 path `/usr/bin/filer`.
 
+### Outputs can't contain symbolic links
+
+The filer used to follow symbolic links in outputs, resolving them in its
+own container. Now it fails an output whose path goes through a link, or a
+directory output with a link anywhere below it, and logs why (see
+[Filer](filer.md#symbolic-links-in-outputs)); the task fails. Executors
+that leave links in their outputs must copy the targets instead (e.g.
+`cp -L`). The outputs filer mounts the task's paths read-only.
+
 ### Tasks that can't be scheduled can time out
 
 A task whose pod the scheduler can't place, e.g. because it asks for more

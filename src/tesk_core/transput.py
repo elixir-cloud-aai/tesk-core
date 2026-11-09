@@ -7,7 +7,7 @@ import netrc
 import os
 import re
 from types import TracebackType
-from typing import Literal
+from typing import BinaryIO, Literal
 from urllib.parse import unquote_plus, urlparse, urlsplit, urlunsplit
 
 
@@ -110,6 +110,87 @@ def body_for_log(
     return text
 
 
+def symlink_in(path: str, recursive: bool = False) -> str | None:
+    """Find a symbolic link in a path, or below it.
+
+    Checks each component of the path as written (relative paths below the
+    working directory), and, if `recursive`, every file and directory below
+    it (without following links). Paths that don't exist contain no link.
+
+    Args:
+        path: The path, without `..` components: the system resolves them
+            after the links before them, so the path can't be checked
+            component by component.
+        recursive: Whether to check the entries below a directory, too.
+
+    Returns:
+        The first symbolic link found, or `None`.
+
+    Raises:
+        ValueError: The path has a `..` component.
+    """
+    parts = os.path.join(os.getcwd(), path).split(os.sep)
+    if ".." in parts:
+        raise ValueError(f"Path with '..' component: {path}")
+    current = os.sep
+    for part in parts:
+        if part in {"", "."}:
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return current
+    if recursive and os.path.isdir(path):
+        for root, dirs, files in os.walk(path, followlinks=False):
+            for name in sorted(dirs + files):
+                entry = os.path.join(root, name)
+                if os.path.islink(entry):
+                    return entry
+    return None
+
+
+def output_has_symlink(path: str, recursive: bool = False) -> bool:
+    """Check that an output is no symbolic link and contains none; log if it does.
+
+    Paths with `..` components are refused too (see `symlink_in`).
+
+    Args:
+        path: The path of the output.
+        recursive: Whether to check the entries below a directory, too.
+
+    Returns:
+        Whether a symbolic link or a `..` component was found (and logged).
+    """
+    try:
+        link = symlink_in(path, recursive)
+    except ValueError:
+        logging.error("Output %s has a '..' component: outputs can't have any", path)
+        return True
+    if link is None:
+        return False
+    logging.error(
+        "Output %s is or contains a symbolic link, %s: outputs can't contain "
+        "symbolic links",
+        path,
+        link,
+    )
+    return True
+
+
+def open_for_upload(path: str) -> BinaryIO:
+    """Open a file for reading, refusing a symbolic link.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The open file, in binary mode.
+
+    Raises:
+        OSError: The file can't be opened, or is a symbolic link.
+    """
+    return os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb")
+
+
 @enum.unique
 class Type(enum.Enum):
     """Type of an input or output of a task."""
@@ -168,8 +249,16 @@ class Transput:
         except Exception as er:
             logging.error(er)
 
-    def upload(self) -> int:
+    def upload(self, check_links: bool = True) -> int:
         """Upload the file or directory.
+
+        Outputs aren't uploaded if their path, or anything below a
+        directory, is a symbolic link: links would be resolved in the
+        filer's file system, not in the executor's.
+
+        Args:
+            check_links: Whether to check for links; the entries of a
+                directory skip it, as the check of the directory covers them.
 
         Returns:
             0 on success, otherwise 1.
@@ -180,6 +269,10 @@ class Transput:
             self.ftype,
             url_for_log(self.url),
         )
+        if check_links and output_has_symlink(
+            self.path, recursive=self.ftype == Type.Directory
+        ):
+            return 1
         if self.ftype == Type.File:
             return self.upload_file()
         if self.ftype == Type.Directory:

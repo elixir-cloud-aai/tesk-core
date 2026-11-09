@@ -11,6 +11,10 @@ if TYPE_CHECKING:
     from tesk_core.pvc import PVC
 
 
+TASK_VOLUME = "task-volume"
+"""Name of the volume of the task's claim in the filer's pod."""
+
+
 class Filer:
     """The manifest of a filer job, which stages a task's inputs or outputs.
 
@@ -231,13 +235,14 @@ class Filer:
         Args:
             pvc: The claim, with its volume mounts set.
         """
-        # Copies: the executors mount the claim's mounts at the task's paths
+        # Copies: `get_spec` changes them, and the executors mount the claim's
+        # mounts at the task's paths
         self.getVolumeMounts().extend(
             {**mount, "mountPath": path.filerPath(mount["mountPath"])}
             for mount in pvc.volume_mounts
         )
         self.getVolumes().append(
-            {"name": "task-volume", "persistentVolumeClaim": {"claimName": pvc.name}}
+            {"name": TASK_VOLUME, "persistentVolumeClaim": {"claimName": pvc.name}}
         )
 
     def add_netrc_mount(self, netrc_name: str | None = "netrc") -> None:
@@ -267,6 +272,8 @@ class Filer:
     def get_spec(self, mode: str, debug: bool = False) -> dict[str, Any]:
         """Get the manifest of the job.
 
+        The task's paths are mounted read-only for `outputs`.
+
         Args:
             mode: `inputs` or `outputs`.
             debug: Whether the filer logs debug messages.
@@ -287,6 +294,14 @@ class Filer:
 
         if debug:
             self.spec["spec"]["template"]["spec"]["containers"][0]["args"].append("-d")
+
+        # The outputs filer only reads the task's paths
+        for mount in self.getVolumeMounts():
+            if mount["name"] == TASK_VOLUME:
+                if mode == "outputs":
+                    mount["readOnly"] = True
+                else:
+                    mount.pop("readOnly", None)
 
         self.spec["spec"]["template"]["metadata"]["name"] = self.name
         return self.spec

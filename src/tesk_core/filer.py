@@ -29,7 +29,14 @@ import requests
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, filerPath, getPath
-from tesk_core.transput import Transput, Type, body_for_log, url_for_log
+from tesk_core.transput import (
+    Transput,
+    Type,
+    body_for_log,
+    open_for_upload,
+    output_has_symlink,
+    url_for_log,
+)
 from tesk_core.Util import configure_logging
 
 
@@ -190,7 +197,12 @@ class HTTPTransput(Transput):
         # for binary files and changes some text. An empty file is sent as b''
         # because requests sends an empty file object with chunked encoding,
         # which presigned upload URLs such as S3's reject.
-        with open(self.path, "rb") as file:
+        try:
+            file = open_for_upload(self.path)
+        except OSError as err:
+            logging.error("Unable to open output %s: %s", self.path, err.strerror)
+            return 1
+        with file:
             data = file if os.fstat(file.fileno()).st_size > 0 else b""
             try:
                 req = requests.put(self.url, data=data, timeout=http_timeout())
@@ -222,7 +234,7 @@ class HTTPTransput(Transput):
 
         # Stop at the first upload that fails, as for the entries of a task
         for transput in to_upload:
-            if transput.upload():
+            if transput.upload(check_links=False):
                 return 1
         return 0
 
@@ -356,8 +368,12 @@ class FileTransput(Transput):
         """Copy the files that match the path to the shared volume.
 
         Returns:
-            0: errors are raised.
+            0 on success, 1 if a match is or contains a symbolic link; other
+            errors are raised.
         """
+        # `upload` checked the pattern; this checks what it matches
+        if any(output_has_symlink(match) for match in glob(self.path)):
+            return 1
         return self.transfer(copyFile, self.path, self.urlContainerPath)
 
     def upload_dir(self) -> int:
@@ -460,7 +476,7 @@ class FTPTransput(Transput):
             with FTPTransput(
                 file_path, file_url, ftype, self.ftp_connection
             ) as transfer:
-                if transfer.upload():
+                if transfer.upload(check_links=False):
                     return 1
         return 0
 
@@ -878,9 +894,10 @@ def ftp_upload_file(
         0 on success, otherwise 1.
     """
     try:
-        with open(local_source_path, "r+b") as file:
+        with open_for_upload(local_source_path) as file:
             ftp_connection.storbinary("STOR /" + remote_destination_path, file)
-    except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
+    # `OSError`: the file can't be opened or read, or the connection failed
+    except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp, OSError):
         logging.exception(
             'Unable to upload file "%s" to "%s" as "%s"',
             local_source_path,
