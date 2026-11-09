@@ -37,6 +37,7 @@ from tesk_core.transput import (
     output_has_symlink,
     url_for_log,
 )
+from tesk_core.Util import configure_logging
 
 
 def http_join(url: str, name: str) -> str:
@@ -1117,12 +1118,7 @@ def logConfig(loglevel: int) -> None:
     Args:
         loglevel: The log level.
     """
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%m/%d/%Y %I:%M:%S",
-        level=loglevel,
-        stream=sys.stdout,
-    )
+    configure_logging(loglevel, sys.stdout)
 
 
 def main() -> int:
