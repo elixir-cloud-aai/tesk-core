@@ -168,7 +168,10 @@ class Job:
                 logging.debug("Reading existing job: %s ", self.name)
                 self.bv1.read_namespaced_job(self.name, self.namespace)
             else:
-                logging.debug(ex.body)
+                # Without the response body, which can repeat the manifest
+                logging.debug(
+                    "Can't create job '%s': %s %s", self.name, ex.status, ex.reason
+                )
                 raise ApiException(ex.status, ex.reason) from ex
         is_all_pods_running = False
         status, is_all_pods_running = self.get_status(is_all_pods_running)

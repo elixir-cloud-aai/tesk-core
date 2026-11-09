@@ -7,10 +7,15 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
+from unittest.mock import MagicMock
 
+from kubernetes.client.rest import ApiException
 import pytest
 
 from tesk_core.filer import HTTPTransput, Type, logConfig
+from tesk_core.job import Job
+from tesk_core.pvc import PVC
 from tesk_core.taskmaster import log_level, newLogger
 from tesk_core.transput import Transput
 from tesk_core.Util import LIBRARY_LOGGERS
@@ -34,6 +39,38 @@ def restore_logging() -> Iterator[None]:
     root.setLevel(level)
     for name, value in levels.items():
         logging.getLogger(name).setLevel(value)
+
+
+def test_api_error_body_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that a failed job creation logs the status, not the response body."""
+    job = Job({"metadata": {}}, "job-1", "tesk")
+    job.bv1 = MagicMock()
+    job.bv1.create_namespaced_job.side_effect = ApiException(
+        http_resp=MagicMock(status=422, reason="Unprocessable", data=b"BODYTEXT")
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(ApiException):
+        job.run_to_completion(1, lambda: False, 240)
+
+    assert "Can't create job 'job-1': 422 Unprocessable" in caplog.text
+    assert "BODYTEXT" not in caplog.text
+
+
+def test_pvc_api_error_body_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Test that a failed claim creation logs the status, not the body."""
+    pvc = PVC("pvc-1", 1, "tesk")
+    pvc.cv1 = MagicMock()
+    pvc.cv1.create_namespaced_persistent_volume_claim.side_effect = ApiException(
+        http_resp=MagicMock(status=422, reason="Unprocessable", data=b"BODYTEXT")
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(ApiException):
+        pvc.create()
+
+    assert "Can't create PVC 'pvc-1': 422 Unprocessable" in caplog.text
+    assert "BODYTEXT" not in caplog.text
 
 
 def test_job_import_configures_no_logging() -> None:
@@ -86,14 +123,15 @@ def test_taskmaster_default_level(
         assert f"message-{name}" not in err
 
 
-def test_taskmaster_log_format(capsys: pytest.CaptureFixture[str]) -> None:
+def test_taskmaster_log_format() -> None:
     """Test that taskmaster messages have a 24-hour time stamp and level."""
-    logger = newLogger(logging.DEBUG)
-    logger.debug("hello")
+    newLogger(logging.DEBUG)
+    record = logging.LogRecord("tesk_core", logging.DEBUG, "", 0, "hello", (), None)
+    record.created = time.mktime((2026, 11, 9, 21, 5, 0, 0, 0, -1))
 
-    err = capsys.readouterr().err
-    assert " DEBUG: hello" in err
-    assert err[:4].isdigit()
+    line = logging.getLogger().handlers[0].format(record)
+
+    assert line == "2026-11-09 21:05:00 DEBUG: hello"
 
 
 @pytest.mark.parametrize(
