@@ -367,8 +367,11 @@ def test_init_pvc_mounts_netrc(
 
     spec = filer.get_spec("inputs")["spec"]["template"]["spec"]
     volume = next(v for v in spec["volumes"] if v["name"] == "netrc")
-    assert volume["secret"]["secretName"] == "my-netrc"
-    assert volume["secret"]["items"] == [{"key": ".netrc", "path": ".netrc"}]
+    assert volume["secret"] == {
+        "secretName": "my-netrc",
+        "defaultMode": 0o644,
+        "items": [{"key": ".netrc", "path": ".netrc"}],
+    }
     container = spec["containers"][0]
     assert {
         "name": "netrc",
