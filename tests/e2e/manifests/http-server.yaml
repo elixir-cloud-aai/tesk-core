@@ -1,0 +1,82 @@
+# A small HTTP server in the cluster that the end-to-end tests upload outputs
+# to and download inputs from: GET returns `input <path>`, PUT logs the path
+# and the body to standard output, which the tests read from the pod's log.
+# It runs in the filer image, which has Python, so that the tests need no
+# other image
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tesk-e2e-http
+data:
+  server.py: |
+    """HTTP server of the end-to-end tests."""
+
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import sys
+
+
+    class Handler(BaseHTTPRequestHandler):
+        """Answer GET with a fixed body, log the body of PUT."""
+
+        def do_GET(self) -> None:
+            body = f"input {self.path}".encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_PUT(self) -> None:
+            if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+                body = b""
+                while True:
+                    size = int(self.rfile.readline().strip() or b"0", 16)
+                    if size == 0:
+                        self.rfile.readline()
+                        break
+                    body += self.rfile.read(size)
+                    self.rfile.readline()
+            else:
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            print(f"PUT {self.path} {body.decode(errors='replace')!r}", flush=True)
+            self.send_response(201)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+
+    ThreadingHTTPServer(("", 8080), Handler).serve_forever()
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tesk-e2e-http
+  labels:
+    app: tesk-e2e-http
+spec:
+  containers:
+    - name: http
+      image: tesk-core-filer:e2e
+      imagePullPolicy: Never
+      command: [python3, -u, /server/server.py]
+      ports:
+        - containerPort: 8080
+      readinessProbe:
+        tcpSocket:
+          port: 8080
+      volumeMounts:
+        - name: server
+          mountPath: /server
+  volumes:
+    - name: server
+      configMap:
+        name: tesk-e2e-http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tesk-e2e-http
+spec:
+  selector:
+    app: tesk-e2e-http
+  ports:
+    - port: 8080
+      targetPort: 8080

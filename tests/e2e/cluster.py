@@ -1,0 +1,281 @@
+"""Tasks run by the taskmaster in a cluster, for the end-to-end tests."""
+
+from collections.abc import Callable
+import json
+import os
+import time
+from typing import Any
+import uuid
+
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+import pytest
+
+# Namespace of the tests, with the manifests of `tests/e2e/manifests/`
+NAMESPACE = os.environ.get("TESK_E2E_NAMESPACE", "default")
+# Images loaded into the cluster's nodes; the filer image also runs the
+# executors and the HTTP server, so that the tests pull no other image
+TASKMASTER_IMAGE = os.environ.get(
+    "TESK_E2E_TASKMASTER_IMAGE", "tesk-core-taskmaster:e2e"
+)
+FILER_IMAGE = os.environ.get("TESK_E2E_FILER_IMAGE", "tesk-core-filer:e2e")
+SERVICE_ACCOUNT = "tesk-e2e-taskmaster"
+HTTP_URL = f"http://tesk-e2e-http.{NAMESPACE}.svc.cluster.local:8080"
+HTTP_POD = "tesk-e2e-http"
+# Seconds to wait for a task
+TASK_TIMEOUT = 300
+
+
+def executor(task_name: str, index: int, script: str, **resources: Any) -> Any:
+    """Describe an executor job, as the TESK API converts it.
+
+    Args:
+        task_name: Name of the task (of its taskmaster job).
+        index: Number of the executor.
+        script: Shell script that the executor runs.
+        **resources: The container's resources (e.g. `requests`).
+
+    Returns:
+        The job's manifest.
+    """
+    name = f"{task_name}-ex-{index:02d}"
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": name,
+            "labels": {
+                "job-type": "executor",
+                "taskmaster-name": task_name,
+                "executor-no": str(index),
+            },
+        },
+        "spec": {
+            "template": {
+                "metadata": {"name": name},
+                "spec": {
+                    "containers": [
+                        {
+                            "name": name,
+                            "image": FILER_IMAGE,
+                            "imagePullPolicy": "Never",
+                            "command": ["sh", "-c", script],
+                            "resources": resources,
+                            # Writes to the task's volume, whose directories
+                            # the filer (or the kubelet) created
+                            "securityContext": {"runAsUser": 0},
+                        }
+                    ],
+                    "restartPolicy": "Never",
+                },
+            }
+        },
+    }
+
+
+class Task:
+    """A task run by a taskmaster job in the cluster."""
+
+    def __init__(
+        self,
+        batch: client.BatchV1Api,
+        core: client.CoreV1Api,
+        scripts: list[str],
+        *,
+        inputs: list[dict[str, Any]] | None = None,
+        outputs: list[dict[str, Any]] | None = None,
+        env: dict[str, str] | None = None,
+        resources: dict[str, Any] | None = None,
+    ) -> None:
+        """Create the taskmaster job of the task.
+
+        Args:
+            batch: The client of the batch API.
+            core: The client of the core API.
+            scripts: The shell script of each executor.
+            inputs: The task's inputs.
+            outputs: The task's outputs.
+            env: The taskmaster's environment, as the TESK API passes it.
+            resources: The resources of each executor's container.
+        """
+        self.batch = batch
+        self.core = core
+        self.name = f"task-{uuid.uuid4().hex[:8]}"
+        self.data = {
+            "executors": [
+                executor(self.name, index, script, **(resources or {}))
+                for index, script in enumerate(scripts)
+            ],
+            "inputs": inputs or [],
+            "outputs": outputs or [],
+            "volumes": [],
+            "resources": {"disk_gb": 0.1},
+        }
+        container = {
+            "name": "taskmaster",
+            "image": TASKMASTER_IMAGE,
+            "imagePullPolicy": "Never",
+            "args": [
+                json.dumps(self.data),
+                "-n",
+                NAMESPACE,
+                "-fn",
+                FILER_IMAGE.rsplit(":", 1)[0],
+                "-fv",
+                FILER_IMAGE.rsplit(":", 1)[1],
+                "-pt",
+                "120",
+                "-d",
+            ],
+            "env": [{"name": k, "value": v} for k, v in (env or {}).items()],
+            "volumeMounts": [
+                {"name": "podinfo", "mountPath": "/podinfo", "readOnly": True}
+            ],
+        }
+        body = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {"name": self.name, "labels": {"job-type": "taskmaster"}},
+            "spec": {
+                "backoffLimit": 0,
+                "template": {
+                    "metadata": {"labels": {"job-type": "taskmaster"}},
+                    "spec": {
+                        "serviceAccountName": SERVICE_ACCOUNT,
+                        "restartPolicy": "Never",
+                        "containers": [container],
+                        "volumes": [
+                            {
+                                "name": "podinfo",
+                                "downwardAPI": {
+                                    "items": [
+                                        {
+                                            "path": "labels",
+                                            "fieldRef": {
+                                                "fieldPath": "metadata.labels"
+                                            },
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+        batch.create_namespaced_job(NAMESPACE, body)
+
+    def job(self, suffix: str = "") -> Any:
+        """Read a job of the task.
+
+        Args:
+            suffix: The suffix of the job's name, e.g. `-ex-00`; none for the
+                taskmaster's job.
+
+        Returns:
+            The job, or None if it doesn't exist.
+        """
+        try:
+            return self.batch.read_namespaced_job(self.name + suffix, NAMESPACE)
+        except ApiException as ex:
+            if ex.status == 404:
+                return None
+            raise
+
+    def wait(self, condition: Callable[[], bool], what: str) -> None:
+        """Wait until a condition holds, at most `TASK_TIMEOUT` seconds.
+
+        Args:
+            condition: The condition.
+            what: What is waited for, for the error.
+        """
+        deadline = time.monotonic() + TASK_TIMEOUT
+        while not condition():
+            if time.monotonic() > deadline:
+                pytest.fail(f"Timed out waiting for {what}: {self.logs()}")
+            time.sleep(2)
+
+    def wait_finished(self) -> str:
+        """Wait until the taskmaster's job has ended.
+
+        Returns:
+            The condition that ended it: `Complete` or `Failed`.
+        """
+        result: list[str] = []
+
+        def finished() -> bool:
+            conditions = (self.job().status.conditions) or []
+            result.extend(
+                c.type
+                for c in conditions
+                if c.status == "True" and c.type in ("Complete", "Failed")
+            )
+            return bool(result)
+
+        self.wait(finished, f"taskmaster job {self.name}")
+        return result[0]
+
+    def logs(self) -> str:
+        """Read the logs of the taskmaster's pods, for errors.
+
+        Returns:
+            The logs.
+        """
+        pods = self.core.list_namespaced_pod(
+            NAMESPACE, label_selector=f"job-name={self.name}"
+        )
+        return "\n".join(
+            self.core.read_namespaced_pod_log(pod.metadata.name, NAMESPACE)
+            for pod in pods.items
+        )
+
+    def gone(self, suffix: str) -> bool:
+        """Tell whether a job of the task is deleted, or being deleted.
+
+        Args:
+            suffix: The suffix of the job's name.
+
+        Returns:
+            Whether it is gone.
+        """
+        job = self.job(suffix)
+        return job is None or job.metadata.deletion_timestamp is not None
+
+    def pvc_gone(self) -> bool:
+        """Tell whether the task's PVC is deleted, or being deleted.
+
+        Returns:
+            Whether it is gone.
+        """
+        try:
+            pvc = self.core.read_namespaced_persistent_volume_claim(
+                self.name + "-pvc", NAMESPACE
+            )
+        except ApiException as ex:
+            if ex.status == 404:
+                return True
+            raise
+        return pvc.metadata.deletion_timestamp is not None
+
+    def delete(self) -> None:
+        """Delete the taskmaster's job, and with it the task's jobs."""
+        self.batch.delete_namespaced_job(
+            self.name,
+            NAMESPACE,
+            body=client.V1DeleteOptions(propagation_policy="Background"),
+        )
+
+
+def condition(job: Any, kind: str) -> bool:
+    """Tell whether a job has a condition.
+
+    Args:
+        job: The job.
+        kind: The type of the condition.
+
+    Returns:
+        Whether the condition is `True`.
+    """
+    return any(
+        c.type == kind and c.status == "True" for c in job.status.conditions or []
+    )
