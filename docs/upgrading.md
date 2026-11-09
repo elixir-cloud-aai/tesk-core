@@ -137,6 +137,47 @@ Also, HTTP error bodies in the filer's log are cut after 1000 characters,
 and job manifests in the taskmaster's debug log show URLs without queries
 and user info, and no FTP credentials.
 
+### Cancellation, signals and settings
+
+- A task cancelled before the taskmaster starts a job, between jobs, or
+  before the outputs filer now also deletes the task's jobs that are still
+  running, e.g. an executor that an earlier attempt of the taskmaster's pod
+  started. Jobs that ended are kept. Deleting a job on cancellation times
+  out (5 seconds to connect, 30 to answer, per attempt of the Kubernetes
+  client), a job that is already gone is no error, and other errors are
+  logged; before, they failed the taskmaster's pod and kept the PVC.
+- `-p`/`--poll-interval` is now applied (before, jobs were polled every 5
+  seconds regardless), and must be from 0.1 to 3600: other and
+  non-numeric values now stop the taskmaster at start with a usage error
+  (exit code 2). The TESK API doesn't pass it.
+- On `SIGTERM`, the taskmaster logs an error, exits with code 143 and keeps
+  the jobs; on `SIGINT`, it deletes the jobs it created, also when started
+  through the `taskmaster` command (before, only as a script).
+- The defaults of `--filer-name` and `--filer-version` are now
+  `docker.io/elixircloud/tesk-core-filer` and `latest`. The TESK API
+  passes both, so deployments are not affected.
+- An empty `EXECUTOR_BACKOFF_LIMIT` or `FILER_BACKOFF_LIMIT` (e.g. a chart
+  value left empty) now counts as unset, and an invalid one logs an error
+  and is ignored; before, both stopped the taskmaster with an error.
+
+Deployments through the TESK API need no change.
+
+### Log levels
+
+The taskmaster's `-d`/`--debug` (the chart value `tesk.debug`) now turns on
+debug logging; before, it had no effect. Without it, the taskmaster logs
+info messages, warnings and errors, as before. Its log lines, which were
+the bare message, now start with a time stamp and the level (e.g.
+`2026-11-09 21:05:00 INFO: ...`). The filer's time stamps now use the
+24-hour clock (`2026-11-09 21:05:00` instead of `11/09/2026 09:05:00`).
+Log parsers that match the start of the line may need to change.
+
+With `-d`, the HTTP and S3 libraries (`urllib3`, `botocore`, `boto3`,
+`s3transfer`) still log only warnings and errors, so that the debug log
+shows the filer's own messages, which leave out URL queries and user info.
+A missing `.netrc` file, the default, is no longer logged as an error for
+every input and output. Nothing to change.
+
 ### FTP URLs with a port
 
 The filer now connects to FTP URLs with a port (e.g.
