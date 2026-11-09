@@ -24,6 +24,19 @@ Each entry has a `path` in the container, a `type` (`FILE` or `DIRECTORY`)
 and a `url`; an input can have `content` instead of a `url`, which the filer
 writes to `path`. The scheme of the URL selects the protocol.
 
+## Symbolic links in outputs
+
+Outputs can't be or contain symbolic links. The filer fails an output, with
+an error that names the link, if any component of its path is a link (e.g.
+`/data/out` for the output `/data/out/result.txt`), or, for a directory, if
+any file or directory below it is one. Output paths with `..` components
+fail in the same way. For `file:` outputs with a glob, a link in any match
+fails the whole output. Links are not followed, as the filer would resolve
+them in its own container rather than the executor's; nothing of such an
+output is uploaded. Executors that create links in
+their outputs should copy the files they point to instead (e.g. `cp -L`).
+The outputs filer mounts the task's paths read-only.
+
 ## Protocols
 
 | Scheme | Inputs | Outputs |
