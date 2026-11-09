@@ -47,6 +47,9 @@ The tests use pytest and are split by level:
 - `tests/integration/`: the FTP and HTTP transfers of the filer against
   local servers (`pytest-localftpserver` and a local HTTP server), started
   by the tests.
+- `tests/e2e/`: tasks run by the taskmaster's and the filer's images on a
+  Kubernetes cluster (see [End-to-end tests](#end-to-end-tests)); skipped
+  unless `TESK_E2E` is set.
 
 With uv, which creates `.venv` with the locked versions:
 
@@ -73,6 +76,45 @@ them on every commit with `uv run pre-commit install`, or once:
 uv run pre-commit run --all-files
 ```
 
+### End-to-end tests
+
+The end-to-end tests run tasks as the TESK API does: one taskmaster job per
+task, with the task's JSON and its pod's labels, in a namespace with the
+taskmaster's service account and role (the rules of TESK's Helm chart) and
+a small HTTP server for inputs and outputs (`tests/e2e/manifests/`). They
+check the resulting jobs, PVCs and uploads: a task with inputs and outputs,
+a failing executor, a cancelled task, and a task that can't be scheduled
+(`TESK_MAX_QUEUE_SECONDS`). The images run with `imagePullPolicy: Never`,
+and the filer image also runs the executors and the HTTP server, so no
+other image is pulled. The unit tests in `tests/unit/test_manifests.py`
+check the manifests against the Kubernetes client's models without a
+cluster.
+
+With [kind](https://kind.sigs.k8s.io/) and Docker, from the root of the
+repository (a separate kubeconfig, outside the repository and so outside
+the images' build context, leaves your own untouched; the tests use its
+current context, which `kind create cluster` sets):
+
+```bash
+export KUBECONFIG="$HOME/.kube/kind-tesk-core-e2e"
+kind create cluster --name tesk-core-e2e
+docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:e2e .
+docker build --file containers/filer.Dockerfile --tag tesk-core-filer:e2e .
+kind load docker-image tesk-core-taskmaster:e2e tesk-core-filer:e2e --name tesk-core-e2e
+kubectl apply -f tests/e2e/manifests/
+kubectl wait --for=condition=Ready pod/tesk-e2e-http --timeout=120s
+TESK_E2E=1 uv run pytest tests/e2e
+kind delete cluster --name tesk-core-e2e
+rm "$KUBECONFIG"
+```
+
+The tests use the namespace `default`; for another one, apply the manifests
+and wait for the server with `-n <namespace>`, and set
+`TESK_E2E_NAMESPACE`. The image
+names are fixed (`tests/e2e/cluster.py`). The role in
+`tests/e2e/manifests/rbac.yaml` grants what the role of TESK's chart
+grants: update both together.
+
 ## Continuous integration
 
 The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
@@ -83,6 +125,7 @@ The workflow `CI` (`.github/workflows/ci.yml`) checks every pull request to
 | `PR title` | The title follows Conventional Commits, at most 50 characters (squash merges use it as the commit message). |
 | `Lint` | The hooks of `.pre-commit-config.yaml` (ruff, mypy, actionlint, gitleaks, file checks), the lock file (`uv lock --check`), and the citation metadata (`CITATION.cff`, cffconvert). |
 | `Test (Python …)` | The tests on Python 3.10 to 3.13, with coverage to Codecov. |
+| `End-to-end test` | The end-to-end tests on a kind cluster, with both images built from the commit (see [End-to-end tests](#end-to-end-tests)). |
 | `Docs` | These docs, built strictly. |
 | `Scan image (…)` | Trivy scan of the taskmaster and filer images: fails on critical and high vulnerabilities that have a fix. Accepted findings are listed in `.trivyignore.yaml`, with a reason and an expiry date. |
 | `CI passed` | The gate: the only required check. |
