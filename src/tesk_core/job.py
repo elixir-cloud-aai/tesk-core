@@ -12,8 +12,6 @@ from urllib3.exceptions import HTTPError
 
 from tesk_core.Util import pprint
 
-logging.basicConfig(format="%(message)s", level=logging.INFO)
-
 # Job conditions that end a job, when their status is "True"
 JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
@@ -170,7 +168,10 @@ class Job:
                 logging.debug("Reading existing job: %s ", self.name)
                 self.bv1.read_namespaced_job(self.name, self.namespace)
             else:
-                logging.debug(ex.body)
+                # Without the response body, which can repeat the manifest
+                logging.debug(
+                    "Can't create job '%s': %s %s", self.name, ex.status, ex.reason
+                )
                 raise ApiException(ex.status, ex.reason) from ex
         is_all_pods_running = False
         status, is_all_pods_running = self.get_status(is_all_pods_running)

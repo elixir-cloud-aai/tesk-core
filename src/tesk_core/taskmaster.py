@@ -22,6 +22,7 @@ from urllib3.exceptions import HTTPError
 from tesk_core.filer_class import Filer
 from tesk_core.job import Job
 from tesk_core.pvc import PVC
+from tesk_core.Util import configure_logging
 
 created_jobs: list[Job] = []
 created_pvc: PVC | None = None
@@ -448,6 +449,20 @@ def newParser() -> argparse.ArgumentParser:
     return parser
 
 
+def log_level(debug: bool) -> int:
+    """Get the log level of the taskmaster.
+
+    Args:
+        debug: Whether `--debug` is set.
+
+    Returns:
+        `DEBUG` with `--debug`, otherwise `INFO`, so that the reasons why
+        jobs fail or are deleted (e.g. a pod that can't start) and warnings
+        about the settings show by default.
+    """
+    return logging.DEBUG if debug else logging.INFO
+
+
 def newLogger(loglevel: int) -> logging.Logger:
     """Configure logging, with the Kubernetes client's messages left out.
 
@@ -457,11 +472,7 @@ def newLogger(loglevel: int) -> logging.Logger:
     Returns:
         The logger of the taskmaster.
     """
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%m/%d/%Y %I:%M:%S",
-        level=loglevel,
-    )
+    configure_logging(loglevel)
     logging.getLogger("kubernetes.client").setLevel(logging.CRITICAL)
     logger = logging.getLogger(__name__)
 
@@ -481,11 +492,7 @@ def main() -> None:
     # `--poll-interval` is not applied: the jobs are polled every 5 seconds
     # (`poll_interval` of the module)
 
-    loglevel = logging.ERROR
-    if args.debug:
-        loglevel = logging.DEBUG
-
-    logger = newLogger(loglevel)
+    logger = newLogger(log_level(args.debug))
     logger.debug("Starting taskmaster")
 
     # Load kubernetes config file

@@ -126,6 +126,22 @@ Also, HTTP error bodies in the filer's log are cut after 1000 characters,
 and job manifests in the taskmaster's debug log show URLs without queries
 and user info, and no FTP credentials.
 
+### Log levels
+
+The taskmaster's `-d`/`--debug` (the chart value `tesk.debug`) now turns on
+debug logging; before, it had no effect. Without it, the taskmaster logs
+info messages, warnings and errors, as before. Its log lines, which were
+the bare message, now start with a time stamp and the level (e.g.
+`2026-11-09 21:05:00 INFO: ...`). The filer's time stamps now use the
+24-hour clock (`2026-11-09 21:05:00` instead of `11/09/2026 09:05:00`).
+Log parsers that match the start of the line may need to change.
+
+With `-d`, the HTTP and S3 libraries (`urllib3`, `botocore`, `boto3`,
+`s3transfer`) still log only warnings and errors, so that the debug log
+shows the filer's own messages, which leave out URL queries and user info.
+A missing `.netrc` file, the default, is no longer logged as an error for
+every input and output. Nothing to change.
+
 ### FTP URLs with a port
 
 The filer now connects to FTP URLs with a port (e.g.
