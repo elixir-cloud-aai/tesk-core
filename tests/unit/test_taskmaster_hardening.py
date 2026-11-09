@@ -169,7 +169,7 @@ def test_stop_task_jobs_errors(
     assert module_state.delete_namespaced_job.call_count == 4
     assert "Can't read job 'task-1-inputs-filer'" in caplog.text
     assert "Can't delete job 'task-1-inputs-filer'" in caplog.text
-    assert "Can't delete job 'task-1-ex-00' (500)" in caplog.text
+    assert "Can't delete job 'task-1-ex-00' (500 Server Error)" in caplog.text
 
 
 @patch("tesk_core.taskmaster.stop_task_jobs")

@@ -472,6 +472,7 @@ def _quietly(name: str, delete: Callable[[], None]) -> None:
         if ex.status == 404:
             logging.debug("Job '%s' is already gone", name)
             return
-        logging.error("Can't delete job '%s' (%s)", name, ex.status)
+        reason = " ".join(str(part) for part in (ex.status, ex.reason) if part)
+        logging.error("Can't delete job '%s' (%s)", name, reason)
     except HTTPError as ex:
         logging.error("Can't delete job '%s' (%s)", name, ex)
