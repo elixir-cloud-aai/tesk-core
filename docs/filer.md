@@ -133,10 +133,11 @@ aws_access_key_id = <key id>
 aws_secret_access_key = <secret>
 ```
 
-Directory inputs download every object below the URL's key prefix, keeping
-the paths below it. Objects whose local path would not be below the input's
-directory (e.g. keys with `..` segments) are skipped with a warning; keys
-that end with `/` (folder markers) create their directory.
+Directory inputs download every object below the URL's key prefix (all
+pages of the listing, also beyond 1000 objects), keeping the paths below
+it. Objects whose local path would not be below the input's directory (e.g.
+keys with `..` segments) are skipped with a warning; keys that end with `/`
+(folder markers) create their directory.
 
 The bucket must exist. Outputs are uploaded with a `Content-Type` guessed
 from the file name. Checksums are calculated and validated only where the
@@ -172,9 +173,10 @@ TESK documentation).
 Directories are copied recursively. A directory copied to one that exists
 is merged into it: subdirectories that exist on both sides are merged, and
 files that exist on both sides replaced. Directories that exist keep their
-own mode and times. Links in the existing directory are replaced by the
-copied file or directory, not followed. A file that meets a directory of
-its name fails the copy.
+own mode (their metadata isn't copied). Links in the existing directory,
+and the destination itself if it is a link, are replaced by the copied file
+or directory, not followed. A file that meets a directory of its name fails
+the copy.
 
 ## Credentials from `.netrc`
 

@@ -109,6 +109,23 @@ def test_copyDir_replaces_links(tmp_path: Path) -> None:
     assert (elsewhere / "x.txt").read_text() == "old"
 
 
+def test_copyDir_replaces_a_linked_destination(tmp_path: Path) -> None:
+    """Test that a destination that is a link is replaced, not merged into."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "f.txt").write_text("f")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    dst = tmp_path / "dst"
+    dst.symlink_to(elsewhere)
+
+    copyDir(str(src), str(dst))
+
+    assert not dst.is_symlink()
+    assert (dst / "f.txt").read_text() == "f"
+    assert list(elsewhere.iterdir()) == []
+
+
 def test_copyDir_file_over_directory(tmp_path: Path) -> None:
     """Test that a file doesn't land inside a directory of its name."""
     src = tmp_path / "src"

@@ -10,7 +10,12 @@ import pytest
 from pytest_mock import MockerFixture
 import requests
 
-from tesk_core.filer import HTTP_CHUNK_SIZE, HTTPTransput, error_body
+from tesk_core.filer import (
+    ERROR_BODY_BYTES,
+    HTTP_CHUNK_SIZE,
+    HTTPTransput,
+    error_body,
+)
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.transput import BODY_LOG_LIMIT, Type, within
 
@@ -22,6 +27,7 @@ KEYS = {
     "in/../../escape.txt": b"x",
     "in/sub/../../../escape2.txt": b"x",
     "in/../../escapedir/": b"",
+    "in/../detour/../dir/back/c.txt": b"c",
 }
 
 
@@ -56,6 +62,24 @@ def test_s3_download_dir_keeps_objects_below(
     assert "Skipping object 'in/../../escape.txt'" in caplog.text
     assert "Skipping object 'in/sub/../../../escape2.txt'" in caplog.text
     assert "Skipping object 'in/../../escapedir/'" in caplog.text
+    # A detour through `..` segments creates no directories on the way
+    assert (target / "back" / "c.txt").read_bytes() == b"c"
+    assert not (tmp_path / "work" / "detour").exists()
+
+
+def test_s3_download_dir_reads_all_pages(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Test that objects of every page of the listing are downloaded."""
+    client = mocker.patch("boto3.client").return_value
+    client.get_paginator.return_value.paginate.return_value = [
+        {"Contents": [{"Key": "in/a.txt"}]},
+        {"Contents": [{"Key": "in/b.txt"}]},
+        {},
+    ]
+    transfer = S3Transput(str(tmp_path / "dir"), "s3://tesk/in", Type.Directory)
+    get = mocker.patch.object(transfer, "get_s3_file", return_value=0)
+    assert transfer.download_dir() == 0
+    client.get_paginator.assert_called_once_with("list_objects_v2")
+    assert [call.args[1] for call in get.call_args_list] == ["in/a.txt", "in/b.txt"]
 
 
 @pytest.mark.usefixtures("bucket")
@@ -192,11 +216,24 @@ def test_http_download_open_error_keeps_file(
 
 def test_error_body_reads_only_the_start() -> None:
     """Test that only the start of a large error body is read."""
-    big = b"x" * (4 * BODY_LOG_LIMIT)
+    big = b"x" * ERROR_BODY_BYTES
     response = streamed([big, big, b"never"], status=500)
     assert error_body(response) == big.decode()
-    response.iter_content.assert_called_once_with(chunk_size=4 * BODY_LOG_LIMIT)
+    response.iter_content.assert_called_once_with(chunk_size=ERROR_BODY_BYTES)
     assert list(response.iter_content.return_value) == [big, b"never"]
+    assert ERROR_BODY_BYTES > 4 * BODY_LOG_LIMIT
+
+
+def test_http_error_body_redacts_values_at_the_cut(
+    mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a value that the log's cut splits is still redacted."""
+    secret = "s" * 200
+    url = f"https://example.org/in?sig={secret}"
+    body = "😀" * (BODY_LOG_LIMIT - 10) + secret
+    mocker.patch("requests.get", return_value=streamed([body.encode()], status=403))
+    assert HTTPTransput(str(tmp_path / "in"), url, Type.File).download() == 1
+    assert "s" * 4 not in caplog.text
 
 
 def test_error_body_decoding() -> None:

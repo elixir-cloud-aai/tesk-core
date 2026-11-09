@@ -31,14 +31,7 @@ import requests
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
 from tesk_core.path import containerPath, fileEnabled, getPath
-from tesk_core.transput import (
-    BODY_LOG_LIMIT,
-    Transput,
-    Type,
-    body_for_log,
-    url_for_log,
-    within,
-)
+from tesk_core.transput import Transput, Type, body_for_log, url_for_log, within
 
 
 def http_join(url: str, name: str) -> str:
@@ -69,6 +62,8 @@ HTTP_TIMEOUT_DEFAULT = 300.0
 HTTP_TIMEOUT_MAX = 1_000_000.0
 # Bytes of an HTTP(S) download held in memory at a time
 HTTP_CHUNK_SIZE = 1024 * 1024
+# Bytes of the body of an HTTP(S) error response read for the log
+ERROR_BODY_BYTES = 64 * 1024
 
 
 @functools.cache
@@ -129,8 +124,10 @@ def netrc_secrets(url: str) -> list[str]:
 def error_body(req: requests.Response) -> str:
     """Read the start of the body of an error response, for log messages.
 
-    Reads at most 4 bytes per character that `body_for_log` keeps, so that
-    a large error body of a streamed response isn't read into memory whole.
+    Reads at most `ERROR_BODY_BYTES`, so that a large error body of a
+    streamed response isn't read into memory whole. That is far more than
+    the characters that `body_for_log` keeps (at most 4 bytes each), so
+    that it can redact values that start among them and end after them.
 
     Args:
         req: The response.
@@ -139,7 +136,7 @@ def error_body(req: requests.Response) -> str:
         The start of the body, decoded with the response's encoding (UTF-8
         if it has none or an unknown one), with undecodable bytes replaced.
     """
-    limit = 4 * BODY_LOG_LIMIT
+    limit = ERROR_BODY_BYTES
     data = b""
     for chunk in req.iter_content(chunk_size=limit):
         data += chunk
@@ -301,9 +298,10 @@ def copyDir(src: str, dst: str) -> None:
     """Copy a directory, also into an existing one.
 
     Directories that don't exist yet are copied whole (`shutil.copytree`);
-    existing ones are merged, entry by entry, and keep their own mode and
-    times (e.g., of a mount point the filer doesn't own); existing files
-    are replaced. Links inside the destination are replaced, not followed.
+    existing ones are merged, entry by entry, and keep their own mode
+    (e.g., of a mount point the filer doesn't own); existing files are
+    replaced. Links in the destination, and `dst` if it is one, are
+    replaced, not followed.
 
     Args:
         src: The source directory.
@@ -313,15 +311,19 @@ def copyDir(src: str, dst: str) -> None:
         IsADirectoryError: If a file of the source meets a directory of the
             same name in the destination.
     """
+    if os.path.islink(dst):
+        os.unlink(dst)
     if not os.path.isdir(dst):
         shutil.copytree(src, dst)
         return
     for entry in os.scandir(src):
         target = os.path.join(dst, entry.name)
-        if os.path.islink(target):
-            os.unlink(target)
         if entry.is_dir():
+            # Replaces a link at `target`, as for `dst`
             copyDir(entry.path, target)
+        elif os.path.islink(target):
+            os.unlink(target)
+            shutil.copy2(entry.path, target)
         elif os.path.isdir(target):
             raise IsADirectoryError(errno.EISDIR, "Is a directory", target)
         else:

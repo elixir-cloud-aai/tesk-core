@@ -55,11 +55,12 @@ Nothing to change:
   [HTTP(S)](filer.md#https)).
 - S3 directory inputs skip, with a warning, objects whose keys would place
   them outside the input's directory (e.g. with `..` segments), and create
-  the directories of folder markers (keys that end with `/`) (see
-  [S3](filer.md#s3)).
+  the directories of folder markers (keys that end with `/`). They also
+  download objects beyond the first 1000 of the listing, which were
+  missing before (see [S3](filer.md#s3)).
 - `file:` directories copied into existing ones now merge subdirectories
   that exist on both sides at any depth, instead of failing; directories
-  that exist keep their mode and times (see
+  that exist keep their mode, and links in them are replaced (see
   [Shared volume](filer.md#shared-volume-file)).
 
 ### Filers run only when they have something to stage
