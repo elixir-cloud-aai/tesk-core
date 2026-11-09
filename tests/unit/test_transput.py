@@ -58,6 +58,19 @@ def test_invalid_netrc_is_an_error(
     assert "NetrcParseError" in caplog.text
 
 
+def test_netrc_without_home(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that the `.netrc` is looked for in `/` if `HOME` is unset."""
+    monkeypatch.delenv("HOME", raising=False)
+
+    with caplog.at_level(logging.DEBUG):
+        transput = Transput("/tmp/a", "https://example.org/a", Type.File)
+
+    assert transput.netrc_file is None
+    assert "No .netrc at /.netrc" in caplog.text
+
+
 def test_pvc_storage_class(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that `STORAGE_CLASS_NAME` sets the claim's storage class."""
     monkeypatch.setenv("STORAGE_CLASS_NAME", "fast")
