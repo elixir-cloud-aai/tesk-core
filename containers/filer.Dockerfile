@@ -53,8 +53,11 @@ RUN --mount=from=builder,source=/tmp,target=/tmp/build \
     -r /tmp/build/requirements.txt \
   && uv pip install --system --break-system-packages --offline --no-index \
     --no-deps --compile-bytecode /tmp/build/dist/*.whl \
-  && uv pip check --system
+  && uv pip check --system \
+  && test -x /usr/bin/filer
 
 USER 100
 
-ENTRYPOINT ["filer"]
+# Absolute, so that it doesn't depend on `PATH` and the directories on it;
+# the build fails above if the script is elsewhere
+ENTRYPOINT ["/usr/bin/filer"]

@@ -7,6 +7,7 @@
 
 from pathlib import Path
 import stat
+from unittest.mock import patch
 
 import pytest
 from pytest_mock import MockerFixture
@@ -44,6 +45,8 @@ def test_process_file_with_scheme(mocker: MockerFixture) -> None:
     mock_new_Trans.assert_called_once_with("http", "www.foo.bar")
 
 
+# Task paths as in the filer (test_filer_paths.py tests the prefix)
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
 def test_process_file_from_content(tmp_path: Path) -> None:
     """Test that 'process_file' draws the contents from the content field."""
     filedata = {

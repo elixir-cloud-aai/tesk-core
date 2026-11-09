@@ -1,11 +1,13 @@
-"""Paths of the shared volume for `file:` URLs.
+"""Paths of the filer: the task's paths, and the shared volume for `file:` URLs.
 
-The shared volume is mounted at `CONTAINER_BASE_PATH` in the filer, and is
-the path `HOST_BASE_PATH` for the URLs of tasks.
+The task's paths are mounted below `TASK_PATH_PREFIX` in the filer. The
+shared volume is mounted at `CONTAINER_BASE_PATH` in the filer, and is the
+path `HOST_BASE_PATH` for the URLs of tasks.
 """
 
 import os
 from os.path import relpath
+import posixpath
 from urllib.parse import urlparse
 
 from tesk_core.exception import InvalidHostPath
@@ -43,6 +45,71 @@ def getPathEnv(varName: str) -> str | None:
 HOST_BASE_PATH = getPathEnv("HOST_BASE_PATH")
 CONTAINER_BASE_PATH = getPathEnv("CONTAINER_BASE_PATH")
 TRANSFER_PVC_NAME = getEnv("TRANSFER_PVC_NAME")
+
+TASK_PATH_PREFIX = "/tesk/task"
+"""Directory below which the filer mounts the task's paths.
+
+The task's paths are mounted there in the filer's pod only, so that they
+can't overlay the filer's own files and configuration; the executors mount
+them at the task's paths.
+"""
+
+
+def taskPath(path: str) -> str:
+    """Normalize a path of the task, as an absolute path.
+
+    Resolves `..` segments (as far as the root) and `.` segments, and drops
+    repeated and trailing slashes; glob characters are kept. Two spellings
+    of a directory (e.g., `/out/` and `/out`) give the same path. An empty
+    path stays empty.
+
+    Args:
+        path: The path, as in the task (e.g., `/data/../out/`).
+
+    Returns:
+        The normalized path (e.g., `/out`).
+    """
+    if not path:
+        return path
+    return "/" + posixpath.normpath("/" + path).lstrip("/")
+
+
+def filerPath(path: str) -> str:
+    """Translate a path of the task to the path in the filer.
+
+    The path is normalized first (see `taskPath`), so that it stays below
+    `TASK_PATH_PREFIX`.
+
+    Args:
+        path: The path, as in the task (e.g., `/data/in.txt`).
+
+    Returns:
+        The path below `TASK_PATH_PREFIX` (e.g., `/tesk/task/data/in.txt`);
+        an empty path stays empty, as for the executors (e.g., the directory
+        of a file directly below `/`, which Kubernetes refuses as a mount
+        path in both pods).
+    """
+    if not path:
+        return path
+    relative = taskPath(path).lstrip("/")
+    return posixpath.join(TASK_PATH_PREFIX, relative) if relative else TASK_PATH_PREFIX
+
+
+def checkBasePaths() -> None:
+    """Check that the shared volume's path and the task paths' don't overlap.
+
+    Raises:
+        ValueError: `CONTAINER_BASE_PATH` is inside or contains
+            `TASK_PATH_PREFIX`.
+    """
+    base = CONTAINER_BASE_PATH
+    if base is not None and (
+        isDescendant(base, TASK_PATH_PREFIX) or isDescendant(TASK_PATH_PREFIX, base)
+    ):
+        raise ValueError(
+            f"CONTAINER_BASE_PATH ({base}) must be outside {TASK_PATH_PREFIX}, "
+            "where the filer mounts the task's paths, and not contain it"
+        )
 
 
 def fileEnabled() -> bool:
