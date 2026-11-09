@@ -136,7 +136,7 @@ and user info, and no FTP credentials.
   client), a job that is already gone is no error, and other errors are
   logged; before, they failed the taskmaster's pod and kept the PVC.
 - `-p`/`--poll-interval` is now applied (before, jobs were polled every 5
-  seconds regardless), and must be a positive number: `0`, negative and
+  seconds regardless), and must be from 0.1 to 3600: other and
   non-numeric values now stop the taskmaster at start with a usage error
   (exit code 2). The TESK API doesn't pass it.
 - On `SIGTERM`, the taskmaster logs an error, exits with code 143 and keeps

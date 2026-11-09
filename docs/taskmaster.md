@@ -175,7 +175,7 @@ development and debugging.
 | `-n`, `--namespace` | `default` | Kubernetes namespace of the jobs and the PVC. |
 | `-fn`, `--filer-name` | `docker.io/elixircloud/tesk-core-filer` | Image of the filer, without its tag. |
 | `-fv`, `--filer-version` | `latest` | Tag of the filer image. |
-| `-p`, `--poll-interval` | `5` | Seconds between polls of a job, a positive number (e.g. `0.5`). |
+| `-p`, `--poll-interval` | `5` | Seconds between polls of a job, from 0.1 to 3600 (e.g. `0.5`). |
 | `-pt`, `--pod-timeout` | `240` | Seconds after which a pending pod that can't start fails its job (see above). |
 | `-d`, `--debug` | off | Debug logging, also of the filer. The job manifests in the log show URLs without queries and user info, and hide the FTP credentials. |
 | `--pull-policy-always` | off | Pull the filer image on every start (`imagePullPolicy: Always`). |

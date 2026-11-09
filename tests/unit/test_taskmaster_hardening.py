@@ -197,14 +197,24 @@ def test_main_cancelled_during_init_stops_jobs(
 
 
 @pytest.mark.parametrize(
-    "value, expected", [("5", 5.0), ("0.5", 0.5), (" 2 ", 2.0), ("1e1", 10.0)]
+    "value, expected",
+    [
+        ("5", 5.0),
+        ("0.5", 0.5),
+        (" 2 ", 2.0),
+        ("1e1", 10.0),
+        ("0.1", 0.1),
+        ("3600", 3600.0),
+    ],
 )
 def test_positive_seconds(value: str, expected: float) -> None:
     """Test that positive numbers of seconds are accepted."""
     assert positive_seconds(value) == expected
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "x", "", "nan", "inf"])
+@pytest.mark.parametrize(
+    "value", ["0", "-1", "x", "", "nan", "inf", "0.01", "3601", "1e300"]
+)
 def test_positive_seconds_invalid(value: str) -> None:
     """Test that other values are rejected."""
     with pytest.raises(argparse.ArgumentTypeError):
@@ -217,7 +227,7 @@ def test_poll_interval_invalid(capsys: pytest.CaptureFixture[str]) -> None:
         taskmaster.newParser().parse_args(["-p", "0", "{}"])
 
     assert exc.value.code == 2
-    assert "not a positive number: '0'" in capsys.readouterr().err
+    assert "not a number from 0.1 to 3600: '0'" in capsys.readouterr().err
 
 
 @patch("tesk_core.taskmaster.run_main", side_effect=KeyboardInterrupt)

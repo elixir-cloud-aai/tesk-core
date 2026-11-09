@@ -33,8 +33,12 @@ from tesk_core.pvc import PVC
 
 created_jobs: list[Job] = []
 created_pvc: PVC | None = None
-# Seconds between polls of a job; set by `main` from `--poll-interval`
+# Seconds between polls of a job; set by `main` from `--poll-interval`,
+# within limits, so that polls don't flood the Kubernetes API and the
+# taskmaster still notices a cancellation
 poll_interval: float = 5
+min_poll_interval = 0.1
+max_poll_interval = 3600.0
 # Exit codes after `SIGINT` and `SIGTERM` (128 plus the signal's number, as
 # a shell reports them), so that Kubernetes counts the pod as failed
 sigint_exit_code = 130
@@ -497,24 +501,27 @@ def newLogger(loglevel: int) -> logging.Logger:
 
 
 def positive_seconds(value: str) -> float:
-    """Parse a positive number of seconds from the command line.
+    """Parse the seconds between polls from the command line.
 
     Args:
         value: The argument.
 
     Returns:
-        The seconds.
+        The seconds, from `min_poll_interval` to `max_poll_interval`.
 
     Raises:
-        argparse.ArgumentTypeError: If the argument isn't a positive, finite
-            number.
+        argparse.ArgumentTypeError: If the argument isn't a number in that
+            range.
     """
     try:
         seconds = float(value)
     except ValueError:
         seconds = math.nan
-    if not (math.isfinite(seconds) and seconds > 0):
-        raise argparse.ArgumentTypeError(f"not a positive number: {value!r}")
+    if not min_poll_interval <= seconds <= max_poll_interval:
+        raise argparse.ArgumentTypeError(
+            f"not a number from {min_poll_interval:g} to {max_poll_interval:g}: "
+            f"{value!r}"
+        )
     return seconds
 
 
