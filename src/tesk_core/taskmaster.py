@@ -10,9 +10,12 @@ import argparse
 import gzip
 import json
 import logging
+import math
 import os
 import re
+import signal
 import sys
+from types import FrameType
 from typing import Any, NoReturn
 
 from kubernetes import client, config
@@ -20,12 +23,22 @@ from kubernetes.client.rest import ApiException
 from urllib3.exceptions import HTTPError
 
 from tesk_core.filer_class import Filer
-from tesk_core.job import Job
+from tesk_core.job import (
+    DELETE_TIMEOUT,
+    JOB_COMPLETE_CONDITIONS,
+    JOB_FAILED_CONDITIONS,
+    Job,
+)
 from tesk_core.pvc import PVC
 
 created_jobs: list[Job] = []
 created_pvc: PVC | None = None
-poll_interval = 5
+# Seconds between polls of a job; set by `main` from `--poll-interval`
+poll_interval: float = 5
+# Exit codes after `SIGINT` and `SIGTERM` (128 plus the signal's number, as
+# a shell reports them), so that Kubernetes counts the pod as failed
+sigint_exit_code = 130
+sigterm_exit_code = 143
 task_volume_basename = "task-volume"
 # The labels of the taskmaster's pod (Downward API volume of the TESK API's
 # taskmaster job)
@@ -61,6 +74,10 @@ task_ttl_env = "TASK_TTL_SECONDS"
 # `TESK_MAX_QUEUE_SECONDS`: the largest TTL that Kubernetes accepts (an
 # int32), for both
 max_seconds = 2**31 - 1
+# The settings with the number of retries of each executor's and each filer's
+# job (`backoffLimit`, an int32 too)
+executor_backoff_env = "EXECUTOR_BACKOFF_LIMIT"
+filer_backoff_env = "FILER_BACKOFF_LIMIT"
 # The setting with the seconds after which a pod that can't be scheduled
 # ends the task (`SYSTEM_ERROR`); unset, pods wait to be scheduled forever
 max_queue_env = "TESK_MAX_QUEUE_SECONDS"
@@ -96,10 +113,11 @@ def run_executor(
 
     # A failed executor isn't retried, unless configured: a retry could hide
     # the failure and its logs
-    if os.environ.get("EXECUTOR_BACKOFF_LIMIT") is not None:
-        executor["spec"].update(
-            {"backoffLimit": int(os.environ["EXECUTOR_BACKOFF_LIMIT"])}
-        )
+    backoff_limit = env_whole_number(
+        executor_backoff_env, 0, "the limit of the job, or none", "a whole number"
+    )
+    if backoff_limit is not None:
+        executor["spec"]["backoffLimit"] = backoff_limit
     if executor["spec"].get("backoffLimit") is None:
         executor["spec"]["backoffLimit"] = 0
 
@@ -347,8 +365,11 @@ def run_task(
                 os.environ["TESK_FTP_USERNAME"], os.environ["TESK_FTP_PASSWORD"]
             )
 
-        if os.environ.get("FILER_BACKOFF_LIMIT") is not None:
-            filer.set_backoffLimit(int(os.environ["FILER_BACKOFF_LIMIT"]))
+        backoff_limit = env_whole_number(
+            filer_backoff_env, 0, "Kubernetes' default", "a whole number"
+        )
+        if backoff_limit is not None:
+            filer.set_backoffLimit(backoff_limit)
 
         pvc = init_pvc(data, filer)
 
@@ -356,7 +377,9 @@ def run_task(
     # check before each next job, so that a cancelled task starts no more
     for executor in data["executors"]:
         if check_cancelled():
-            exit_cancelled("Cancelled before executor " + executor["metadata"]["name"])
+            cancel_task(
+                data, "Cancelled before executor " + executor["metadata"]["name"]
+            )
         run_executor(executor, args.namespace, pvc)
 
     # run executors
@@ -365,7 +388,7 @@ def run_task(
     # A task cancelled after its last executor stops as cancelled (which
     # keeps its claim with `KEEP_FAILED_PVC`), with outputs or not
     if pvc is not None and check_cancelled():
-        exit_cancelled("Cancelled before the outputs filer or the end")
+        cancel_task(data, "Cancelled before the outputs filer or the end")
 
     # upload the outputs, if any
     if data["outputs"]:
@@ -406,7 +429,13 @@ def newParser() -> argparse.ArgumentParser:
         help="TES request as a file or '-' for stdin, required if json is not given",
     )
 
-    parser.add_argument("-p", "--poll-interval", help="Job polling interval", default=5)
+    parser.add_argument(
+        "-p",
+        "--poll-interval",
+        type=positive_seconds,
+        help="Seconds between polls of a job",
+        default=5,
+    )
     parser.add_argument(
         "-pt",
         "--pod-timeout",
@@ -417,11 +446,11 @@ def newParser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-fn",
         "--filer-name",
-        help="Filer image version",
-        default="eu.gcr.io/tes-wes/filer",
+        help="Filer image, without its tag",
+        default="docker.io/elixircloud/tesk-core-filer",
     )
     parser.add_argument(
-        "-fv", "--filer-version", help="Filer image version", default="v0.1.9"
+        "-fv", "--filer-version", help="Tag of the filer image", default="latest"
     )
     parser.add_argument(
         "-n", "--namespace", help="Kubernetes namespace to run in", default="default"
@@ -468,9 +497,61 @@ def newLogger(loglevel: int) -> logging.Logger:
     return logger
 
 
+def positive_seconds(value: str) -> float:
+    """Parse a positive number of seconds from the command line.
+
+    Args:
+        value: The argument.
+
+    Returns:
+        The seconds.
+
+    Raises:
+        argparse.ArgumentTypeError: If the argument isn't a positive, finite
+            number.
+    """
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = math.nan
+    if not (math.isfinite(seconds) and seconds > 0):
+        raise argparse.ArgumentTypeError(f"not a positive number: {value!r}")
+    return seconds
+
+
+def on_sigterm(signum: int, frame: FrameType | None) -> NoReturn:
+    """Stop the taskmaster on `SIGTERM`, e.g. when Kubernetes stops its pod.
+
+    The jobs are left as they are: a new attempt of the pod (e.g. after the
+    node was drained) continues with them, and deleting the taskmaster's job
+    deletes them with it (`ownerReferences`).
+
+    Args:
+        signum: The signal's number.
+        frame: The current stack frame.
+    """
+    logger.error("Got SIGTERM; stopping, the jobs are kept")
+    sys.exit(sigterm_exit_code)
+
+
 def main() -> None:
-    """Run the taskmaster on the command line."""
-    global args, logger, created_pvc, max_queue  # noqa: PLW0603 -- module state of the run
+    """Run the taskmaster on the command line.
+
+    On `SIGINT` (e.g. Ctrl-C when run by hand), deletes the jobs that it
+    created (`clean_on_interrupt`) and exits with code 130; on `SIGTERM`, see
+    `on_sigterm`.
+    """
+    signal.signal(signal.SIGTERM, on_sigterm)
+    try:
+        run_main()
+    except KeyboardInterrupt:
+        clean_on_interrupt()
+        sys.exit(sigint_exit_code)
+
+
+def run_main() -> None:
+    """Run the taskmaster with the arguments of the command line."""
+    global args, logger, created_pvc, max_queue, poll_interval  # noqa: PLW0603 -- module state of the run
 
     have_json_pvc = False
 
@@ -478,8 +559,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # `--poll-interval` is not applied: the jobs are polled every 5 seconds
-    # (`poll_interval` of the module)
+    poll_interval = args.poll_interval
 
     loglevel = logging.ERROR
     if args.debug:
@@ -519,17 +599,108 @@ def main() -> None:
 
     # Check if we're cancelled during init
     if check_cancelled():
-        exit_cancelled("Cancelled during init")
+        cancel_task(data, "Cancelled during init")
 
     run_task(data, args.filer_name, args.filer_version, have_json_pvc)
 
 
 def clean_on_interrupt() -> None:
-    """Delete the jobs that the taskmaster created."""
-    logger.debug("Caught interrupt signal, deleting jobs")
+    """Delete the jobs that the taskmaster created; log errors."""
+    logger.error("Interrupted; deleting the jobs")
 
     for job in created_jobs:
-        job.delete()
+        job.delete_quietly()
+
+
+def task_job_names(data: dict[str, Any]) -> list[str]:
+    """Name the jobs that the taskmaster runs for a task, in their order.
+
+    Args:
+        data: The task.
+
+    Returns:
+        The names of the inputs filer (if the task has inputs), of the
+        executors, and of the outputs filer (if it has outputs); none for a
+        task without executors, which is invalid.
+    """
+    executors = data.get("executors") or []
+    if not executors:
+        return []
+    task_name = executors[0]["metadata"]["labels"]["taskmaster-name"]
+    names = [task_name + "-inputs-filer"] if data.get("inputs") else []
+    names.extend(executor["metadata"]["name"] for executor in executors)
+    if data.get("outputs"):
+        names.append(task_name + "-outputs-filer")
+    return names
+
+
+def is_job_finished(job: Any) -> bool:
+    """Tell whether a job, as read from the Kubernetes API, has ended.
+
+    Args:
+        job: The job.
+
+    Returns:
+        Whether it has a condition that ends it (complete or failed).
+    """
+    conditions = (job.status.conditions if job.status else None) or []
+    return any(
+        condition.status == "True"
+        and condition.type in JOB_COMPLETE_CONDITIONS | JOB_FAILED_CONDITIONS
+        for condition in conditions
+    )
+
+
+def stop_task_jobs(data: dict[str, Any]) -> None:
+    """Delete the task's jobs that are still running, by name.
+
+    Covers jobs that an earlier attempt of the taskmaster's pod started,
+    which this attempt doesn't know otherwise. Jobs that ended are kept, with
+    the logs of their pods; a job that doesn't exist is skipped. A job that
+    can't be read is deleted; errors are logged, not raised.
+
+    Args:
+        data: The task.
+    """
+    api = get_batch_api()
+    for name in task_job_names(data):
+        try:
+            job = api.read_namespaced_job(
+                name, args.namespace, _request_timeout=job_read_timeout
+            )
+        except ApiException as ex:
+            if ex.status == 404:
+                continue
+            logger.error("Can't read job '%s': %s", name, error_reason(ex))
+        except HTTPError as ex:
+            logger.error("Can't read job '%s': %s", name, error_reason(ex))
+        else:
+            if is_job_finished(job):
+                continue
+        logger.info("Deleting job '%s'", name)
+        try:
+            api.delete_namespaced_job(
+                name,
+                args.namespace,
+                body=client.V1DeleteOptions(propagation_policy="Background"),
+                _request_timeout=DELETE_TIMEOUT,
+            )
+        except ApiException as ex:
+            if ex.status != 404:
+                logger.error("Can't delete job '%s': %s", name, error_reason(ex))
+        except HTTPError as ex:
+            logger.error("Can't delete job '%s': %s", name, error_reason(ex))
+
+
+def cancel_task(data: dict[str, Any], reason: str) -> NoReturn:
+    """Stop the task's running jobs (`stop_task_jobs`), then stop as cancelled.
+
+    Args:
+        data: The task.
+        reason: Why the taskmaster stops.
+    """
+    stop_task_jobs(data)
+    exit_cancelled(reason)
 
 
 def keep_failed_pvc() -> bool:
@@ -738,6 +909,22 @@ def env_seconds(name: str, minimum: int, unset: str) -> int | None:
         The seconds: a whole number from `minimum` to `max_seconds`. None if
         the setting is unset or empty, or invalid, which is logged.
     """
+    return env_whole_number(name, minimum, unset, "a whole number of seconds")
+
+
+def env_whole_number(name: str, minimum: int, unset: str, what: str) -> int | None:
+    """Get a whole number from a setting in the environment.
+
+    Args:
+        name: The environment variable.
+        minimum: The smallest valid value; the largest is `max_seconds`.
+        unset: What happens without a valid value, for the log.
+        what: What the value must be, for the log.
+
+    Returns:
+        The number, from `minimum` to `max_seconds`. None if the setting is
+        unset or empty (also only spaces), or invalid, which is logged.
+    """
     raw = os.environ.get(name, "")
     value = raw.strip()
     if not value:
@@ -752,9 +939,10 @@ def env_seconds(name: str, minimum: int, unset: str) -> int | None:
     ):
         return int(value)
     logger.error(
-        "Ignoring %s=%r: not a whole number of seconds from %d to %d; %s",
+        "Ignoring %s=%r: not %s from %d to %d; %s",
         name,
         raw,
+        what,
         minimum,
         max_seconds,
         unset,
@@ -853,7 +1041,4 @@ def new_job(
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        clean_on_interrupt()
+    main()

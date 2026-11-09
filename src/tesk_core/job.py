@@ -20,8 +20,8 @@ JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
 # Active deadline that fails a job (`Job.fail`), in seconds
 FAIL_DEADLINE = 1
 # Seconds to connect to and to wait for the Kubernetes API when deleting a
-# job whose pod wasn't scheduled in time, so that a stalled API server can't
-# block the taskmaster; the next poll tries again
+# job, per attempt, so that a stalled API server can't block the taskmaster
+# (for a job whose pod wasn't scheduled in time, the next poll tries again)
 DELETE_TIMEOUT = (5, 30)
 # Why a job whose pod wasn't scheduled in time is failed, for the log
 UNSCHEDULED_REASON = "its pod wasn't scheduled in time"
@@ -176,7 +176,7 @@ class Job:
         status, is_all_pods_running = self.get_status(is_all_pods_running)
         while status == "Running":
             if check_cancelled():
-                self.delete()
+                self.delete_quietly()
                 return "Cancelled"
             time.sleep(poll_interval)
             status, is_all_pods_running = self.get_status(is_all_pods_running)
@@ -398,11 +398,23 @@ class Job:
         return "Running"
 
     def delete_quietly(self) -> None:
-        """Delete the job, as a last resort; log an error if that fails."""
+        """Delete the job, with a timeout; log an error if that fails.
+
+        On cancellation, on an interrupt of the taskmaster, and if the
+        Kubernetes API rejects failing the job (`fail`). A job that is
+        already gone counts as deleted. Other errors, including a request
+        that times out (`DELETE_TIMEOUT`), are logged, not raised, so that
+        the taskmaster goes on (e.g. deletes the task's PVC and stops).
+        """
         try:
-            self.delete()
+            self.delete(request_timeout=DELETE_TIMEOUT)
         except ApiException as ex:
+            if ex.status == 404:
+                logging.debug("Job '%s' is already gone", self.name)
+                return
             logging.error("Can't delete job '%s' (%s)", self.name, ex.status)
+        except HTTPError as ex:
+            logging.error("Can't delete job '%s' (%s)", self.name, ex)
 
     def delete(self, request_timeout: tuple[float, float] | None = None) -> None:
         """Delete the job and, in the background, its pods.

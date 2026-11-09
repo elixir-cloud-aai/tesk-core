@@ -213,6 +213,12 @@ def test_run_executor_failure(
         ({}, {"backoffLimit": 2}, 2),
         ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {}, 3),
         ({"EXECUTOR_BACKOFF_LIMIT": "3"}, {"backoffLimit": 2}, 3),
+        ({"EXECUTOR_BACKOFF_LIMIT": " 3 "}, {}, 3),
+        ({"EXECUTOR_BACKOFF_LIMIT": ""}, {}, 0),
+        ({"EXECUTOR_BACKOFF_LIMIT": " "}, {"backoffLimit": 2}, 2),
+        ({"EXECUTOR_BACKOFF_LIMIT": "x"}, {}, 0),
+        ({"EXECUTOR_BACKOFF_LIMIT": "-1"}, {"backoffLimit": 2}, 2),
+        ({"EXECUTOR_BACKOFF_LIMIT": "1.5"}, {}, 0),
     ],
 )
 @patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
@@ -229,7 +235,7 @@ def test_run_executor_backoff_limit(
     """Test that executor jobs aren't retried unless configured.
 
     `EXECUTOR_BACKOFF_LIMIT` overrides the job's `backoffLimit`, which is 0
-    if neither sets it.
+    if neither sets it; an empty or invalid value is ignored.
     """
     monkeypatch.delenv("EXECUTOR_BACKOFF_LIMIT", raising=False)
     for key, value in env.items():
@@ -302,13 +308,13 @@ def test_localKubeConfig() -> None:
     assert args == Namespace(
         debug=False,
         file=None,
-        filer_version="v0.1.9",
+        filer_version="latest",
         json="json",
         namespace="default",
         poll_interval=5,
         state_file="/tmp/.teskstate",
         localKubeConfig=True,
         pull_policy_always=False,
-        filer_name="eu.gcr.io/tes-wes/filer",
+        filer_name="docker.io/elixircloud/tesk-core-filer",
         pod_timeout=240,
     )
