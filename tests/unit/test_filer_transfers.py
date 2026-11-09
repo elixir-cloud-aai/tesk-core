@@ -228,9 +228,9 @@ def test_http_error_body_redacts_values_at_the_cut(
     mocker: MockerFixture, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that a value that the log's cut splits is still redacted."""
-    secret = "s" * 200
-    url = f"https://example.org/in?sig={secret}"
-    body = "😀" * (BODY_LOG_LIMIT - 10) + secret
+    query_value = "s" * 200
+    url = f"https://example.org/in?q={query_value}"
+    body = "😀" * (BODY_LOG_LIMIT - 10) + query_value
     mocker.patch("requests.get", return_value=streamed([body.encode()], status=403))
     assert HTTPTransput(str(tmp_path / "in"), url, Type.File).download() == 1
     assert "s" * 4 not in caplog.text
