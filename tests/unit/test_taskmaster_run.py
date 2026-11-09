@@ -63,8 +63,8 @@ def test_defaults() -> None:
     assert args == Namespace(
         debug=False,
         file=None,
-        filer_name="eu.gcr.io/tes-wes/filer",
-        filer_version="v0.1.9",
+        filer_name="docker.io/elixircloud/tesk-core-filer",
+        filer_version="latest",
         json="json",
         namespace="default",
         poll_interval=5,
@@ -86,8 +86,8 @@ def test_localKubeConfig() -> None:
     assert args == Namespace(
         debug=False,
         file=None,
-        filer_name="eu.gcr.io/tes-wes/filer",
-        filer_version="v0.1.9",
+        filer_name="docker.io/elixircloud/tesk-core-filer",
+        filer_version="latest",
         json="json",
         namespace="default",
         poll_interval=5,

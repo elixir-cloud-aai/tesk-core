@@ -12,16 +12,14 @@ from urllib3.exceptions import HTTPError
 
 from tesk_core.Util import pprint
 
-logging.basicConfig(format="%(message)s", level=logging.INFO)
-
 # Job conditions that end a job, when their status is "True"
 JOB_COMPLETE_CONDITIONS = frozenset({"Complete", "SuccessCriteriaMet"})
 JOB_FAILED_CONDITIONS = frozenset({"Failed", "FailureTarget"})
 # Active deadline that fails a job (`Job.fail`), in seconds
 FAIL_DEADLINE = 1
 # Seconds to connect to and to wait for the Kubernetes API when deleting a
-# job whose pod wasn't scheduled in time, so that a stalled API server can't
-# block the taskmaster; the next poll tries again
+# job, per attempt, so that a stalled API server can't block the taskmaster
+# (for a job whose pod wasn't scheduled in time, the next poll tries again)
 DELETE_TIMEOUT = (5, 30)
 # Why a job whose pod wasn't scheduled in time is failed, for the log
 UNSCHEDULED_REASON = "its pod wasn't scheduled in time"
@@ -170,13 +168,16 @@ class Job:
                 logging.debug("Reading existing job: %s ", self.name)
                 self.bv1.read_namespaced_job(self.name, self.namespace)
             else:
-                logging.debug(ex.body)
+                # Without the response body, which can repeat the manifest
+                logging.debug(
+                    "Can't create job '%s': %s %s", self.name, ex.status, ex.reason
+                )
                 raise ApiException(ex.status, ex.reason) from ex
         is_all_pods_running = False
         status, is_all_pods_running = self.get_status(is_all_pods_running)
         while status == "Running":
             if check_cancelled():
-                self.delete()
+                self.delete_quietly()
                 return "Cancelled"
             time.sleep(poll_interval)
             status, is_all_pods_running = self.get_status(is_all_pods_running)
@@ -398,11 +399,13 @@ class Job:
         return "Running"
 
     def delete_quietly(self) -> None:
-        """Delete the job, as a last resort; log an error if that fails."""
-        try:
-            self.delete()
-        except ApiException as ex:
-            logging.error("Can't delete job '%s' (%s)", self.name, ex.status)
+        """Delete the job, with a timeout; log an error if that fails.
+
+        On cancellation, on an interrupt of the taskmaster, and if the
+        Kubernetes API rejects failing the job (`fail`); see
+        `delete_job_quietly`.
+        """
+        _quietly(self.name, lambda: self.delete(request_timeout=DELETE_TIMEOUT))
 
     def delete(self, request_timeout: tuple[float, float] | None = None) -> None:
         """Delete the job and, in the background, its pods.
@@ -415,10 +418,62 @@ class Job:
             request_timeout: Seconds to connect and to wait for the
                 Kubernetes API, per attempt; none by default.
         """
-        logging.info("Deleting job '%s'", self.name)
-        self.bv1.delete_namespaced_job(
-            self.name,
-            self.namespace,
-            body=client.V1DeleteOptions(propagation_policy="Background"),
-            _request_timeout=request_timeout,
-        )
+        delete_job(self.bv1, self.name, self.namespace, request_timeout)
+
+
+def delete_job(
+    bv1: client.BatchV1Api,
+    name: str,
+    namespace: str,
+    request_timeout: tuple[float, float] | None = None,
+) -> None:
+    """Delete a job and, in the background, its pods.
+
+    Args:
+        bv1: The client of the batch API.
+        name: Name of the job.
+        namespace: Namespace of the job.
+        request_timeout: Seconds to connect and to wait for the Kubernetes
+            API, per attempt; none by default.
+    """
+    logging.info("Deleting job '%s'", name)
+    bv1.delete_namespaced_job(
+        name,
+        namespace,
+        body=client.V1DeleteOptions(propagation_policy="Background"),
+        _request_timeout=request_timeout,
+    )
+
+
+def delete_job_quietly(bv1: client.BatchV1Api, name: str, namespace: str) -> None:
+    """Delete a job (`delete_job`) with a timeout; log an error if that fails.
+
+    A job that is already gone counts as deleted. Other errors, including a
+    request that times out (`DELETE_TIMEOUT`), are logged, not raised, so
+    that the taskmaster goes on (e.g. deletes the task's PVC and stops).
+
+    Args:
+        bv1: The client of the batch API.
+        name: Name of the job.
+        namespace: Namespace of the job.
+    """
+    _quietly(name, lambda: delete_job(bv1, name, namespace, DELETE_TIMEOUT))
+
+
+def _quietly(name: str, delete: Callable[[], None]) -> None:
+    """Delete a job; a job that is gone is no error, others are logged.
+
+    Args:
+        name: Name of the job, for the log.
+        delete: Deletes the job.
+    """
+    try:
+        delete()
+    except ApiException as ex:
+        if ex.status == 404:
+            logging.debug("Job '%s' is already gone", name)
+            return
+        reason = " ".join(str(part) for part in (ex.status, ex.reason) if part)
+        logging.error("Can't delete job '%s' (%s)", name, reason)
+    except HTTPError as ex:
+        logging.error("Can't delete job '%s' (%s)", name, ex)
