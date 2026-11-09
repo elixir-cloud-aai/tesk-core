@@ -377,3 +377,27 @@ def test_process_file_output_dir_to_bucket_with_s3_in_name(
         "out/a/1.txt",
         "out/a/2.txt",
     ]
+
+
+def test_s3_missing_bucket_exits(moto_boto: None) -> None:
+    """Test that a transfer to a bucket that doesn't exist exits."""
+    transfer = S3Transput("/tmp/a.txt", "s3://missing/a.txt", Type.File)
+
+    with pytest.raises(SystemExit) as exc_info, transfer:
+        pass
+
+    assert exc_info.value.code == 1
+
+
+def test_s3_upload_dir_stops_at_failed_entry(moto_boto: None, tmp_path: Path) -> None:
+    """Test that a directory upload fails with the first entry that fails."""
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "b.txt").write_text("b")
+    client = boto3.resource("s3", endpoint_url="http://s3.amazonaws.com")
+    transfer = S3Transput(str(tmp_path), "s3://tesk/dir", Type.Directory)
+    transfer.bucket_obj = client.Bucket("tesk")
+
+    with patch.object(S3Transput, "upload", return_value=1) as mock_upload:
+        assert transfer.upload_dir() == 1
+
+    mock_upload.assert_called_once_with(check_links=False)

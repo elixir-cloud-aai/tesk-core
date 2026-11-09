@@ -59,6 +59,12 @@ uv run coverage run -m pytest
 uv run coverage report -m
 ```
 
+The tests must cover every line of the package (line coverage, not
+branches): `coverage report` fails below 100% (`fail_under` in
+`pyproject.toml`), and Codecov requires 100% of the code and of each pull
+request's changes (`codecov.yml`). Only the script entry points
+(`if __name__ == "__main__":`) are left out.
+
 `uv run pytest tests/unit` or `uv run pytest tests/integration` runs one
 level. New tests are plain pytest functions `test_*` (or methods
 `test_*` of classes `Test*` without `unittest.TestCase`; pytest collects

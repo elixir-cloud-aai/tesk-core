@@ -318,3 +318,86 @@ def test_localKubeConfig() -> None:
         filer_name="docker.io/elixircloud/tesk-core-filer",
         pod_timeout=240,
     )
+
+
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.logger")
+def test_run_executor_completes_the_manifest(
+    mock_logger: MagicMock, mock_run_to_compl: MagicMock, data: dict[str, Any], pvc: PVC
+) -> None:
+    """Test that the executor's manifest gets the fields the API leaves out.
+
+    The restart policy from `restart_policy`, limits from the requests, and
+    the claim's volume also when the manifest's volumes are `null`.
+    """
+    pvc.set_volume_mounts([{"name": "task-volume", "mountPath": "/vol"}])
+    executor = data["executors"][0]
+    spec = executor["spec"]["template"]["spec"]
+    del spec["restartPolicy"]
+    spec["restart_policy"] = "Never"
+    spec["volumes"] = None
+    spec["containers"][0]["resources"] = {"requests": {"cpu": "1"}}
+
+    run_executor(executor, taskmaster.args.namespace, pvc)
+
+    assert spec["restartPolicy"] == "Never"
+    assert spec["containers"][0]["resources"]["limits"] == {"cpu": "1"}
+    assert [volume["name"] for volume in spec["volumes"]] == ["task-volume"]
+    assert spec["containers"][0]["volumeMounts"] == pvc.volume_mounts
+
+
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.PVC.create")
+@patch("tesk_core.taskmaster.logger")
+def test_init_pvc_mounts_netrc(
+    mock_logger: MagicMock,
+    mock_pvc_create: MagicMock,
+    mock_run_to_compl: MagicMock,
+    data: dict[str, Any],
+    filer: Filer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that the filer mounts the `.netrc` secret named in the environment.
+
+    The secret's `.netrc` key becomes `$HOME/.netrc`, with `HOME` set.
+    """
+    monkeypatch.setenv("NETRC_SECRET_NAME", "my-netrc")
+
+    init_pvc(data, filer)
+
+    spec = filer.get_spec("inputs")["spec"]["template"]["spec"]
+    volume = next(v for v in spec["volumes"] if v["name"] == "netrc")
+    assert volume["secret"] == {
+        "secretName": "my-netrc",
+        "defaultMode": 0o644,
+        "items": [{"key": ".netrc", "path": ".netrc"}],
+    }
+    container = spec["containers"][0]
+    assert {
+        "name": "netrc",
+        "mountPath": "/opt/home/.netrc",
+        "subPath": ".netrc",
+    } in container["volumeMounts"]
+    assert {"name": "HOME", "value": "/opt/home"} in container["env"]
+
+
+@patch("tesk_core.taskmaster.PVC.create")
+@patch("tesk_core.taskmaster.PVC.delete")
+@patch("tesk_core.taskmaster.Job.run_to_completion", return_value="Complete")
+@patch("tesk_core.taskmaster.logger")
+def test_run_task_passes_ftp_credentials(
+    mock_logger: MagicMock,
+    mock_job: MagicMock,
+    mock_pvc_delete: MagicMock,
+    mock_pvc_create: MagicMock,
+    data: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that the filer gets the FTP credentials of the environment."""
+    monkeypatch.setenv("TESK_FTP_USERNAME", "user")
+    monkeypatch.setenv("TESK_FTP_PASSWORD", "password")
+
+    with patch.object(Filer, "set_ftp") as mock_set_ftp:
+        run_task(data, taskmaster.args.filer_name, taskmaster.args.filer_version)
+
+    mock_set_ftp.assert_called_once_with("user", "password")
