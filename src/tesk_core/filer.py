@@ -8,6 +8,8 @@ JSON file (`*.gz`).
 import argparse
 import base64
 from collections.abc import Callable
+import contextlib
+import errno
 import ftplib
 from ftplib import FTP
 import functools
@@ -36,6 +38,7 @@ from tesk_core.transput import (
     open_for_upload,
     output_has_symlink,
     url_for_log,
+    within,
 )
 from tesk_core.Util import configure_logging
 
@@ -66,6 +69,10 @@ HTTP_TIMEOUT_ENV = "FILER_HTTP_TIMEOUT"
 HTTP_TIMEOUT_DEFAULT = 300.0
 # Longer timeouts (about 11 days) are invalid: sockets can't take any length
 HTTP_TIMEOUT_MAX = 1_000_000.0
+# Bytes of an HTTP(S) download held in memory at a time
+HTTP_CHUNK_SIZE = 1024 * 1024
+# Bytes of the body of an HTTP(S) error response read for the log
+ERROR_BODY_BYTES = 64 * 1024
 
 
 @functools.cache
@@ -123,6 +130,33 @@ def netrc_secrets(url: str) -> list[str]:
     return [user, password, basic]
 
 
+def error_body(req: requests.Response) -> str:
+    """Read the start of the body of an error response, for log messages.
+
+    Reads at most `ERROR_BODY_BYTES`, so that a large error body of a
+    streamed response isn't read into memory whole. That is far more than
+    the characters that `body_for_log` keeps (at most 4 bytes each), so
+    that it can redact values that start among them and end after them.
+
+    Args:
+        req: The response.
+
+    Returns:
+        The start of the body, decoded with the response's encoding (UTF-8
+        if it has none or an unknown one), with undecodable bytes replaced.
+    """
+    limit = ERROR_BODY_BYTES
+    data = b""
+    for chunk in req.iter_content(chunk_size=limit):
+        data += chunk
+        if len(data) >= limit:
+            break
+    try:
+        return data[:limit].decode(req.encoding or "utf-8", errors="replace")
+    except LookupError:
+        return data[:limit].decode("utf-8", errors="replace")
+
+
 class HTTPTransput(Transput):
     """Transfer of an input or output over HTTP(S)."""
 
@@ -139,13 +173,14 @@ class HTTPTransput(Transput):
         """
         if req.status_code < 200 or req.status_code >= 300:
             logging.error("Got status code: %d", req.status_code)
-            if req.text:
+            text = error_body(req)
+            if text:
                 sent = [req.url, *(item.url for item in req.history)]
                 urls = [self.url, *(url for url in sent if url)]
                 logging.error(
                     "Response body: %s",
                     body_for_log(
-                        req.text,
+                        text,
                         *urls,
                         secrets=[s for url in urls for s in netrc_secrets(url)],
                     ),
@@ -170,22 +205,44 @@ class HTTPTransput(Transput):
         return 1
 
     def download_file(self) -> int:
-        """Download the file with `GET`.
+        """Download the file with `GET`, streamed to disk.
+
+        The body is written in chunks of `HTTP_CHUNK_SIZE` bytes, so that
+        large files don't have to fit in memory. If the body breaks off, or
+        the file can't be written (e.g., a full volume), the partial file is
+        removed.
 
         Returns:
             0 on success, otherwise 1.
         """
+        opened = False
         try:
-            req = requests.get(self.url, timeout=http_timeout())
+            with requests.get(self.url, timeout=http_timeout(), stream=True) as req:
+                if not self._status_ok(req):
+                    return 1
+                with open(self.path, "wb") as file:
+                    opened = True
+                    for chunk in req.iter_content(chunk_size=HTTP_CHUNK_SIZE):
+                        file.write(chunk)
+        # Before `OSError`, which `RequestException` derives from
         except requests.exceptions.RequestException as err:
+            self._remove_partial(opened)
             return self._request_failed(err)
-
-        if not self._status_ok(req):
+        except OSError as err:
+            self._remove_partial(opened)
+            logging.error("Unable to write input %s: %s", self.path, err.strerror)
             return 1
-
-        with open(self.path, "wb") as file:
-            file.write(req.content)
         return 0
+
+    def _remove_partial(self, opened: bool) -> None:
+        """Remove the file of a failed download, if it was opened.
+
+        Args:
+            opened: Whether the download opened (and so created) the file.
+        """
+        if opened:
+            with contextlib.suppress(OSError):
+                os.remove(self.path)
 
     def upload_file(self) -> int:
         """Upload the file with `PUT`, as bytes.
@@ -251,45 +308,40 @@ class HTTPTransput(Transput):
         return 1
 
 
-def copyContent(
-    src: str,
-    dst: str,
-    symlinks: bool = False,
-    ignore: Callable[[str, list[str]], list[str]] | None = None,
-) -> None:
-    """Copy the content of a directory into an existing directory.
-
-    See https://stackoverflow.com/a/12514470/1553043.
-
-    Args:
-        src: The source directory.
-        dst: The destination directory.
-        symlinks: Whether to copy symbolic links as links.
-        ignore: Selects the names to leave out (as for `shutil.copytree`).
-    """
-    for item in os.listdir(src):
-        s = os.path.join(src, item)
-        d = os.path.join(dst, item)
-        if os.path.isdir(s):
-            shutil.copytree(s, d, symlinks, ignore)
-        else:
-            shutil.copy2(s, d)
-
-
 def copyDir(src: str, dst: str) -> None:
     """Copy a directory, also into an existing one.
 
-    `shutil.copytree` needs a destination that doesn't exist yet.
+    Directories that don't exist yet are copied whole (`shutil.copytree`);
+    existing ones are merged, entry by entry, and keep their own mode
+    (e.g., of a mount point the filer doesn't own); existing files are
+    replaced. Links in the destination, and `dst` if it is one, are
+    replaced, not followed.
 
     Args:
         src: The source directory.
         dst: The destination directory.
-    """
-    if os.path.exists(dst):
-        copyContent(src, dst)
 
-    else:
+    Raises:
+        IsADirectoryError: If a file of the source meets a directory of the
+            same name in the destination.
+    """
+    if os.path.islink(dst):
+        os.unlink(dst)
+    if not os.path.isdir(dst):
         shutil.copytree(src, dst)
+        return
+    for entry in os.scandir(src):
+        target = os.path.join(dst, entry.name)
+        if entry.is_dir():
+            # Replaces a link at `target`, as for `dst`
+            copyDir(entry.path, target)
+        elif os.path.islink(target):
+            os.unlink(target)
+            shutil.copy2(entry.path, target)
+        elif os.path.isdir(target):
+            raise IsADirectoryError(errno.EISDIR, "Is a directory", target)
+        else:
+            shutil.copy2(entry.path, target)
 
 
 def copyFile(src: str, dst: str) -> None:
@@ -591,8 +643,7 @@ def valid_entry_name(name: str, parent: str, path: str) -> bool:
     """
     if name in {"", ".", ".."} or "/" in name or "\\" in name:
         return False
-    parent_real = os.path.realpath(parent)
-    return os.path.realpath(path).startswith(parent_real.rstrip(os.sep) + os.sep)
+    return within(parent, path)
 
 
 FTP_HOSTS_ENV = "TESK_FTP_HOSTS"

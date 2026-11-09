@@ -60,6 +60,8 @@ def _response(status: int, body: bytes = b"") -> Response:
     resp = Response()
     resp.status_code = status
     resp._content = body
+    # As read: `iter_content` gives the body without a connection
+    resp._content_consumed = True  # type: ignore[attr-defined]
     return resp
 
 
@@ -112,7 +114,7 @@ def test_download_passes_timeout(mocker: MockerFixture, tmp_path: Path) -> None:
     get = mocker.patch("requests.get", return_value=_response(200))
     with mock.patch.dict(os.environ, {HTTP_TIMEOUT_ENV: "7"}):
         assert HTTPTransput(str(tmp_path / "a"), URL, Type.File).download_file() == 0
-    get.assert_called_once_with(URL, timeout=7.0)
+    get.assert_called_once_with(URL, timeout=7.0, stream=True)
 
 
 def test_upload_passes_timeout(mocker: MockerFixture, tmp_path: Path) -> None:

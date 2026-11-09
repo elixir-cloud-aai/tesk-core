@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import boto3
 import botocore.exceptions
 
-from tesk_core.transput import Transput, Type, open_for_upload
+from tesk_core.transput import Transput, Type, open_for_upload, within
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import Bucket, S3ServiceResource
@@ -198,6 +198,10 @@ class S3Transput(Transput):
     def download_dir(self) -> int:
         """Download the objects below the prefix to `path`.
 
+        Objects whose local path would not be below `path` (e.g., keys
+        with `..` segments) are skipped with a warning. Keys that end with
+        `/` (folder markers) create their directory.
+
         Returns:
             0 on success, otherwise 1.
         """
@@ -209,25 +213,42 @@ class S3Transput(Transput):
         client = boto3.client("s3", endpoint_url=self.extract_endpoint())
         if not self.file_path.endswith("/"):
             self.file_path += "/"
-        objects = client.list_objects_v2(Bucket=self.bucket, Prefix=self.file_path)
+        # All pages: a listing returns at most 1000 objects
+        pages = client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=self.file_path
+        )
+        objects = [obj for page in pages for obj in page.get("Contents", [])]
 
-        # If the file path does not exists in s3 bucket, 'Contents' key will
-        # not be present in objects
-        if "Contents" not in objects:
+        # If the file path does not exist in the bucket, there are no objects
+        if not objects:
             logging.error("Got status code: %s", 404)
             logging.error("Invalid file path!.")
             return 1
 
         # Looping through the list of objects and downloading them
-        for obj in objects["Contents"]:
+        for obj in objects:
             key = obj["Key"]
             file_name = os.path.basename(key)
             dir_name = os.path.dirname(key)
             prefix = re.escape(self.file_path.strip("/"))
             path_to_create = re.sub(r"^" + prefix, "", dir_name).strip("/")
-            path_to_create = os.path.join(self.path, path_to_create)
+            # Normalized, so that directories are created only on the path
+            # that is checked, not on a detour through `..` segments
+            path_to_create = os.path.normpath(os.path.join(self.path, path_to_create))
+            if file_name:
+                target = os.path.join(path_to_create, file_name)
+                inside = within(self.path, target)
+            else:
+                # A folder marker: only its directory, which may be `path`
+                target = None
+                inside = within(self.path, path_to_create) or (
+                    os.path.realpath(path_to_create) == os.path.realpath(self.path)
+                )
+            if not inside:
+                logging.warning("Skipping object %r outside the directory", key)
+                continue
             os.makedirs(path_to_create, exist_ok=True)
-            if self.get_s3_file(os.path.join(path_to_create, file_name), key):
+            if target is not None and self.get_s3_file(target, key):
                 return 1
         return 0
 

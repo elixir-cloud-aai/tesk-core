@@ -75,12 +75,19 @@ The outputs filer mounts the task's paths read-only.
 
 ### HTTP(S)
 
-Inputs are downloaded with `GET`. Outputs are uploaded with `PUT`, as bytes,
-streamed from disk: a directory is uploaded file by file (stopping at the
-first that fails), each to the directory's URL plus the escaped file name
-(the query of the URL, e.g. a token of a presigned URL, is kept). Any status
-other than 2xx fails the transfer, as does a request error (e.g. a failed
-connection or a timeout), which is logged with its type.
+Inputs are downloaded with `GET`, streamed to disk in chunks of 1 MiB, so
+that large files don't need memory of their size. A connection that breaks
+off during the body, or a failed write (e.g. a full volume), fails the
+input, and its partial file is removed.
+
+Outputs are uploaded with `PUT`, as bytes, streamed from disk: a directory
+is uploaded file by file (stopping at the first that fails), each to the
+directory's URL plus the escaped file name (the query of the URL, e.g. a
+token of a presigned URL, is kept).
+
+Any status other than 2xx fails the transfer, as does a request error (e.g.
+a failed connection or a timeout), which is logged with its type. Of the
+body of an error response, only the start is read for the log.
 
 Requests time out after `FILER_HTTP_TIMEOUT` seconds (default 300) without
 progress: when connecting, and between the parts of a response or upload,
@@ -166,6 +173,12 @@ aws_access_key_id = <key id>
 aws_secret_access_key = <secret>
 ```
 
+Directory inputs download every object below the URL's key prefix (all
+pages of the listing, also beyond 1000 objects), keeping the paths below
+it. Objects whose local path would not be below the input's directory (e.g.
+keys with `..` segments) are skipped with a warning; keys that end with `/`
+(folder markers) create their directory.
+
 The bucket must exist. Outputs are uploaded with a `Content-Type` guessed
 from the file name. Checksums are calculated and validated only where the
 S3 API requires them (`AWS_REQUEST_CHECKSUM_CALCULATION` and
@@ -196,6 +209,14 @@ in the filer: with `HOST_BASE_PATH=/tmp` and `CONTAINER_BASE_PATH=/transfer`,
 `file:///tmp/a/b` is `/transfer/a/b`. TESK's Helm chart sets these with `transfer.active` (see
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
+
+Directories are copied recursively. A directory copied to one that exists
+is merged into it: subdirectories that exist on both sides are merged, and
+files that exist on both sides replaced. Directories that exist keep their
+own mode (their metadata isn't copied). Links in the existing directory,
+and the destination itself if it is a link, are replaced by the copied file
+or directory, not followed. A file that meets a directory of its name fails
+the copy.
 
 ## Credentials from `.netrc`
 

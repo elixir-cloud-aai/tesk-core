@@ -110,6 +110,23 @@ def body_for_log(
     return text
 
 
+def within(parent: str, path: str) -> bool:
+    """Tell whether a path is below a directory, after resolving both.
+
+    Symbolic links and `..` segments are resolved (`os.path.realpath`), so
+    that the check holds for the path that is written.
+
+    Args:
+        parent: The directory.
+        path: The path, which needn't exist.
+
+    Returns:
+        Whether `path` is below `parent` (not `parent` itself).
+    """
+    parent_real = os.path.realpath(parent)
+    return os.path.realpath(path).startswith(parent_real.rstrip(os.sep) + os.sep)
+
+
 def symlink_in(path: str, recursive: bool = False) -> str | None:
     """Find a symbolic link in a path, or below it.
 
