@@ -169,7 +169,7 @@ def test_stop_task_jobs_errors(
     assert module_state.delete_namespaced_job.call_count == 4
     assert "Can't read job 'task-1-inputs-filer'" in caplog.text
     assert "Can't delete job 'task-1-inputs-filer'" in caplog.text
-    assert "Can't delete job 'task-1-ex-00': 500 Server Error" in caplog.text
+    assert "Can't delete job 'task-1-ex-00' (500)" in caplog.text
 
 
 @patch("tesk_core.taskmaster.stop_task_jobs")
@@ -256,8 +256,15 @@ def test_on_sigterm_keeps_jobs(
 
 
 @pytest.mark.parametrize(
-    "value, expected",
-    [("2", 2), (" 0 ", 0), ("", None), (" ", None), ("x", None), ("-1", None)],
+    "value, expected, logged",
+    [
+        ("2", 2, False),
+        (" 0 ", 0, False),
+        ("", None, False),
+        (" ", None, False),
+        ("x", None, True),
+        ("-1", None, True),
+    ],
 )
 @patch("tesk_core.taskmaster.init_pvc")
 @patch("tesk_core.taskmaster.run_executor")
@@ -270,6 +277,7 @@ def test_filer_backoff_limit(
     mock_init_pvc: MagicMock,
     value: str,
     expected: int | None,
+    logged: bool,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -288,8 +296,7 @@ def test_filer_backoff_limit(
         set_limit.assert_not_called()
     else:
         set_limit.assert_called_once_with(expected)
-    logged = "Ignoring FILER_BACKOFF_LIMIT" in caplog.text
-    assert logged == (value.strip() not in ("", "2", "0"))
+    assert ("Ignoring FILER_BACKOFF_LIMIT" in caplog.text) == logged
 
 
 def test_delete_quietly(caplog: pytest.LogCaptureFixture) -> None:

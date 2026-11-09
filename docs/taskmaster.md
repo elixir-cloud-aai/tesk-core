@@ -137,10 +137,11 @@ job. When the taskmaster finds the label while a job runs, it deletes that
 job, also one that it is failing, and stops; when it finds it between jobs
 or before the first, it starts no other job, and deletes the task's jobs
 that are still running (by name, also those that an earlier attempt of its
-pod started), keeping the jobs that ended, with their logs. Deleting a job
-times out after 5 seconds to connect or 30 seconds to answer; a job that is
-already gone counts as deleted, and other errors are logged: the taskmaster
-then deletes the PVC and stops as cancelled.
+pod started), keeping the jobs that ended, with their logs. Each request to
+read or delete a job times out after 5 seconds to connect and 10 (read) or
+30 (delete) seconds to answer, per attempt; the Kubernetes client tries up
+to 4 times. A job that is already gone counts as deleted, and other errors
+are logged: the taskmaster then deletes the PVC and stops as cancelled.
 
 Reading the job adds one `get` request per check, which needs `get` on
 `jobs` for the taskmaster's service account (granted by the role of TESK's
@@ -156,9 +157,12 @@ On `SIGINT` (e.g. Ctrl-C when run by hand), the taskmaster deletes the jobs
 that it created and exits with code 130. On `SIGTERM`, which Kubernetes
 sends when it stops the taskmaster's pod (e.g. when its job is deleted, or
 its node is drained), it logs an error and exits with code 143, and keeps
-the jobs: a new attempt of the pod continues with them, and deleting the
-taskmaster's job deletes them with it (see
-[Deleting finished tasks](#deleting-finished-tasks)).
+the jobs: a new attempt of the pod, if the taskmaster's job has retries
+left, continues with them; otherwise they run until the taskmaster's job is
+deleted, by hand or after `TASK_TTL_SECONDS`, which deletes them with it (see
+[Deleting finished tasks](#deleting-finished-tasks)). Deleting them on
+`SIGTERM` would restart a running executor from scratch after, e.g., a
+node drain; a run by hand has no new attempt that would continue them.
 
 ## Options
 
@@ -179,7 +183,10 @@ development and debugging.
 
 The TESK API always passes the filer image of its configuration; the
 defaults of `--filer-name` and `--filer-version` are for running the
-taskmaster by hand.
+taskmaster by hand. `latest` is the newest release and changes with each
+one, so it need not match the taskmaster's version: pass the tag of the
+taskmaster's release (e.g. `-fv 0.11.0`) for matching and reproducible
+runs.
 
 ## Environment variables
 

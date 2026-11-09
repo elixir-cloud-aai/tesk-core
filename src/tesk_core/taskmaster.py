@@ -24,10 +24,10 @@ from urllib3.exceptions import HTTPError
 
 from tesk_core.filer_class import Filer
 from tesk_core.job import (
-    DELETE_TIMEOUT,
     JOB_COMPLETE_CONDITIONS,
     JOB_FAILED_CONDITIONS,
     Job,
+    delete_job_quietly,
 )
 from tesk_core.pvc import PVC
 
@@ -114,12 +114,11 @@ def run_executor(
     # A failed executor isn't retried, unless configured: a retry could hide
     # the failure and its logs
     backoff_limit = env_whole_number(
-        executor_backoff_env, 0, "the limit of the job, or none", "a whole number"
+        executor_backoff_env, 0, "using the job's limit (0 if none)", "a whole number"
     )
-    if backoff_limit is not None:
-        executor["spec"]["backoffLimit"] = backoff_limit
-    if executor["spec"].get("backoffLimit") is None:
-        executor["spec"]["backoffLimit"] = 0
+    if backoff_limit is None:
+        backoff_limit = executor["spec"].get("backoffLimit")
+    executor["spec"]["backoffLimit"] = backoff_limit or 0
 
     if "restartPolicy" not in spec and "restart_policy" in spec:
         spec["restartPolicy"] = spec["restart_policy"]
@@ -366,7 +365,7 @@ def run_task(
             )
 
         backoff_limit = env_whole_number(
-            filer_backoff_env, 0, "Kubernetes' default", "a whole number"
+            filer_backoff_env, 0, "using Kubernetes' default", "a whole number"
         )
         if backoff_limit is not None:
             filer.set_backoffLimit(backoff_limit)
@@ -677,19 +676,7 @@ def stop_task_jobs(data: dict[str, Any]) -> None:
         else:
             if is_job_finished(job):
                 continue
-        logger.info("Deleting job '%s'", name)
-        try:
-            api.delete_namespaced_job(
-                name,
-                args.namespace,
-                body=client.V1DeleteOptions(propagation_policy="Background"),
-                _request_timeout=DELETE_TIMEOUT,
-            )
-        except ApiException as ex:
-            if ex.status != 404:
-                logger.error("Can't delete job '%s': %s", name, error_reason(ex))
-        except HTTPError as ex:
-            logger.error("Can't delete job '%s': %s", name, error_reason(ex))
+        delete_job_quietly(api, name, args.namespace)
 
 
 def cancel_task(data: dict[str, Any], reason: str) -> NoReturn:

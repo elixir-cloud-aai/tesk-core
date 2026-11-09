@@ -132,11 +132,13 @@ and user info, and no FTP credentials.
   before the outputs filer now also deletes the task's jobs that are still
   running, e.g. an executor that an earlier attempt of the taskmaster's pod
   started. Jobs that ended are kept. Deleting a job on cancellation times
-  out (5 seconds to connect, 30 to answer), a job that is already gone is
-  no error, and other errors are logged; before, they failed the
-  taskmaster's pod and kept the PVC.
+  out (5 seconds to connect, 30 to answer, per attempt of the Kubernetes
+  client), a job that is already gone is no error, and other errors are
+  logged; before, they failed the taskmaster's pod and kept the PVC.
 - `-p`/`--poll-interval` is now applied (before, jobs were polled every 5
-  seconds regardless), and must be a positive number.
+  seconds regardless), and must be a positive number: `0`, negative and
+  non-numeric values now stop the taskmaster at start with a usage error
+  (exit code 2). The TESK API doesn't pass it.
 - On `SIGTERM`, the taskmaster logs an error, exits with code 143 and keeps
   the jobs; on `SIGINT`, it deletes the jobs it created, also when started
   through the `taskmaster` command (before, only as a script).
@@ -147,7 +149,7 @@ and user info, and no FTP credentials.
   value left empty) now counts as unset, and an invalid one logs an error
   and is ignored; before, both stopped the taskmaster with an error.
 
-Nothing to change.
+Deployments through the TESK API need no change.
 
 ### FTP URLs with a port
 
