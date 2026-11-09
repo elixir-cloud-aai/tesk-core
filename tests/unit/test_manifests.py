@@ -3,7 +3,8 @@
 The Kubernetes client checks a manifest against its models when it sends
 it; the other unit tests mock the client's calls, so these tests check the
 manifests against the same models (`model_validate`), which reject unknown
-fields.
+fields. Only the pydantic models of kubernetes 37 have `model_validate`; with
+older clients, which `pyproject.toml` still allows, these checks are skipped.
 """
 
 from argparse import Namespace
@@ -21,6 +22,18 @@ from tesk_core.pvc import PVC
 from tesk_core.taskmaster import generate_mounts, run_executor
 
 RESOURCES = Path(__file__).parent / "resources"
+
+
+def validate(model: Any, manifest: dict[str, Any]) -> None:
+    """Check a manifest against a model of the Kubernetes client.
+
+    Args:
+        model: The client's model, e.g. `client.V1Job`.
+        manifest: The manifest.
+    """
+    if not hasattr(model, "model_validate"):
+        pytest.skip("the Kubernetes client has no pydantic models (before 37)")
+    model.model_validate(manifest)
 
 
 @pytest.fixture
@@ -58,7 +71,12 @@ def test_executor_job_is_valid(
 
     run_executor(executor, "tesk", pvc)
 
-    client.V1Job.model_validate(executor)
+    volumes = executor["spec"]["template"]["spec"]["volumes"]
+    assert volumes[-1]["persistentVolumeClaim"] == {
+        "readOnly": False,
+        "claimName": "task-1000-pvc",
+    }
+    validate(client.V1Job, executor)
 
 
 @pytest.mark.parametrize("mode", ["inputs", "outputs"])
@@ -72,11 +90,11 @@ def test_filer_job_is_valid(data: dict[str, Any], mode: str) -> None:
     filer.add_volume_mount(pvc)
     filer.add_netrc_mount("netrc")
 
-    client.V1Job.model_validate(filer.get_spec(mode, debug=True))
+    validate(client.V1Job, filer.get_spec(mode, debug=True))
 
 
 def test_pvc_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that the task's PVC, with a storage class, is a valid claim."""
     monkeypatch.setenv("STORAGE_CLASS_NAME", "fast")
 
-    client.V1PersistentVolumeClaim.model_validate(PVC("pvc-1", 1, "tesk").spec)
+    validate(client.V1PersistentVolumeClaim, PVC("pvc-1", 1, "tesk").spec)

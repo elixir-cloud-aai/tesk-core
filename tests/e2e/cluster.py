@@ -184,15 +184,15 @@ class Task:
                 return None
             raise
 
-    def wait(self, condition: Callable[[], bool], what: str) -> None:
-        """Wait until a condition holds, at most `TASK_TIMEOUT` seconds.
+    def wait(self, predicate: Callable[[], bool], what: str) -> None:
+        """Wait until a predicate holds, at most `TASK_TIMEOUT` seconds.
 
         Args:
-            condition: The condition.
+            predicate: The predicate.
             what: What is waited for, for the error.
         """
         deadline = time.monotonic() + TASK_TIMEOUT
-        while not condition():
+        while not predicate():
             if time.monotonic() > deadline:
                 pytest.fail(f"Timed out waiting for {what}: {self.logs()}")
             time.sleep(2)
