@@ -20,7 +20,10 @@ and are shipped as one image each:
 | `docker.io/elixircloud/tesk-core-taskmaster` | `taskmaster` |
 | `docker.io/elixircloud/tesk-core-filer` | `filer` |
 
-The images of the `dev` branch are tagged `dev` and `sha-<commit>`. The TESK
+Releases are tagged with their version, without `v` (e.g. `0.11.0`), and
+the highest release also `latest`; up to 0.10.6, the tags had a `v` (e.g.
+`v0.10.6`; see [Upgrading](upgrading.md#new-image-tags)). The images of the
+`dev` branch are tagged `dev` and `sha-<commit>`. The TESK
 API starts the taskmaster with the image that its configuration names, and
 the taskmaster starts the filer with the image that the API passes on to it.
 Deploy TESK with its Helm chart, which sets both: see

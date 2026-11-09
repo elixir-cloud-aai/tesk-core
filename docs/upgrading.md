@@ -4,7 +4,59 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
-## Unreleased
+## 0.11.0
+
+### Compatibility
+
+- **TESK API 1.2.0 or later**, which derives a task's state from all of
+  its jobs and reads the conditions `Failed` and `FailureTarget` (see
+  [Upgrade order](#upgrade-order)).
+- **TESK's Helm chart 0.3.0 or later**, which sets the new image tags and
+  the settings below, and whose taskmaster role grants every permission
+  this release needs (see [Permissions](#permissions)).
+- **Kubernetes 1.23 or later** (`ttlSecondsAfterFinished` of jobs, for
+  `TASK_TTL_SECONDS`). Jobs that Kubernetes marks `FailureTarget` (1.31 and
+  later) count as failed. CI runs the end-to-end tests on Kubernetes 1.37.
+- **Upgrade order**: the TESK API first, then the taskmaster and the filer,
+  both to this release (the filer image must be of the same version as the
+  taskmaster's; see below).
+
+### New image tags
+
+**Release images are now tagged without `v`**: `0.11.0`, and `latest` for
+the highest release. Up to 0.10.6, they were tagged `v0.10.6` and so on;
+those tags stay, but no `v0.11.0` exists. Set the tags in TESK's Helm chart
+with `tesk.taskmaster.image.tag` and `tesk.filer.image.tag` (e.g. `0.11.0`),
+or use chart 0.3.0, whose defaults have the new form.
+
+A wrong tag doesn't fail the task: a taskmaster pod that can't pull its
+image is timed out neither by `--pod-timeout` nor by
+`TESK_MAX_QUEUE_SECONDS`, which the taskmaster itself applies, so the task
+stays `QUEUED` without an error. After the upgrade, check that new tasks
+start, e.g. with `kubectl get pods --namespace <namespace>`
+(`ErrImagePull` or `ImagePullBackOff` for a wrong tag). A filer image with a
+wrong tag is timed out (see
+[Pods that can't start time out](#pods-that-cant-start-time-out)).
+
+### Permissions
+
+The taskmaster's service account needs these permissions in the namespace
+of the tasks; the taskmaster role of TESK's Helm chart
+(`charts/tesk/templates/common/taskmaster-rbac.yaml`) grants them, and
+more. Deployments with their own role must grant them too:
+
+| Resource | Verbs | For |
+|---|---|---|
+| `jobs` (`batch`) | `create`, `get`, `delete` | The task's jobs, their status, cancelling and deleting them; **new**: `get` also on its own job, for early cancellation (see below). |
+| `jobs` (`batch`) | `patch` | **New**: failing a job whose pod can't start, and the TTL of its own job (see below). |
+| `pods` | `list` | The pods of a job, to time out pods that can't start. |
+| `persistentvolumeclaims` | `create`, `get`, `delete` | The task's volume. |
+
+Roles that already let the taskmaster run tasks have the `get`. Without
+`patch` on `jobs`, the taskmaster logs an error each time and acts as up
+to 0.10.6: it deletes a job whose pod can't start instead of failing and
+keeping it (the TESK API then reports `SYSTEM_ERROR`, not
+`EXECUTOR_ERROR`), and runs the task without a TTL.
 
 ### The filer mounts task paths below `/tesk/task`
 
