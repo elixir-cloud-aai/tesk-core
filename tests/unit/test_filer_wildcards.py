@@ -289,3 +289,15 @@ def test_invalid_url_fails_the_output(
     assert process_file("outputs", filedata) == 1
     ftp.return_value.connect.assert_not_called()
     assert "Invalid host or port" in caplog.text
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_failed_upload_fails_the_output(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Test that a match whose upload fails fails the output, and stops there."""
+    upload = mocker.patch("tesk_core.filer.S3Transput.upload", return_value=1)
+    write(tmp_path / "a.txt")
+    write(tmp_path / "b.txt")
+
+    assert process_file("outputs", output(f"{tmp_path}/*.txt", str(tmp_path))) == 1
+    upload.assert_called_once_with(check_links=False)
