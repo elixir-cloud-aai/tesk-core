@@ -150,7 +150,7 @@ def run_executor(
             [
                 {
                     "name": task_volume_basename,
-                    "persistentVolumeClaim": {"readonly": False, "claimName": pvc.name},
+                    "persistentVolumeClaim": {"readOnly": False, "claimName": pvc.name},
                 }
             ]
         )
