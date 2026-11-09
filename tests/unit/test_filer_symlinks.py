@@ -134,8 +134,7 @@ class TestHTTP:
             transfer = HTTPTransput(
                 str(tree / "file_link"), "https://example.org/out", Type.File
             )
-            with pytest.raises(OSError):
-                transfer.upload()
+            assert transfer.upload() == 1
         put.assert_not_called()
 
     def test_link_to_proc(self, tmp_path: Path) -> None:
@@ -186,9 +185,21 @@ class TestFTP:
             patch("tesk_core.transput.output_has_symlink", return_value=False),
             patch("tesk_core.filer.ftp_make_dirs", return_value=0),
             patch("tesk_core.filer.ftp_check_directory", return_value=1),
-            pytest.raises(OSError),
         ):
-            transfer.upload()
+            assert transfer.upload() == 1
+        conn.storbinary.assert_not_called()
+
+    def test_unreadable_output_fails(self, tree: Path) -> None:
+        """Test that an output that can't be opened fails, without a traceback."""
+        conn = MagicMock()
+        transfer = FTPTransput(
+            str(tree / "missing.txt"), "ftp://ftp.example.org/out", Type.File, conn
+        )
+        with (
+            patch("tesk_core.filer.ftp_make_dirs", return_value=0),
+            patch("tesk_core.filer.ftp_check_directory", return_value=1),
+        ):
+            assert transfer.upload() == 1
         conn.storbinary.assert_not_called()
 
 

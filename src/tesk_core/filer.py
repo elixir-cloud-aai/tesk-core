@@ -196,7 +196,12 @@ class HTTPTransput(Transput):
         # for binary files and changes some text. An empty file is sent as b''
         # because requests sends an empty file object with chunked encoding,
         # which presigned upload URLs such as S3's reject.
-        with open_for_upload(self.path) as file:
+        try:
+            file = open_for_upload(self.path)
+        except OSError as err:
+            logging.error("Unable to open output %s: %s", self.path, err.strerror)
+            return 1
+        with file:
             data = file if os.fstat(file.fileno()).st_size > 0 else b""
             try:
                 req = requests.put(self.url, data=data, timeout=http_timeout())
@@ -890,7 +895,8 @@ def ftp_upload_file(
     try:
         with open_for_upload(local_source_path) as file:
             ftp_connection.storbinary("STOR /" + remote_destination_path, file)
-    except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp):
+    # `OSError`: the file can't be opened or read, or the connection failed
+    except (ftplib.error_reply, ftplib.error_perm, ftplib.error_temp, OSError):
         logging.exception(
             'Unable to upload file "%s" to "%s" as "%s"',
             local_source_path,
