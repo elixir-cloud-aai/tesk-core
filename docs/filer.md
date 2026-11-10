@@ -51,14 +51,39 @@ taskmaster, a newer filer looks for the task's paths below `/tesk/task`,
 where nothing is mounted, and the other way round. Inputs then don't reach
 the executors and outputs aren't found, so tasks fail.
 
+## Outputs with wildcards
+
+An output whose `path` has wildcards (`*`, `?`, `[`; POSIX pattern
+matching, as in TES 1.1) and a `path_prefix` is expanded in the filer, for
+every scheme. Each match is uploaded to the output's `url`, a directory,
+plus its path below `path_prefix`: with `path` `/data/*/out.txt`,
+`path_prefix` `/data` and `url` `s3://bucket/run`, `/data/s1/out.txt` is
+uploaded to `s3://bucket/run/s1/out.txt`. Matches that are directories are
+uploaded with their contents. As in the shell, `*` doesn't match names
+that start with `.`, while `.command.*` does. A pattern that matches
+nothing uploads nothing and succeeds, so a single-file class such as
+`out.tx[*t]` makes an optional output. A match that isn't below
+`path_prefix` fails the output, before anything is uploaded. So does a
+match whose name has `#` or `?` for a URL other than HTTP(S): those
+transfers take the URL's path as it is, where these characters would end
+it. For `file:` URLs, matches are copied as they are, creating the
+directories below the URL. The executors and the filer mount the pattern's
+deepest directory without wildcards (`/data`); a pattern with wildcards in
+its first component (`/*.txt`) would need a mount at `/`, so the
+taskmaster refuses it.
+
+Outputs with wildcards but without `path_prefix` (TES 1.0) are taken as
+before: `file:` outputs are expanded into the directory of the URL, and
+for other schemes the path is a file name.
+
 ## Symbolic links in outputs
 
 Outputs can't be or contain symbolic links. The filer fails an output, with
 an error that names the link, if any component of its path is a link (e.g.
 `/data/out` for the output `/data/out/result.txt`), or, for a directory, if
 any file or directory below it is one (output paths are normalized first,
-see [Task paths in the filer](#task-paths-in-the-filer)). For `file:` outputs with a glob, a link in any match
-fails the whole output. Links are not followed, as the filer would resolve
+see [Task paths in the filer](#task-paths-in-the-filer)). For outputs with
+wildcards, a link in any match fails the output. Links are not followed, as the filer would resolve
 them in its own container rather than the executor's; nothing of such an
 output is uploaded. Executors that create links in
 their outputs should copy the files they point to instead (e.g. `cp -L`).
@@ -71,7 +96,7 @@ The outputs filer mounts the task's paths read-only.
 | `http`, `https` | Files (`GET`); not directories | Files (`PUT`), and directories file by file |
 | `ftp` | Files and directories, including empty ones | Files and directories, including empty ones (creating the remote directories) |
 | `s3` | Files and directories | Files and directories |
-| `file` (or no scheme) | Files and directories | Files and directories (globs in file paths) |
+| `file` (or no scheme) | Files and directories | Files and directories (globs in file paths, also without `path_prefix`) |
 
 ### HTTP(S)
 

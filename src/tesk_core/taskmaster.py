@@ -29,7 +29,7 @@ from tesk_core.job import (
     Job,
     delete_job_quietly,
 )
-from tesk_core.path import taskPath
+from tesk_core.path import hasWildcards, taskPath, wildcardRoot
 from tesk_core.pvc import PVC
 from tesk_core.Util import configure_logging
 
@@ -224,6 +224,35 @@ def dirname(iodata: dict[str, Any]) -> str:
     return dirname
 
 
+def output_mount(output: dict[str, Any]) -> str:
+    """Get the directory to mount for an output.
+
+    An output with wildcards and `path_prefix` (TES 1.1) is mounted at the
+    pattern's deepest directory without wildcards, below which every match
+    is; other outputs as before (see `dirname`).
+
+    Args:
+        output: The output.
+
+    Returns:
+        The directory.
+
+    Raises:
+        ValueError: The pattern's first component has wildcards (e.g.
+            `/*.txt`): it would have to be mounted at `/`.
+    """
+    if not (output.get("path_prefix") and hasWildcards(output["path"])):
+        return dirname(output)
+    root = wildcardRoot(output["path"])
+    if not root:
+        raise ValueError(
+            f"Output {output['path']} has wildcards in its first component: "
+            "outputs with wildcards must be below a directory without them"
+        )
+    logger.debug("mount of pattern %s is: %s", output["path"], root)
+    return root
+
+
 def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
     """Get the volume mounts of a task's volumes, inputs and outputs.
 
@@ -248,7 +277,7 @@ def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
         append_mount(volume_mounts, volume_name, dirnm, pvc)
 
     for anoutput in data["outputs"]:
-        dirnm = dirname(anoutput)
+        dirnm = output_mount(anoutput)
         append_mount(volume_mounts, volume_name, dirnm, pvc)
 
     return volume_mounts

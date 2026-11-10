@@ -30,7 +30,13 @@ import requests
 
 from tesk_core.exception import FileProtocolDisabled, InvalidURL, UnknownProtocol
 from tesk_core.filer_s3 import S3Transput
-from tesk_core.path import containerPath, fileEnabled, filerPath, getPath
+from tesk_core.path import (
+    containerPath,
+    fileEnabled,
+    filerPath,
+    getPath,
+    hasWildcards,
+)
 from tesk_core.transput import (
     Transput,
     Type,
@@ -1123,6 +1129,133 @@ def newTransput(scheme: str, netloc: str) -> type[Transput]:
     raise UnknownProtocol(f"Unknown protocol: '{scheme}'")
 
 
+def url_join(url: str, relative: str) -> str:
+    """Append a relative path to the URL of a directory.
+
+    Each component of an HTTP(S) URL's path is escaped (see `http_join`);
+    other schemes take the path as it is.
+
+    Args:
+        url: The URL of the directory.
+        relative: The path below it, with `/` between components.
+
+    Returns:
+        The URL of the path.
+    """
+    if urlsplit(url).scheme in {"http", "https"}:
+        for part in relative.split("/"):
+            url = http_join(url, part)
+        return url
+    return url.rstrip("/") + "/" + relative
+
+
+def upload_matches(filedata: dict[str, Any]) -> int:
+    """Upload the files and directories that match an output's wildcards.
+
+    As in TES 1.1, `path_prefix` is removed from the path of each match,
+    and the rest is appended to the output's URL, a directory: with
+    `path` `/data/*.txt`, `path_prefix` `/data` and URL `s3://b/out`,
+    `/data/a.txt` is uploaded to `s3://b/out/a.txt`. A pattern that matches
+    nothing uploads nothing, and succeeds.
+
+    Args:
+        filedata: The output, with `path_prefix`.
+
+    Returns:
+        0 on success, 1 if a match is not below `path_prefix`, is or
+        contains a symbolic link, can't be named in the URL's scheme, or
+        its upload failed; nothing is uploaded unless an upload failed.
+    """
+    pattern = filerPath(filedata["path"])
+    prefix = filerPath(filedata["path_prefix"])
+    matches = sorted(glob(pattern))
+    if not matches:
+        logging.info("No files match %s, nothing to upload", filedata["path"])
+        return 0
+    parsed_url = urlparse(filedata["url"])
+    scheme = parsed_url.scheme or "file"
+    trans = newTransput(scheme, parsed_url.netloc)
+    uploads = checked_matches(filedata, matches, prefix, scheme)
+    if uploads is None:
+        return 1
+    for match, relative in uploads:
+        ftype = Type.Directory if os.path.isdir(match) else Type.File
+        url = url_join(filedata["url"], relative)
+        try:
+            with trans(match, url, ftype) as transfer:
+                if isinstance(transfer, FileTransput):
+                    copy_match(match, transfer.urlContainerPath, ftype)
+                elif transfer.upload(check_links=False):
+                    return 1
+        except InvalidURL as err:
+            logging.error("%s: %s", err, url_for_log(filedata["url"]))
+            return 1
+    return 0
+
+
+def checked_matches(
+    filedata: dict[str, Any], matches: list[str], prefix: str, scheme: str
+) -> list[tuple[str, str]] | None:
+    """Check the matches of an output before any of them is uploaded.
+
+    Args:
+        filedata: The output.
+        matches: The matches, in the filer.
+        prefix: The output's `path_prefix`, in the filer.
+        scheme: The scheme of the output's URL.
+
+    Returns:
+        Each match with its path below `prefix`; `None` (logged) if a match
+        is not below `prefix`, is or contains a symbolic link, or has a name
+        that a URL of the scheme can't carry.
+    """
+    uploads = []
+    for match in matches:
+        if not within(prefix, match):
+            logging.error(
+                "Output %s matches %s, which is not below its path_prefix %s",
+                filedata["path"],
+                match,
+                filedata["path_prefix"],
+            )
+            return None
+        if output_has_symlink(match, recursive=True):
+            return None
+        relative = os.path.relpath(match, prefix).replace(os.sep, "/")
+        if scheme not in {"http", "https"} and any(c in relative for c in "#?"):
+            # Only HTTP(S) URLs are escaped (`http_join`): other transfers
+            # read the URL's path as it is, where `#` and `?` would end it
+            logging.error(
+                "Output %s matches %s, whose name can't be part of a %s: URL",
+                filedata["path"],
+                match,
+                scheme,
+            )
+            return None
+        uploads.append((match, relative))
+    return uploads
+
+
+def copy_match(src: str, dst: str, ftype: Type) -> None:
+    """Copy a match of an output with wildcards to the shared volume.
+
+    Unlike `FileTransput.upload_file`, the match is a concrete path, so it
+    isn't taken as a pattern again (a name with `[` would match nothing),
+    and the destination's directory is created for matches below
+    subdirectories.
+
+    Args:
+        src: The match, in the filer.
+        dst: Its destination on the shared volume, in the filer.
+        ftype: Whether it is a file or a directory.
+    """
+    if ftype == Type.Directory:
+        copyDir(src, dst)
+        return
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+
+
 def process_file(ttype: str, filedata: dict[str, Any]) -> int:
     """Stage an input or output.
 
@@ -1147,6 +1280,15 @@ def process_file(ttype: str, filedata: dict[str, Any]) -> int:
             url_for_log(filedata["url"]),
         )
         scheme = "file"
+
+    # Outputs with wildcards and a prefix to remove, as defined in TES 1.1;
+    # without `path_prefix`, the path is taken as before
+    if (
+        ttype == "outputs"
+        and filedata.get("path_prefix")
+        and hasWildcards(filedata["path"])
+    ):
+        return upload_matches(filedata)
 
     trans = newTransput(scheme, netloc)
     path = filerPath(filedata["path"])
