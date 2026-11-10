@@ -11,7 +11,7 @@ from pytest_mock import MockerFixture
 
 from tesk_core.filer import process_file, url_join
 from tesk_core.path import hasWildcards, wildcardRoot
-from tesk_core.taskmaster import dirname, generate_mounts
+from tesk_core.taskmaster import dirname, generate_mounts, output_mount
 from tesk_core.transput import Type
 
 
@@ -111,16 +111,33 @@ def test_wildcard_root(path: str, expected: str) -> None:
     assert wildcardRoot(path) == expected
 
 
-def test_dirname_of_pattern_is_its_root() -> None:
-    """Test that an output with wildcards is mounted at its root.
+def test_output_with_wildcards_is_mounted_at_its_root() -> None:
+    """Test that an output with wildcards and a prefix is mounted at its root.
 
     Before, `/data/*/out.txt` was mounted at `/data/*`, a directory that
     the executor doesn't write to.
     """
-    assert dirname(output("/data/*/out.txt", "/data")) == "/data"
-    assert dirname(output("/data/*.txt", "/data")) == "/data"
-    assert dirname({"path": "/data/out", "type": "DIRECTORY"}) == "/data/out"
-    assert dirname({"path": "/data/out.txt", "type": "FILE"}) == "/data"
+    assert output_mount(output("/data/*/out.txt", "/data")) == "/data"
+    assert output_mount(output("/data/*.txt", "/data")) == "/data"
+    dir_pattern = {**output("/data/res_*", "/data"), "type": "DIRECTORY"}
+    assert output_mount(dir_pattern) == "/data"
+
+
+def test_other_paths_are_mounted_as_before() -> None:
+    """Test that TES 1.0 outputs and all inputs keep their mounts.
+
+    `[`, `*` and `?` are only wildcards with `path_prefix`; otherwise they
+    are part of a name.
+    """
+    assert output_mount(output("/data/[1]/out.txt", None)) == "/data/[1]"
+    assert output_mount({"path": "/data/out", "type": "DIRECTORY"}) == "/data/out"
+    assert dirname({"path": "/data/[1]/in.txt", "type": "FILE"}) == "/data/[1]"
+
+
+def test_pattern_with_wildcards_in_its_first_component_is_refused() -> None:
+    """Test that `/*.txt` is refused rather than mounted at an empty path."""
+    with pytest.raises(ValueError, match="first component"):
+        output_mount(output("/*.txt", "/"))
 
 
 def test_generate_mounts_shares_the_root() -> None:
@@ -301,3 +318,66 @@ def test_failed_upload_fails_the_output(tmp_path: Path, mocker: MockerFixture) -
 
     assert process_file("outputs", output(f"{tmp_path}/*.txt", str(tmp_path))) == 1
     upload.assert_called_once_with(check_links=False)
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_names_with_hash_or_question_mark_are_refused_for_s3(tmp_path: Path) -> None:
+    """Test that a name an S3 URL can't carry fails the output, uploading nothing.
+
+    S3 transfers take the URL's path as it is, where `#` and `?` would end
+    the key.
+    """
+    write(tmp_path / "a.txt")
+    write(tmp_path / "b#1.txt")
+
+    assert process_file("outputs", output(f"{tmp_path}/*.txt", str(tmp_path))) == 1
+    assert keys() == []
+
+
+@pytest.fixture
+def shared_volume(tmp_path: Path) -> Iterator[Path]:
+    """Enable `file:` URLs, with the shared volume in `tmp_path/shared`.
+
+    Yields:
+        The shared volume's directory.
+    """
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    with (
+        patch("tesk_core.path.HOST_BASE_PATH", str(shared)),
+        patch("tesk_core.path.CONTAINER_BASE_PATH", str(shared)),
+    ):
+        yield shared
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+def test_file_matches_are_copied_below_the_url(
+    tmp_path: Path, shared_volume: Path
+) -> None:
+    """Test that `file:` matches land below the URL, also in new subdirectories.
+
+    A match whose name has `[` is a file, not a pattern, and is copied too.
+    """
+    work = tmp_path / "work"
+    write(work / "s1" / "out.txt", "1")
+    write(work / "s2" / "out[1].txt", "2")
+    write(work / "res_1" / "sub" / "c.txt", "3")
+
+    url = f"file://{shared_volume}/run"
+    assert process_file("outputs", output(f"{work}/*/out*.txt", str(work), url)) == 0
+    assert (shared_volume / "run" / "s1" / "out.txt").read_text() == "1"
+    assert (shared_volume / "run" / "s2" / "out[1].txt").read_text() == "2"
+
+    filedata = {**output(f"{work}/res_*", str(work), url), "type": Type.Directory.value}
+    assert process_file("outputs", filedata) == 0
+    assert (shared_volume / "run" / "res_1" / "sub" / "c.txt").read_text() == "3"
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@patch("tesk_core.path.HOST_BASE_PATH", None)
+@patch("tesk_core.path.CONTAINER_BASE_PATH", None)
+def test_no_match_succeeds_without_the_shared_volume(tmp_path: Path) -> None:
+    """Test that a `file:` pattern matching nothing succeeds with `file:` disabled."""
+    filedata = output(f"{tmp_path}/*.bam", str(tmp_path), "file:///shared/out")
+    assert process_file("outputs", filedata) == 0

@@ -63,8 +63,14 @@ uploaded with their contents. As in the shell, `*` doesn't match names
 that start with `.`, while `.command.*` does. A pattern that matches
 nothing uploads nothing and succeeds, so a single-file class such as
 `out.tx[*t]` makes an optional output. A match that isn't below
-`path_prefix` fails the output. The executors and the filer mount the
-pattern's deepest directory without wildcards (`/data`).
+`path_prefix` fails the output, before anything is uploaded. So does a
+match whose name has `#` or `?` for a URL other than HTTP(S): those
+transfers take the URL's path as it is, where these characters would end
+it. For `file:` URLs, matches are copied as they are, creating the
+directories below the URL. The executors and the filer mount the pattern's
+deepest directory without wildcards (`/data`); a pattern with wildcards in
+its first component (`/*.txt`) would need a mount at `/`, so the
+taskmaster refuses it.
 
 Outputs with wildcards but without `path_prefix` (TES 1.0) are taken as
 before: `file:` outputs are expanded into the directory of the URL, and

@@ -210,24 +210,47 @@ def dirname(iodata: dict[str, Any]) -> str:
         iodata: The input or output.
 
     Returns:
-        The directory of a file, or the directory itself; for a path with
-        wildcards (outputs of TES 1.1), its deepest directory without
-        wildcards, below which every match is.
+        The directory of a file, or the directory itself.
     """
-    dirname: str
-    if hasWildcards(iodata["path"]):
-        dirname = wildcardRoot(iodata["path"])
-        logger.debug("dirname of pattern %s is: %s", iodata["path"], dirname)
-    elif iodata["type"] == "FILE":
+    if iodata["type"] == "FILE":
         # strip filename from path
         r = "(.*)/"
         # Paths without `/` don't match and raise `AttributeError`, as before
-        dirname = re.match(r, iodata["path"]).group(1)  # type: ignore[union-attr]
+        dirname: str = re.match(r, iodata["path"]).group(1)  # type: ignore[union-attr]
         logger.debug("dirname of %sis: %s", iodata["path"], dirname)
     elif iodata["type"] == "DIRECTORY":
         dirname = iodata["path"]
 
     return dirname
+
+
+def output_mount(output: dict[str, Any]) -> str:
+    """Get the directory to mount for an output.
+
+    An output with wildcards and `path_prefix` (TES 1.1) is mounted at the
+    pattern's deepest directory without wildcards, below which every match
+    is; other outputs as before (see `dirname`).
+
+    Args:
+        output: The output.
+
+    Returns:
+        The directory.
+
+    Raises:
+        ValueError: The pattern's first component has wildcards (e.g.
+            `/*.txt`): it would have to be mounted at `/`.
+    """
+    if not (output.get("path_prefix") and hasWildcards(output["path"])):
+        return dirname(output)
+    root = wildcardRoot(output["path"])
+    if not root:
+        raise ValueError(
+            f"Output {output['path']} has wildcards in its first component: "
+            "outputs with wildcards must be below a directory without them"
+        )
+    logger.debug("mount of pattern %s is: %s", output["path"], root)
+    return root
 
 
 def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
@@ -254,7 +277,7 @@ def generate_mounts(data: dict[str, Any], pvc: PVC) -> list[dict[str, Any]]:
         append_mount(volume_mounts, volume_name, dirnm, pvc)
 
     for anoutput in data["outputs"]:
-        dirnm = dirname(anoutput)
+        dirnm = output_mount(anoutput)
         append_mount(volume_mounts, volume_name, dirnm, pvc)
 
     return volume_mounts
