@@ -95,6 +95,45 @@ def filerPath(path: str) -> str:
     return posixpath.join(TASK_PATH_PREFIX, relative) if relative else TASK_PATH_PREFIX
 
 
+# Characters that start a wildcard in a path (POSIX, 2.13 Pattern Matching
+# Notation), as TES 1.1 defines the wildcards of outputs
+WILDCARD_CHARS = frozenset("*?[")
+
+
+def hasWildcards(path: str) -> bool:
+    """Tell whether a path of an output is a wildcard pattern.
+
+    Args:
+        path: The path, as in the task.
+
+    Returns:
+        Whether the path has `*`, `?` or `[`.
+    """
+    return any(char in WILDCARD_CHARS for char in path)
+
+
+def wildcardRoot(path: str) -> str:
+    """Get the deepest directory of a pattern that has no wildcards.
+
+    Every match of the pattern is below it, so it is the directory to mount
+    for the output (e.g., `/data` for `/data/*/out.txt`).
+
+    Args:
+        path: The pattern, as in the task.
+
+    Returns:
+        The directory, normalized (see `taskPath`); empty for a pattern
+        whose first component has wildcards, as for files directly below
+        `/`.
+    """
+    root = []
+    for part in taskPath(path).split("/")[1:]:
+        if hasWildcards(part):
+            break
+        root.append(part)
+    return "/" + "/".join(root) if root else ""
+
+
 def checkBasePaths() -> None:
     """Check that the shared volume's path and the task paths' don't overlap.
 
