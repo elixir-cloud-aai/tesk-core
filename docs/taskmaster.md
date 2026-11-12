@@ -16,7 +16,15 @@ outputs, volumes and resources.
    onto that volume. Each volume, and the directory of each input and
    output, is a directory of the PVC, mounted at the task's path in the
    executors and below `/tesk/task` in the filer (see
-   [Task paths in the filer](filer.md#task-paths-in-the-filer)).
+   [Task paths in the filer](filer.md#task-paths-in-the-filer)). An
+   output's directory is the directory of its `path`, except for an output
+   with wildcards and a `path_prefix` (TES 1.1): that one is mounted at the
+   pattern's deepest directory without wildcards (`/data` for
+   `/data/*/out.txt`), below which every match is (see
+   [Outputs with wildcards](filer.md#outputs-with-wildcards)). A pattern
+   with wildcards in its first component (`/*.txt`) would need a mount at
+   `/`, so the taskmaster refuses it: it stops with an error before it
+   creates the PVC or any job.
 2. It runs the executors, one after another, each as a job with the task's
    volume mounted. If an executor has resource requests but no limits, the
    requests also become its limits.
