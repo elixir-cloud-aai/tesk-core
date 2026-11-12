@@ -4,6 +4,29 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
+## Unreleased
+
+### Compatibility
+
+- **TESK API with TES 1.1**: this release pairs with the TESK API release
+  that implements TES 1.1 (see
+  [tesk-api#137](https://github.com/elixir-cloud-aai/tesk-api/issues/137);
+  not released yet), which passes `path_prefix` on outputs to the
+  taskmaster. Outputs without `path_prefix` work as before, also with older
+  TESK API releases.
+
+### Outputs with wildcards and `path_prefix`
+
+Outputs whose `path` has wildcards and that have a `path_prefix` (TES 1.1)
+are now expanded in the filer for every scheme, each match uploaded below
+the output's URL (see
+[Outputs with wildcards](filer.md#outputs-with-wildcards)). The taskmaster
+mounts such an output at the pattern's deepest directory without wildcards,
+and refuses patterns with wildcards in their first component (`/*.txt`; see
+[What it does](taskmaster.md#what-it-does)). Older taskmasters and filers
+fail such outputs or put their matches in the wrong place, so a TESK API
+that passes `path_prefix` needs this release of both images.
+
 ## 0.11.0
 
 ### Compatibility
