@@ -14,6 +14,10 @@ to the filer.
   not released yet), which passes `path_prefix` on outputs to the
   taskmaster. Outputs without `path_prefix` work as before, also with older
   TESK API releases.
+- **Upgrade order**: the taskmaster and the filer first, both to this
+  release, then the TESK API. Tasks started meanwhile by the new TESK API
+  run with the old images, which fail wildcard outputs with `path_prefix`
+  or put their matches in the wrong place.
 
 ### Outputs with wildcards and `path_prefix`
 
