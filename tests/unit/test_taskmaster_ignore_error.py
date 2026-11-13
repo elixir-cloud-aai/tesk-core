@@ -22,15 +22,20 @@ from tesk_core.taskmaster import (
 
 RESOURCES = Path(__file__).parent / "resources"
 OUTPUT = {"path": "/out", "url": "s3://b/out", "type": "DIRECTORY"}
+# The unpatched method, as the fixture below patches it
+WAIT_FAILED = Job.wait_failed
 
 
 @pytest.fixture(autouse=True)
 def taskmaster_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set the arguments, the created jobs and the claim of the taskmaster.
 
+    Failed jobs are marked `Failed` at once (`Job.wait_failed`).
+
     Args:
         monkeypatch: The fixture that restores the module state afterwards.
     """
+    monkeypatch.setattr(Job, "wait_failed", lambda self, *args: True)
     monkeypatch.setattr(
         taskmaster,
         "args",
@@ -351,3 +356,70 @@ def test_get_status_marks_ended_by_earlier_run(
     job.get_status(False)
 
     assert job.ended_by_taskmaster is expected
+
+
+@patch("tesk_core.taskmaster.delete_created_pvc")
+@patch("tesk_core.taskmaster.Job.run_to_completion", autospec=True)
+def test_run_executor_stops_if_pods_dont_end(
+    mock_run: MagicMock,
+    mock_delete_pvc: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that an ignored failure stops the task if the pods don't end.
+
+    Kubernetes didn't mark the job `Failed` (after `FailureTarget`) in
+    time: its pods may still run, so no next job may start.
+
+    Args:
+        mock_run: The mocked run of the job.
+        mock_delete_pvc: The mocked deletion of the claim.
+        monkeypatch: The fixture that patches `Job.wait_failed`.
+    """
+    monkeypatch.setattr(Job, "wait_failed", lambda self, *args: False)
+    mock_run.side_effect = statuses({"task-1000-ex-00": "Failed"})
+
+    with pytest.raises(SystemExit):
+        run_executor(task("true")["executors"][0], "default")
+
+    mock_delete_pvc.assert_called_once_with()
+
+
+@patch("tesk_core.job.time.sleep")
+def test_wait_failed(mock_sleep: MagicMock) -> None:
+    """Test that `wait_failed` waits from `FailureTarget` until `Failed`.
+
+    Args:
+        mock_sleep: The mocked sleep between reads.
+    """
+    job = new_job()
+    job.bv1.read_namespaced_job.side_effect = [
+        read_job(None, "FailureTarget"),
+        SimpleNamespace(status=None),
+        read_job(None, "Failed"),
+    ]
+
+    assert WAIT_FAILED(job, 5, 240) is True
+    assert job.bv1.read_namespaced_job.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+@patch("tesk_core.job.time.sleep")
+@patch("tesk_core.job.time.monotonic", side_effect=[0.0, 10.0, 20.0])
+def test_wait_failed_times_out(
+    mock_monotonic: MagicMock,
+    mock_sleep: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that `wait_failed` gives up after the timeout.
+
+    Args:
+        mock_monotonic: The mocked clock: start, then two reads.
+        mock_sleep: The mocked sleep between reads.
+        caplog: The fixture that captures the log.
+    """
+    job = new_job()
+    job.bv1.read_namespaced_job.return_value = read_job(None, "FailureTarget")
+
+    assert WAIT_FAILED(job, 5, 15) is False
+    assert job.bv1.read_namespaced_job.call_count == 2
+    assert "wasn't marked failed within 15 s" in caplog.text

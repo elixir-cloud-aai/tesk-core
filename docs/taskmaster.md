@@ -45,7 +45,11 @@ the TESK API then gives the executor's job the annotation
 `ignore-error: "true"`. If such an executor's job fails, the taskmaster
 logs a warning (`Executor job '...' failed; ignoring the error`), keeps
 the job, and goes on with the next executor and, after the last, the
-outputs filer, as if the executor had completed. The TESK API reports the
+outputs filer, as if the executor had completed. Before it goes on, it
+waits until Kubernetes has marked the job `Failed`, which Kubernetes 1.31
+and later do only once the job's pods have ended (after `FailureTarget`),
+so that they don't run next to the next job on the task's volume; if that
+takes longer than `--pod-timeout`, the task stops. The TESK API reports the
 executor's exit code and logs from the kept job, and the task's state from
 the other jobs (`COMPLETE` if they complete); this needs a TESK API
 release that passes `ignore_error` (see

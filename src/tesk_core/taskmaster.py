@@ -176,7 +176,14 @@ def run_executor(
     created_jobs.append(job)
 
     status = job.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
-    if status == "Failed" and not job.ended_by_taskmaster and ignores_error(executor):
+    # The next job starts only once the failed job's pods have ended, so
+    # that they don't run next to it on the task's volume
+    if (
+        status == "Failed"
+        and not job.ended_by_taskmaster
+        and ignores_error(executor)
+        and job.wait_failed(poll_interval, args.pod_timeout)
+    ):
         logger.warning("Executor job '%s' failed; ignoring the error", jobname)
         return
     if status != "Complete":

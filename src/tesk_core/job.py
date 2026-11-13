@@ -409,6 +409,35 @@ class Job:
         self.failing_since = datetime.now(timezone.utc)
         return "Running"
 
+    def wait_failed(self, poll_interval: float, timeout: float) -> bool:
+        """Wait until Kubernetes marks the job `Failed`.
+
+        A job counts as failed already with `FailureTarget` (Kubernetes
+        1.31+), while its pods may still terminate; Kubernetes sets `Failed`
+        once they have. Whoever goes on after the job's failure, e.g. with
+        the next executor on the same volume, waits for that.
+
+        Args:
+            poll_interval: Seconds between reads of the job.
+            timeout: Seconds after which to give up.
+
+        Returns:
+            Whether the job has the condition `Failed` (with the status
+            `True`) within `timeout`.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            job = self.bv1.read_namespaced_job(self.name, self.namespace)
+            conditions = (job.status.conditions if job.status else None) or []
+            if any(c.type == "Failed" and c.status == "True" for c in conditions):
+                return True
+            if time.monotonic() >= deadline:
+                logging.warning(
+                    "Job '%s' wasn't marked failed within %s s", self.name, timeout
+                )
+                return False
+            time.sleep(poll_interval)
+
     def delete_quietly(self) -> None:
         """Delete the job, with a timeout; log an error if that fails.
 
