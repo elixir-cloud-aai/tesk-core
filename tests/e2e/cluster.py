@@ -90,6 +90,7 @@ class Task:
         resources: dict[str, Any] | None = None,
         args: list[str] | None = None,
         job_labels: dict[str, str] | None = None,
+        ignore_error: set[int] | None = None,
     ) -> None:
         """Describe the task and its taskmaster job; `submit` creates the job.
 
@@ -105,15 +106,20 @@ class Task:
             job_labels: More labels of the taskmaster's job, not of its pod
                 (e.g. the cancel label of a task cancelled before its pod
                 existed).
+            ignore_error: The indexes of the executors whose errors are
+                ignored (TES `ignore_error`; the annotation `ignore-error`).
         """
         self.batch = batch
         self.core = core
         self.name = f"task-{uuid.uuid4().hex[:8]}"
+        executors = [
+            executor(self.name, index, script, **(resources or {}))
+            for index, script in enumerate(scripts)
+        ]
+        for index in ignore_error or set():
+            executors[index]["metadata"]["annotations"] = {"ignore-error": "true"}
         self.data = {
-            "executors": [
-                executor(self.name, index, script, **(resources or {}))
-                for index, script in enumerate(scripts)
-            ],
+            "executors": executors,
             "inputs": inputs or [],
             "outputs": outputs or [],
             "volumes": [],

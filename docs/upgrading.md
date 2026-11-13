@@ -18,6 +18,13 @@ to the filer.
   release, then the TESK API. Tasks started meanwhile by the new TESK API
   run with the old images, which fail wildcard outputs with `path_prefix`
   or put their matches in the wrong place.
+- **`ignore_error`**: the taskmaster goes on after a failed executor whose
+  job has the annotation `ignore-error: "true"` (see
+  [Taskmaster](taskmaster.md#what-it-does)), which a TESK API release that
+  accepts `executors[].ignore_error: true` sets
+  ([tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
+  Older taskmasters ignore the annotation and stop at the failure. Upgrade
+  the taskmaster before the TESK API.
 
 ### Hardened filer pods
 

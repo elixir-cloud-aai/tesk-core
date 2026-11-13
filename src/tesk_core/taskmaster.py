@@ -87,6 +87,10 @@ filer_backoff_env = "FILER_BACKOFF_LIMIT"
 # The setting with the seconds after which a pod that can't be scheduled
 # ends the task (`SYSTEM_ERROR`); unset, pods wait to be scheduled forever
 max_queue_env = "TESK_MAX_QUEUE_SECONDS"
+# The annotation of an executor's job with which the TESK API passes the
+# executor's `ignore_error` (TES 1.1): with the value `true`, the task goes
+# on after the executor fails
+ignore_error_annotation = "ignore-error"
 # The max queue time of the task's jobs; set by `main`
 max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;
@@ -105,9 +109,12 @@ def run_executor(
 ) -> None:
     """Run an executor job to completion.
 
-    Exits (`exit_cancelled`) if the job doesn't complete. A job that failed
-    is kept, so that the TESK API reports the executor's state
-    (`EXECUTOR_ERROR`) and logs. Executor jobs aren't retried
+    Exits (`exit_cancelled`) if the job doesn't complete, unless it failed
+    and the executor ignores errors (`ignores_error`): then it returns, and
+    the task goes on. A job that failed is kept, so that the TESK API
+    reports the executor's state (`EXECUTOR_ERROR`, unless ignored), exit
+    code and logs. An executor whose job was deleted (it never ran) stops
+    the task even if it ignores errors. Executor jobs aren't retried
     (`backoffLimit: 0`), unless the job or `EXECUTOR_BACKOFF_LIMIT` sets a
     limit; that limit also covers pods that are evicted.
 
@@ -168,8 +175,25 @@ def run_executor(
     created_jobs.append(job)
 
     status = job.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
+    if status == "Failed" and not job.deleted and ignores_error(executor):
+        logger.warning("Executor job '%s' failed; ignoring the error", jobname)
+        return
     if status != "Complete":
         exit_cancelled("Got status " + status)
+
+
+def ignores_error(executor: dict[str, Any]) -> bool:
+    """Tell whether the task goes on after the executor fails.
+
+    Args:
+        executor: The manifest of the executor job.
+
+    Returns:
+        Whether the job has the annotation `ignore_error_annotation` with
+        the value `true` (from the executor's `ignore_error`).
+    """
+    annotations = executor.get("metadata", {}).get("annotations") or {}
+    return bool(annotations.get(ignore_error_annotation) == "true")
 
 
 # TODO move this code to PVC class

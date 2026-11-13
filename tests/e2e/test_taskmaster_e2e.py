@@ -57,6 +57,35 @@ def test_failing_executor(run_task: Callable[..., Task]) -> None:
     assert task.job("-ex-01") is None
 
 
+def test_executor_ignoring_error(
+    run_task: Callable[..., Task], core: client.CoreV1Api
+) -> None:
+    """Test that the task goes on after an executor whose error is ignored.
+
+    The failed executor's job is kept failed, so that the TESK API reports
+    its exit code; the next executor and the outputs filer run, and the PVC
+    is deleted as for a task that completed.
+    """
+    upload = f"/out-{uuid.uuid4().hex[:8]}.txt"
+    task = run_task(
+        ["exit 3", "echo -n after > /data/out/c.txt"],
+        outputs=[{"path": "/data/out/c.txt", "type": "FILE", "url": HTTP_URL + upload}],
+        ignore_error={0},
+    )
+
+    assert task.wait_finished() == "Complete", task.logs()
+
+    assert condition(task.job("-ex-00"), "Failed")
+    for suffix in ("-ex-01", "-outputs-filer"):
+        job = task.job(suffix)
+        assert job is not None, suffix
+        assert condition(job, "Complete"), suffix
+    assert "ignoring the error" in task.logs()
+    log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
+    assert f"PUT {upload} 'after'" in log
+    task.wait(task.pvc_gone, "the PVC to be deleted")
+
+
 def test_cancel_running_task(run_task: Callable[..., Task]) -> None:
     """Test that a task cancelled while an executor runs deletes that job.
 

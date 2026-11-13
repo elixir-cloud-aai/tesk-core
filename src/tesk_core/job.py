@@ -107,6 +107,10 @@ class Job:
             tried again; a job that is gone then counts as deleted.
         delete_unschedulable: Whether such a job is deleted, rather than
             failed and kept (`fail`).
+        deleted: Whether the job was deleted, rather than failed and kept,
+            as its pod couldn't be scheduled in time (`delete_unscheduled`)
+            or the Kubernetes API rejected failing it (`fail`): its
+            container never ran, or its state and logs are gone.
     """
 
     def __init__(
@@ -132,6 +136,7 @@ class Job:
         self.max_queue: int | None = None
         self.delete_unschedulable = False
         self.deleting = False
+        self.deleted = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -350,6 +355,7 @@ class Job:
             self.delete(request_timeout=DELETE_TIMEOUT)
         except ApiException as ex:
             if ex.status == 404:
+                self.deleted = True
                 return "Failed"
             if ex.status is not None and 400 <= ex.status < 500:
                 return self.fail(UNSCHEDULED_REASON)
@@ -360,6 +366,7 @@ class Job:
             logging.warning("Can't delete job '%s' (%s) yet", self.name, ex)
             self.deleting = True
             return "Running"
+        self.deleted = True
         return "Failed"
 
     def fail(self, reason: str = "its pod can't start") -> str:
@@ -392,6 +399,7 @@ class Job:
                     "Can't fail job '%s' (%s); deleting it", self.name, ex.status
                 )
                 self.delete_quietly()
+                self.deleted = True
                 return "Failed"
             logging.warning("Can't fail job '%s' (%s) yet", self.name, ex.status)
             return "Running"

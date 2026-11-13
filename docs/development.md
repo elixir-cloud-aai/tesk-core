@@ -89,7 +89,8 @@ task, with the task's JSON and its pod's labels, in a namespace with the
 taskmaster's service account and role (the rules of TESK's Helm chart) and
 a small HTTP server for inputs and outputs (`tests/e2e/manifests/`). They
 check the resulting jobs, PVCs and uploads: a task with inputs and outputs,
-a failing executor, a cancelled task, and a task that can't be scheduled
+a failing executor, an executor whose error is ignored, a cancelled task,
+and a task that can't be scheduled
 (`TESK_MAX_QUEUE_SECONDS`). The images run with `imagePullPolicy: Never`,
 and the filer image also runs the executors and the HTTP server, so no
 other image is pulled. The unit tests in `tests/unit/test_manifests.py`

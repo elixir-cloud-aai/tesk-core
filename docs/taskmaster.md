@@ -40,6 +40,22 @@ from the taskmaster's exit code: an executor job that failed gives
 `EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
 keeps the jobs that failed, with the logs of their pods that ended.
 
+An executor can ignore its errors (TES 1.1 `executors[].ignore_error`):
+the TESK API then gives the executor's job the annotation
+`ignore-error: "true"`. If such an executor's job fails, the taskmaster
+logs a warning (`Executor job '...' failed; ignoring the error`), keeps
+the job, and goes on with the next executor and, after the last, the
+outputs filer, as if the executor had completed. The TESK API reports the
+executor's exit code and logs from the kept job, and the task's state from
+the other jobs (`COMPLETE` if they complete); this needs a TESK API
+release that passes `ignore_error` (see
+[tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
+Only the job's failure is ignored: a cancelled task stops as before, and
+so does a task whose executor's job was deleted because its pod couldn't
+be scheduled in time, or because the job couldn't be failed (see below):
+that executor never ran, or its state is gone. Other values of the
+annotation, or none, stop the task at the executor's failure.
+
 The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
 storage only once no pod refers to it: until the task's jobs, and so their
