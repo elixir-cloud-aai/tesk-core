@@ -139,8 +139,8 @@ Kubernetes would also restart failed containers within the pod.
 
 To cancel a task, the TESK API labels the taskmaster's job and, if it runs,
 its pod with `task-status: Cancelled`. The taskmaster checks for this label
-before it creates the first job, before each executor and the outputs
-filer, and while it polls: on its pod, through `/podinfo/labels` (a
+before it creates the PVC, before the inputs filer, each executor and the
+outputs filer, and while it polls: on its pod, through `/podinfo/labels` (a
 Kubernetes downward API volume), and on its job, read from the Kubernetes
 API (the job's name is in the pod's `job-name` label). A task that was
 cancelled while its taskmaster's pod was pending, or before the pod existed,

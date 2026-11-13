@@ -149,8 +149,9 @@ def test_cancelled_task_deletes_pvc(
         mock_cancelled: The mocked check for cancellation.
         data: The task.
     """
-    # Not cancelled before the executor, but before the outputs filer
-    mock_cancelled.side_effect = [False, True]
+    # Not cancelled before the inputs filer and the executor, but before the
+    # outputs filer
+    mock_cancelled.side_effect = [False, False, True]
 
     with pytest.raises(SystemExit):
         run_task(data, "filer_name", "filer_version")
@@ -160,6 +161,38 @@ def test_cancelled_task_deletes_pvc(
         "task-1000-inputs-filer",
         "task-1000-ex-00",
     ]
+
+
+@patch("tesk_core.taskmaster.stop_task_jobs")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=True)
+@patch("tesk_core.taskmaster.PVC.delete", autospec=True)
+@patch("tesk_core.taskmaster.PVC.create")
+def test_cancelled_before_inputs_filer(
+    mock_create: MagicMock,
+    mock_delete: MagicMock,
+    mock_cancelled: MagicMock,
+    mock_stop: MagicMock,
+    data: dict[str, Any],
+) -> None:
+    """Test that a task cancelled once its claim exists starts no inputs filer.
+
+    The check before the inputs filer follows the creation of the claim
+    (elixir-cloud-aai/tesk-core#132); the claim is deleted.
+
+    Args:
+        mock_create: The mocked creation of the claim.
+        mock_delete: The mocked deletion of the claim.
+        mock_cancelled: The mocked check for cancellation.
+        mock_stop: The mocked stop of the task's running jobs.
+        data: The task.
+    """
+    with pytest.raises(SystemExit) as exc:
+        run_task(data, "filer_name", "filer_version")
+
+    assert exc.value.code == 0
+    assert taskmaster.created_jobs == []
+    mock_stop.assert_called_once_with(data)
+    assert_deleted_task_pvc(mock_delete)
 
 
 @patch("tesk_core.taskmaster.PVC.delete", autospec=True)
@@ -475,13 +508,13 @@ def test_cancelled_after_executors_without_outputs(
     """
     data["outputs"] = []
     monkeypatch.setenv(taskmaster.keep_failed_pvc_env, "true")
-    # Not cancelled before the executor, but after it
-    mock_cancelled.side_effect = [False, True]
+    # Not cancelled before the inputs filer and the executor, but after it
+    mock_cancelled.side_effect = [False, False, True]
 
     with pytest.raises(SystemExit):
         run_task(data, "filer_name", "filer_version")
 
     # The executor ran to its end, and no outputs filer after it
     assert mock_run.call_args_list[-1].args[0].name == "task-1000-ex-00"
-    assert mock_cancelled.call_count == 2
+    assert mock_cancelled.call_count == 3
     mock_delete.assert_not_called()

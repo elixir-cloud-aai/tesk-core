@@ -350,6 +350,10 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     if not data["inputs"]:
         return pvc
 
+    # Checked again before the first job, after the claim was created
+    if check_cancelled():
+        cancel_task(data, "Cancelled before the inputs filer")
+
     filerjob = new_job(
         filer.get_spec("inputs", args.debug),
         task_name + "-inputs-filer",
