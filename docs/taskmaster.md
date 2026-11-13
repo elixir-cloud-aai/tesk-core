@@ -40,6 +40,36 @@ from the taskmaster's exit code: an executor job that failed gives
 `EXECUTOR_ERROR`, a filer job that failed `SYSTEM_ERROR`. So the taskmaster
 keeps the jobs that failed, with the logs of their pods that ended.
 
+An executor can ignore its errors (TES 1.1 `executors[].ignore_error`):
+the TESK API then gives the executor's job the annotation
+`ignore-error: "true"`. If such an executor's job fails, the taskmaster
+logs a warning (`Executor job '...' failed; ignoring the error`), keeps
+the job, and goes on with the next executor and, after the last, the
+outputs filer, as if the executor had completed. Before it goes on, it
+waits until Kubernetes has marked the job `Failed`, which Kubernetes 1.31
+and later do only once the job's pods have ended (after `FailureTarget`),
+so that they don't run next to the next job on the task's volume; if that
+takes longer than `--pod-timeout`, the task stops. The TESK API reports the
+executor's exit code and logs from the kept job, and the task's state from
+the other jobs (`COMPLETE` if they complete); this needs a TESK API
+release that passes `ignore_error` (see
+[tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
+Any failure of the job's pods is ignored: a command that exits with a
+non-zero code, but also a pod that Kubernetes evicts, kills for using too
+much memory, or loses with its node, as the taskmaster can't tell these
+apart. A job that the taskmaster ended itself still stops the task, as
+for any executor, as its container may never have run: one it failed
+because a pod couldn't start (e.g. an image that can't be pulled) or
+wasn't scheduled in time, also in an earlier run of the taskmaster (the
+job's `activeDeadlineSeconds` is 1, see below), and one it deleted. That
+holds also when the taskmaster's attempt to fail or delete the job got a
+server error, even if the job then fails on its own: in doubt, the task
+stops. The TESK API is expected not to ignore such a failure either: a
+job that the taskmaster failed has the condition `Failed` with the reason
+`DeadlineExceeded`, and a deleted job is missing, which gives
+`SYSTEM_ERROR`. A cancelled task stops as before. Other values of the
+annotation, or none, stop the task at the executor's failure.
+
 The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
 storage only once no pod refers to it: until the task's jobs, and so their
