@@ -32,8 +32,9 @@ to the filer.
   reports as `logs[].outputs`
   ([tesk-api#160](https://github.com/elixir-cloud-aai/tesk-api/issues/160)).
   Both images must be of this release; with an older filer or taskmaster,
-  tasks run as before, without the annotation. No new permissions are
-  needed.
+  tasks run as before, without the annotation (a new taskmaster with an
+  older filer logs the warning `Can't read the output file logs` for each
+  task with outputs). No new permissions are needed.
 
 ### Hardened filer pods
 

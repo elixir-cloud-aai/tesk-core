@@ -96,18 +96,27 @@ Once all outputs are uploaded, the outputs filer prints the uploaded files
 the log level:
 
 ```text
-TESK_OUTPUT_FILE_LOGS [{"url":"s3://bucket/run/s1/out.txt","path":"/data/s1/out.txt","size_bytes":"3"}]
+TESK_OUTPUT_FILE_LOGS [{"output":0,"relative":"s1/out.txt","size_bytes":"3"}]
 ```
 
-The list has one entry per uploaded file, in order of paths per output:
-the file of a `FILE` output, every file below a `DIRECTORY` output, and
-every file that the wildcards of an output with `path_prefix` matched (or
-that is below a matched directory). `url` is where the file was uploaded,
-`path` its path in the executors and `size_bytes` its size, as a string.
-Empty directories give no entries. Wildcard outputs without `path_prefix`
-(TES 1.0) give none either. If an output fails, the filer prints no line.
-The taskmaster reads the line from the pod's log and stores it for the
-TESK API (see [Taskmaster](taskmaster.md#what-it-does)).
+The list has one entry per uploaded file: the file of a `FILE` output,
+every file below a `DIRECTORY` output, and every file that the wildcards
+of an output with `path_prefix` matched (or that is below a matched
+directory). `output` is the index of the output in the task, `relative`
+the file's path below the output's path (below `path_prefix` for
+wildcards; empty for a file output) and `size_bytes` its size, as a
+string. The entries come in the order of the outputs; within an output,
+wildcard matches by path, and in a directory the files by name before
+those of its subdirectories. The line holds no URLs, which may carry
+credentials (e.g. presigned URLs), so that they don't reach the pod's log:
+the taskmaster derives them from the task. Empty directories give no
+entries. Wildcard outputs without `path_prefix` (TES 1.0) give none
+either. The line can be long, with one entry per file; entries beyond
+100,000 bytes are left out, with a warning (shown with `--debug`). If an
+output fails, or the files can't be listed, the filer prints no line; the
+latter is logged as a warning and doesn't fail the filer. The taskmaster
+reads the line from the pod's log and stores the files for the TESK API
+(see [Taskmaster](taskmaster.md#what-it-does)).
 
 ## Protocols
 

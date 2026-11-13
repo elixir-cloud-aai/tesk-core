@@ -22,7 +22,7 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from urllib3.exceptions import HTTPError
 
-from tesk_core.filer import OUTPUT_LOGS_MARKER
+from tesk_core.filer import OUTPUT_LOGS_MARKER, output_file_url
 from tesk_core.filer_class import Filer
 from tesk_core.job import (
     JOB_COMPLETE_CONDITIONS,
@@ -98,8 +98,10 @@ output_logs_annotation = "output-file-logs"
 # The most bytes of that annotation; Kubernetes allows 256 KiB for all of a
 # job's annotations together
 max_output_logs_bytes = 200_000
-# The keys of each uploaded file in that annotation
-output_log_keys = {"url", "path", "size_bytes"}
+# The keys of each uploaded file as the outputs filer lists it
+output_log_keys = {"output", "relative", "size_bytes"}
+# The lines at the end of the outputs filer's log that are read for them
+output_logs_tail_lines = 10
 # The max queue time of the task's jobs; set by `main`
 max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;
@@ -492,7 +494,7 @@ def run_task(
         )
         if status != "Complete":
             exit_cancelled("Got status " + status)
-        record_output_logs(task_name + "-outputs-filer")
+        record_output_logs(task_name + "-outputs-filer", data["outputs"])
     # The claim of `init_pvc`, if any: deleted also when no outputs filer ran
     delete_created_pvc(keep_failed=False)
 
@@ -940,7 +942,7 @@ def log_job_read_error(job_name: str, ex: Exception) -> None:
     )
 
 
-def parse_output_logs(log: str) -> list[dict[str, str]] | None:
+def parse_output_logs(log: str, outputs: int) -> list[dict[str, Any]] | None:
     """Read the uploaded files from the log of the outputs filer's pod.
 
     The filer prints them as JSON on its last line that starts with
@@ -948,10 +950,13 @@ def parse_output_logs(log: str) -> list[dict[str, str]] | None:
 
     Args:
         log: The pod's log.
+        outputs: The number of the task's outputs.
 
     Returns:
-        The files, each with exactly the keys `url`, `path` and `size_bytes`
-        (a whole number), or `None` if the log has none or they're invalid.
+        The files as the filer lists them (see `output_file_logs`), each
+        with exactly the keys `output` (the index of one of the outputs),
+        `relative` and `size_bytes` (a whole number), or `None` if the log
+        has none or they're invalid.
     """
     prefix = OUTPUT_LOGS_MARKER + " "
     lines = [line for line in log.splitlines() if line.startswith(prefix)]
@@ -964,7 +969,10 @@ def parse_output_logs(log: str) -> list[dict[str, str]] | None:
     if not isinstance(logs, list) or not all(
         isinstance(entry, dict)
         and entry.keys() == output_log_keys
-        and all(isinstance(value, str) for value in entry.values())
+        and type(entry["output"]) is int
+        and 0 <= entry["output"] < outputs
+        and isinstance(entry["relative"], str)
+        and isinstance(entry["size_bytes"], str)
         and entry["size_bytes"].isascii()
         and entry["size_bytes"].isdigit()
         for entry in logs
@@ -973,59 +981,75 @@ def parse_output_logs(log: str) -> list[dict[str, str]] | None:
     return logs
 
 
-def record_output_logs(job_name: str) -> None:
+def record_output_logs(job_name: str, outputs: list[dict[str, Any]]) -> None:
     """Store the uploaded files as an annotation of the outputs filer's job.
 
     The TESK API reports them as the task's `logs[].outputs`. The files come
-    from the log of the job's succeeded pod (see `parse_output_logs`). If
-    they don't fit into `max_output_logs_bytes`, the last ones are left
-    out, with a warning. Errors are logged, not raised: the outputs are
+    from the log of the job's succeeded pod (see `parse_output_logs`), with
+    their URLs and paths from the outputs (see `output_file_url`). If they
+    don't fit into `max_output_logs_bytes`, the last ones are left out,
+    with a warning. Any error is logged, not raised: the outputs are
     uploaded, so the task completes without output file logs.
 
     Args:
         job_name: The name of the outputs filer's job.
+        outputs: The task's outputs.
     """
-    core_api = client.CoreV1Api()
     try:
+        core_api = client.CoreV1Api()
         pods = core_api.list_namespaced_pod(
             args.namespace,
             label_selector=f"job-name={job_name}",
             _request_timeout=job_read_timeout,
         )
+        # The job completes once, with one succeeded pod
         succeeded = [pod for pod in pods.items if pod.status.phase == "Succeeded"]
-        logs = None
+        files = None
         if succeeded:
-            logs = parse_output_logs(
+            files = parse_output_logs(
                 core_api.read_namespaced_pod_log(
                     succeeded[0].metadata.name,
                     args.namespace,
+                    tail_lines=output_logs_tail_lines,
                     _request_timeout=job_read_timeout,
-                )
+                ),
+                len(outputs),
             )
-        if logs is None:
+        if files is None:
             logger.warning("Can't read the output file logs of job '%s'", job_name)
             return
-        kept = len(logs)
-        value = json.dumps(logs, separators=(",", ":"))
-        while len(value.encode()) > max_output_logs_bytes:
-            kept -= 1
-            value = json.dumps(logs[:kept], separators=(",", ":"))
-        if kept < len(logs):
-            logger.warning(
-                "Storing only %d of %d output file logs of job '%s': the "
-                "others exceed the annotation's %d bytes",
-                kept,
-                len(logs),
-                job_name,
-                max_output_logs_bytes,
-            )
+        entries: list[dict[str, str]] = []
+        size = len("[]")
+        for file in files:
+            url, path = output_file_url(outputs[file["output"]], file["relative"])
+            entry = {"url": url, "path": path, "size_bytes": file["size_bytes"]}
+            size += len(json.dumps(entry, separators=(",", ":"))) + 1
+            if size > max_output_logs_bytes:
+                logger.warning(
+                    "Storing only %d of %d output file logs of job '%s': the "
+                    "others exceed the annotation's %d bytes",
+                    len(entries),
+                    len(files),
+                    job_name,
+                    max_output_logs_bytes,
+                )
+                break
+            entries.append(entry)
         get_batch_api().patch_namespaced_job(
             job_name,
             args.namespace,
-            {"metadata": {"annotations": {output_logs_annotation: value}}},
+            {
+                "metadata": {
+                    "annotations": {
+                        output_logs_annotation: json.dumps(
+                            entries, separators=(",", ":")
+                        )
+                    }
+                }
+            },
             _request_timeout=job_read_timeout,
         )
-    except (ApiException, HTTPError) as ex:
+    except Exception as ex:  # the outputs are uploaded
         logger.warning(
             "Can't store the output file logs of job '%s': %s",
             job_name,
