@@ -249,7 +249,7 @@ def test_main_interrupt_deletes_jobs(
 
     assert exc.value.code == 130
     created.delete_quietly.assert_called_once_with()
-    mock_signal.assert_called_once_with(signal.SIGTERM, on_sigterm)
+    assert mock_signal.call_args_list[0].args == (signal.SIGTERM, on_sigterm)
 
 
 @patch("tesk_core.taskmaster.signal.signal")
@@ -380,6 +380,76 @@ def test_stop_on_sigterm_cancelled_pvc(
         stop_on_sigterm()
 
     assert pvc.delete.called is not keep
+
+
+@patch("tesk_core.taskmaster.stop_task_jobs")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=True)
+def test_stop_on_sigterm_after_interrupted_pvc_delete(
+    mock_cancelled: MagicMock,
+    mock_stop: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a PVC delete that `SIGTERM` interrupted is tried again.
+
+    The claim is forgotten only once its delete has returned, so that
+    `stop_on_sigterm` still deletes it.
+    """
+    pvc = MagicMock()
+    pvc.delete.side_effect = [Terminated, None]
+    monkeypatch.setattr(taskmaster, "created_pvc", pvc)
+    monkeypatch.setattr(taskmaster, "task_data", task())
+    monkeypatch.setenv("KEEP_FAILED_PVC", "false")
+
+    with pytest.raises(Terminated):
+        taskmaster.delete_created_pvc()
+    with pytest.raises(SystemExit) as exc:
+        stop_on_sigterm()
+
+    assert exc.value.code == 0
+    assert pvc.delete.call_count == 2
+    assert taskmaster.created_pvc is None
+
+
+@pytest.mark.parametrize("error", [OSError("labels"), RuntimeError("client")])
+@patch("tesk_core.taskmaster.stop_task_jobs")
+@patch("tesk_core.taskmaster.check_cancelled")
+def test_stop_on_sigterm_unexpected_error(
+    mock_cancelled: MagicMock,
+    mock_stop: MagicMock,
+    error: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that an unexpected error after `SIGTERM` still exits with 143.
+
+    It is logged, and the jobs are kept, as without cancellation.
+    """
+    mock_cancelled.side_effect = error
+    monkeypatch.setattr(taskmaster, "task_data", task())
+
+    with pytest.raises(SystemExit) as exc:
+        stop_on_sigterm()
+
+    assert exc.value.code == 143
+    mock_stop.assert_not_called()
+    assert "Can't check for cancellation after SIGTERM" in caplog.text
+
+
+@patch("tesk_core.taskmaster.clean_on_interrupt")
+@patch("tesk_core.taskmaster.run_main", side_effect=KeyboardInterrupt)
+def test_main_interrupt_ignores_sigterm(
+    mock_run_main: MagicMock, mock_clean: MagicMock
+) -> None:
+    """Test that `SIGTERM` can't interrupt the cleanup after `SIGINT`."""
+    with (
+        patch("tesk_core.taskmaster.signal.signal") as mock_signal,
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == 130
+    assert mock_signal.call_args_list[-1].args == (signal.SIGTERM, signal.SIG_IGN)
+    mock_clean.assert_called_once_with()
 
 
 @patch("tesk_core.taskmaster.run_task")

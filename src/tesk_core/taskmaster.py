@@ -615,9 +615,13 @@ def stop_on_sigterm() -> NoReturn:
     (`ownerReferences`).
     """
     data = task_data
-    if data is not None and check_cancelled():
-        logger.error("Got SIGTERM on a cancelled task; stopping its jobs")
-        cancel_task(data, "Cancelled; got SIGTERM")
+    try:
+        if data is not None and check_cancelled():
+            logger.error("Got SIGTERM on a cancelled task; stopping its jobs")
+            cancel_task(data, "Cancelled; got SIGTERM")
+    except Exception:
+        # An error that the checks don't expect: exit as without cancellation
+        logger.exception("Can't check for cancellation after SIGTERM")
     logger.error("Got SIGTERM; stopping, the jobs are kept")
     sys.exit(sigterm_exit_code)
 
@@ -633,6 +637,8 @@ def main() -> None:
     try:
         run_main()
     except KeyboardInterrupt:
+        # So that `SIGTERM` (`Terminated`) can't cut the cleanup short
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         clean_on_interrupt()
         sys.exit(sigint_exit_code)
     except Terminated:
@@ -817,8 +823,6 @@ def delete_created_pvc(*, keep_failed: bool = True) -> None:
     if keep_failed and keep_failed_pvc():
         logger.info("Keeping PVC '%s' (%s)", pvc.name, keep_failed_pvc_env)
         return
-    # Forgotten first, so that it isn't deleted twice
-    created_pvc = None
     try:
         pvc.delete(request_timeout=pvc_delete_timeout)
     except ApiException as ex:
@@ -826,6 +830,10 @@ def delete_created_pvc(*, keep_failed: bool = True) -> None:
             logger.error("Can't delete PVC '%s': %s %s", pvc.name, ex.status, ex.reason)
     except HTTPError as ex:
         logger.error("Can't delete PVC '%s': %s", pvc.name, ex)
+    # Forgotten only once the delete returned, so that a delete that
+    # `SIGTERM` (`Terminated`) cut short is tried again (`stop_on_sigterm`);
+    # deleting it again only gets a 404
+    created_pvc = None
 
 
 def exit_cancelled(reason: str = "Unknown reason") -> NoReturn:

@@ -166,12 +166,14 @@ poll. Without `/podinfo/labels` (e.g. when run by hand), it doesn't check
 for cancellation at all.
 
 On `SIGINT` (e.g. Ctrl-C when run by hand), the taskmaster deletes the jobs
-that it created and exits with code 130. On `SIGTERM`, which Kubernetes
-sends when it stops the taskmaster's pod (e.g. when its job is deleted, or
-its node is drained), it logs an error and exits with code 143, and keeps
-the jobs (except for a cancelled task, see below): a new attempt of the pod, if the taskmaster's job has retries
-left, continues with them; otherwise they run until the taskmaster's job is
-deleted, by hand or after `TASK_TTL_SECONDS`, which deletes them with it (see
+that it created and exits with code 130; a `SIGTERM` then doesn't cut that
+short. On `SIGTERM`, which Kubernetes sends when it stops the taskmaster's
+pod (e.g. when its job is deleted, or its node is drained), it logs an
+error and exits with code 143, and keeps the jobs (except for a cancelled
+task, see below): a new attempt of the pod, if the taskmaster's job has
+retries left, continues with them; otherwise they run until the
+taskmaster's job is deleted, by hand or after `TASK_TTL_SECONDS`, which
+deletes them with it (see
 [Deleting finished tasks](#deleting-finished-tasks)). Deleting them on
 `SIGTERM` would restart a running executor from scratch after, e.g., a
 node drain; a run by hand has no new attempt that would continue them.
