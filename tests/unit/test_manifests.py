@@ -79,9 +79,24 @@ def test_executor_job_is_valid(
     validate(client.V1Job, executor)
 
 
+@pytest.mark.parametrize("secret", [None, "tesk-ftp"])
 @pytest.mark.parametrize("mode", ["inputs", "outputs"])
-def test_filer_job_is_valid(data: dict[str, Any], mode: str) -> None:
-    """Test that a filer job, with all its options, is a valid job."""
+def test_filer_job_is_valid(
+    data: dict[str, Any],
+    mode: str,
+    secret: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a filer job, with all its options, is a valid job.
+
+    With the FTP credentials as values and from a secret, and with
+    resources.
+    """
+    if secret is not None:
+        monkeypatch.setenv("TESK_FTP_SECRET_NAME", secret)
+    monkeypatch.setenv(
+        "FILER_RESOURCES", '{"requests": {"cpu": "100m"}, "limits": {"memory": "1Gi"}}'
+    )
     pvc = PVC("task-1000-pvc", 1, "tesk")
     pvc.set_volume_mounts(generate_mounts(data, pvc))
     filer = Filer("task-1000-filer", data, "filer", "1.0", True, "task-1000")
