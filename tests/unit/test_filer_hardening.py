@@ -252,6 +252,8 @@ def test_setting_not_an_object_keeps_default(
         ("FILER_SECURITY_CONTEXT", client.V1SecurityContext, '{"privileged": "maybe"}'),
         ("FILER_SECURITY_CONTEXT", client.V1SecurityContext, '{"fsGroup": 1000}'),
         ("FILER_RESOURCES", client.V1ResourceRequirements, '{"limits": 5}'),
+        # Quantities must be strings, as documented
+        ("FILER_RESOURCES", client.V1ResourceRequirements, '{"limits": {"cpu": 1}}'),
         ("FILER_RESOURCES", client.V1ResourceRequirements, '{"limit": {"cpu": "1"}}'),
     ],
 )
