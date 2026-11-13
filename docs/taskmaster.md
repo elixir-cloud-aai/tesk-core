@@ -50,16 +50,21 @@ executor's exit code and logs from the kept job, and the task's state from
 the other jobs (`COMPLETE` if they complete); this needs a TESK API
 release that passes `ignore_error` (see
 [tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
-Only the executor's own failure is ignored: its pods failed, e.g. as its
-command exited with a non-zero code. A job that the taskmaster ended
-itself still stops the task, as for any executor: one it failed because
-a pod couldn't start (e.g. an image that can't be pulled) or wasn't
-scheduled in time, also in an earlier run of the taskmaster (the job's
-`activeDeadlineSeconds` is 1, see below), and one it deleted. Its
-container may never have run, and the TESK API doesn't ignore such a
-failure either (Kubernetes marks the job failed with the reason
-`DeadlineExceeded`). A cancelled task stops as before. Other values of
-the annotation, or none, stop the task at the executor's failure.
+Any failure of the job's pods is ignored: a command that exits with a
+non-zero code, but also a pod that Kubernetes evicts, kills for using too
+much memory, or loses with its node, as the taskmaster can't tell these
+apart. A job that the taskmaster ended itself still stops the task, as
+for any executor, as its container may never have run: one it failed
+because a pod couldn't start (e.g. an image that can't be pulled) or
+wasn't scheduled in time, also in an earlier run of the taskmaster (the
+job's `activeDeadlineSeconds` is 1, see below), and one it deleted. That
+holds also when the taskmaster's attempt to fail or delete the job got a
+server error, even if the job then fails on its own: in doubt, the task
+stops. The TESK API is expected not to ignore such a failure either: a
+job that the taskmaster failed has the condition `Failed` with the reason
+`DeadlineExceeded`, and a deleted job is missing, which gives
+`SYSTEM_ERROR`. A cancelled task stops as before. Other values of the
+annotation, or none, stop the task at the executor's failure.
 
 The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
