@@ -337,7 +337,13 @@ def test_ftp_credentials_as_values(
     with caplog.at_level(logging.WARNING):
         filer.set_ftp("ftp-user-1", "ftp-pw-1")
 
-    assert env_entry(filer, "TESK_FTP_USERNAME")["value"] == "ftp-user-1"
-    assert env_entry(filer, "TESK_FTP_PASSWORD")["value"] == "ftp-pw-1"
+    assert env_entry(filer, "TESK_FTP_USERNAME") == {
+        "name": "TESK_FTP_USERNAME",
+        "value": "ftp-user-1",
+    }
+    assert env_entry(filer, "TESK_FTP_PASSWORD") == {
+        "name": "TESK_FTP_PASSWORD",
+        "value": "ftp-pw-1",
+    }
     assert "TESK_FTP_SECRET_NAME" in caplog.text
     assert "ftp-pw-1" not in caplog.text

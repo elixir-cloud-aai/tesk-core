@@ -314,11 +314,13 @@ Filer pods have the labels `app.kubernetes.io/component: filer` and
 `app.kubernetes.io/part-of: tesk`. They need no incoming connections, and
 outgoing ones only to DNS and to the storage of the tasks' inputs and
 outputs. A `NetworkPolicy` (with a network plugin that enforces it) can
-limit them to that. This example allows DNS, and HTTPS to every address
-outside the private and link-local ranges (which also excludes the
-cluster's own networks in most clusters); adjust the ports and address
-ranges to the protocols and storage you use, e.g. port 21 and the server's
-passive ports for FTP, or the address of an S3 store in the cluster:
+limit them to that. This example allows DNS to the cluster's DNS pods in
+`kube-system`, and HTTPS to every IPv4 and IPv6 address outside the private
+and link-local ranges (which also excludes the cluster's own networks in
+most clusters); adjust the DNS pods' namespace and labels to your cluster,
+and the ports and address ranges to the protocols and storage you use, e.g.
+port 21 and the server's passive ports for FTP, or the address of an S3
+store in the cluster:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -334,7 +336,9 @@ spec:
   policyTypes: [Ingress, Egress]
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
           podSelector:
             matchLabels:
               k8s-app: kube-dns
@@ -345,6 +349,9 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+        - ipBlock:
+            cidr: ::/0
+            except: [fc00::/7, fe80::/10]
       ports:
         - {protocol: TCP, port: 443}
 ```
