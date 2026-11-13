@@ -19,6 +19,37 @@ to the filer.
   run with the old images, which fail wildcard outputs with `path_prefix`
   or put their matches in the wrong place.
 
+### Hardened filer pods
+
+The filer's pods now run with a restricted security context: as a non-root
+user, with the `RuntimeDefault` seccomp profile, without privilege
+escalation and capabilities, and with a read-only root filesystem (with a
+writable `/tmp`); they also have the labels
+`app.kubernetes.io/component: filer` and `app.kubernetes.io/part-of: tesk`
+(see [Pod security](filer.md#pod-security)). The filer image has run as
+user 100 for a long time, and it writes only to its volumes, so this needs
+no change in most deployments. If filer pods fail to start (e.g.
+`CreateContainerConfigError` because a policy of the cluster sets a
+different user) or can't write a task's volume, set
+`FILER_POD_SECURITY_CONTEXT` or `FILER_SECURITY_CONTEXT` in the
+taskmaster's environment (see
+[Environment variables](taskmaster.md#environment-variables)); `{}` restores
+the old behaviour for one of them. `FILER_RESOURCES` newly sets the filer's
+resource requests and limits. TESK's Helm chart doesn't have values for
+these settings yet: the TESK API passes its environment variable
+`TESK_API_TASKMASTER_ENVIRONMENT_<NAME>` on to the taskmaster as `<NAME>`.
+
+### FTP credentials by reference
+
+Set `TESK_FTP_SECRET_NAME` in the taskmaster's environment to the name of
+the secret with the FTP credentials (keys `username` and `password`; with
+TESK's Helm chart, the value of `ftp.classicFtpSecret`, or the chart's
+full name followed by `-ftp` if that is null; see
+`kubectl get secrets --namespace <namespace>`). The filer's jobs then reference
+that secret instead of holding the credentials as values (see
+[FTP](filer.md#ftp)). Without it, they hold them as before, and the
+taskmaster logs a warning for each task with FTP credentials.
+
 ### Outputs with wildcards and `path_prefix`
 
 Outputs whose `path` has wildcards and that have a `path_prefix` (TES 1.1)

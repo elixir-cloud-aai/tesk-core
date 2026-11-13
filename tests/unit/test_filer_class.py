@@ -73,6 +73,7 @@ class TestFilerClassEnv:
                 "name": "transfer-volume",
                 "mountPath": path.CONTAINER_BASE_PATH,
             },
+            {"name": "tmp", "mountPath": "/tmp"},
             {"mountPath": "/aws", "name": "s3-conf", "readOnly": True},
         ]
 
@@ -81,6 +82,7 @@ class TestFilerClassEnv:
                 "name": "transfer-volume",
                 "persistentVolumeClaim": {"claimName": "transfer-pvc"},
             },
+            {"name": "tmp", "emptyDir": {}},
             {
                 "name": "s3-conf",
                 "secret": {
@@ -110,9 +112,11 @@ class TestFilerClassNoEnv:
         pprint(f.getVolumeMounts())
 
         assert f.getVolumeMounts() == [
-            {"mountPath": "/aws", "name": "s3-conf", "readOnly": True}
+            {"name": "tmp", "mountPath": "/tmp"},
+            {"mountPath": "/aws", "name": "s3-conf", "readOnly": True},
         ]
         assert f.getVolumes() == [
+            {"name": "tmp", "emptyDir": {}},
             {
                 "name": "s3-conf",
                 "secret": {
@@ -123,7 +127,7 @@ class TestFilerClassNoEnv:
                     ],
                     "optional": True,
                 },
-            }
+            },
         ]
 
     def test_image_pull_policy(self) -> None:
