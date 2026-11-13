@@ -156,6 +156,20 @@ TESK's Helm chart sets the credentials from a Kubernetes secret
 [Configuration](https://tesk.readthedocs.io/en/latest/configuration/) in the
 TESK documentation).
 
+The taskmaster gets the credentials in its environment. If
+`TESK_FTP_SECRET_NAME` names their secret (keys `username` and `password`,
+as in the secret of TESK's Helm chart), the filer's job references that
+secret (`valueFrom.secretKeyRef`) and holds no credentials. The secret must
+be in the namespace of the tasks and have both keys; the taskmaster doesn't
+check it, and the filer's pod can't start without it
+(`CreateContainerConfigError`; see
+[What it does](taskmaster.md#what-it-does) for how such pods time out).
+Otherwise, the
+job holds them as values, readable by everyone who can read jobs in the
+namespace for as long as the job is kept (see `TASK_TTL_SECONDS` in
+[Taskmaster](taskmaster.md#environment-variables)), and the taskmaster logs
+a warning.
+
 `TESK_FTP_HOSTS` lists the hosts that the credentials are sent to,
 separated by commas, e.g.
 `ftp.example.org,data.example.org:2121,[2001:db8::1]`:
@@ -265,3 +279,79 @@ password <password>
 For FTP, an entry without a port is used for port 21 only (see
 [FTP](#ftp)); a `default` entry is used for every host and port without an
 entry of its own.
+
+## Pod security
+
+The taskmaster runs the filer with these security settings by default,
+which meet the `restricted`
+[Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
+
+- Pod: `runAsNonRoot: true` (the filer image runs as user 100; a filer
+  image of your own needs a numeric `USER` other than 0, or `runAsUser`)
+  and the `RuntimeDefault` seccomp profile.
+- Container: no privilege escalation, all capabilities dropped, and a
+  read-only root filesystem; `/tmp` is a writable `emptyDir` (limited only
+  by an `ephemeral-storage` limit, e.g. in `FILER_RESOURCES`; or the shared
+  volume, if `CONTAINER_BASE_PATH` is `/tmp`), and the filer writes only to
+  its volumes.
+- No service account token (`automountServiceAccountToken: false`): the
+  filer doesn't use the Kubernetes API.
+
+The settings `FILER_POD_SECURITY_CONTEXT` and `FILER_SECURITY_CONTEXT` of
+the taskmaster replace the pod's and the container's security context
+(JSON objects with the fields of Kubernetes' `PodSecurityContext` and
+`SecurityContext`); `{}` leaves one out. For example, to run the filer as
+user 1000 with group 1000 on the task's volume, set
+`FILER_POD_SECURITY_CONTEXT` to
+`{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}}`
+(repeat the defaults that you want to keep). On OpenShift, the defaults
+work with the `restricted-v2` security context constraint, which assigns
+the user. `FILER_RESOURCES` sets the container's resource requests and
+limits (none by default, so a `LimitRange` of the namespace applies, if
+any); see [Taskmaster](taskmaster.md#environment-variables).
+
+Filer pods have the labels `app.kubernetes.io/component: filer` and
+`app.kubernetes.io/part-of: tesk`. They need no incoming connections, and
+outgoing ones only to DNS and to the storage of the tasks' inputs and
+outputs. A `NetworkPolicy` (with a network plugin that enforces it) can
+limit them to that. This example allows DNS to the cluster's DNS pods in
+`kube-system`, and HTTPS to every IPv4 and IPv6 address outside the private
+and link-local ranges (which also excludes the cluster's own networks in
+most clusters); adjust the DNS pods' namespace and labels to your cluster,
+and the ports and address ranges to the protocols and storage you use, e.g.
+port 21 and the server's passive ports for FTP, or the address of an S3
+store in the cluster:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tesk-filer
+  namespace: <namespace of the tasks>
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: filer
+      app.kubernetes.io/part-of: tesk
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+        - ipBlock:
+            cidr: ::/0
+            except: [fc00::/7, fe80::/10]
+      ports:
+        - {protocol: TCP, port: 443}
+```

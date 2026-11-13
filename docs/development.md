@@ -157,7 +157,8 @@ Commits](https://www.conventionalcommits.org/) format, at most 50
 characters). For a release, `main` is moved forward to a commit of `dev`.
 Pushing a signed, annotated version tag runs the workflow `Release`
 (`.github/workflows/release.yml`), which publishes both images to Docker Hub,
-as `<org>/tesk-core-taskmaster` and `<org>/tesk-core-filer`:
+as `<org>/tesk-core-taskmaster` and `<org>/tesk-core-filer`, and creates the
+GitHub release:
 
 | Tag | Image tags | Example |
 |---|---|---|
@@ -171,23 +172,54 @@ the tag's (without `v`; checked in the images). Before tagging, set the
 release in a pull request:
 
 - `CITATION.cff`: `version`, the tag without `v` (e.g., `0.11.0rc1` for
-  `v0.11.0rc1`), and `date-released`.
+  `v0.11.0rc1`), and `date-released`;
+- `docs/releases/<version>.md`, with the version as in `CITATION.cff`
+  (e.g., `docs/releases/0.12.0rc1.md`): the curated release notes, in the
+  organisation's format: an intro paragraph saying what the release brings,
+  with a link to the upgrade notes if operators must act, then the sections
+  `## Breaking changes`, `## Features`, `## Security`, `## Fixes`,
+  `## Documentation` and `## Maintenance` (in this order, empty ones left
+  out), holding bullets only, each ending with its issue and pull request
+  numbers, e.g., `(#12, #34)`. Links must be absolute, as the notes are
+  published on GitHub (the docs build skips `docs/releases/`). The release
+  workflow adds GitHub's generated notes; the shared action
+  [`publish-release`](https://github.com/elixir-cloud-aai/.github/tree/main/actions/publish-release)
+  describes the format and its checks.
 
 The release workflow first checks, without running any code of the tagged
 commit, that the tag is a release version, annotated and signed (with a
 signature that GitHub verified), and on `main`; then that `CITATION.cff` has
-the version and that CI passed for the commit's push to `dev`. It then builds
-both images and pushes them by digest, untagged; scans exactly those digests
-(failing on critical and high vulnerabilities that have a fix, except those
-accepted in `.trivyignore.yaml`), in a job without credentials; and only then
-attests their build provenance, signs them (Sigstore) and tags them. Pushing
-and publishing each wait for an approval in the environment `release`, which
-only allows `v*` tags and has the secrets `DOCKERHUB_LOGIN` and
-`DOCKERHUB_TOKEN`. A version that is published never moves to another
+the version, that the curated notes exist and are in the format, and that CI
+passed for the commit's push to `dev`. It then builds both images and pushes
+them by digest, untagged; scans exactly those digests (failing on critical
+and high vulnerabilities that have a fix, except those accepted in
+`.trivyignore.yaml`), in a job without credentials; and only then attests
+their build provenance, signs them (Sigstore) and tags them. Pushing and
+publishing the images each wait for an approval in the environment
+`release`, which only allows `v*` tags and has the secrets
+`DOCKERHUB_LOGIN` and `DOCKERHUB_TOKEN`. A version that is published never moves to another
 digest: if a release fails after publishing, follow it with a higher version
 (`latest` goes by tags). Only admins can create release tags, and nobody can
-move or delete them (tag rulesets). The workflow doesn't create a GitHub
-release; write its notes in the format of the organisation's other repos.
+move or delete them (tag rulesets).
+
+Once both images are published, the job `Publish release` creates the GitHub
+release of the tag (no manual step): the curated notes of the tagged commit,
+then GitHub's generated notes under `## Commits` (without their
+`## What's Changed` header, with "New Contributors"), and GitHub's
+`**Full Changelog**` line last. Versions below 1.0.0 and `a`, `b` and `rc`
+versions are pre-releases, so all releases of tesk-core are for now. The job
+needs no approval and no secrets, only `contents: write`. `Prepare release`
+runs the same checks first (the notes, the tag and its commit, published
+releases of the tag), so that a release with missing or malformed notes fails
+before anything is published. It can't see draft releases, so delete any
+draft of the tag before you push the tag. If only `Publish release` fails,
+re-run the failed jobs (not all jobs: once the GitHub release exists,
+`Prepare release` fails); a re-run passes without changes if the earlier
+attempt created the release after all. `Publish release` runs one release at
+a time, so that GitHub's latest release is set in order; if several tags
+are released at once, GitHub can cancel a waiting run of the job: re-run it
+the same way. Releases are never edited afterwards: fix mistakes in the notes of
+the next release.
 
 After the first release of this workflow, drop `fail: "false"` in
 `.github/workflows/scan.yml`, and the note on it above.

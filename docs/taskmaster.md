@@ -230,13 +230,22 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `TESK_MAX_QUEUE_SECONDS` | Seconds after which a pod that the scheduler can't place ends the task with `SYSTEM_ERROR` (see [What it does](#what-it-does)), from 1 to 2147483647; unset or empty waits forever. Other values log an error and wait forever. |
 | `TASK_TTL_SECONDS` | Seconds after which Kubernetes deletes the taskmaster's finished job, and with it the task's jobs (`ttlSecondsAfterFinished`; see [Deleting finished tasks](#deleting-finished-tasks)), from 0 to 2147483647; unset or empty keeps them. Other values log an error and set no TTL. |
 | `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
-| `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer. |
+| `FILER_POD_SECURITY_CONTEXT`, `FILER_SECURITY_CONTEXT` | Security context of the filer's pod and of its container, as JSON objects; each replaces its whole default (repeat the default fields that you want to keep, see [Pod security](filer.md#pod-security)), and `{}` leaves it out. Unset or empty values keep the defaults; values that aren't JSON objects, or whose fields or types don't fit Kubernetes' `PodSecurityContext` or `SecurityContext`, log an error and keep them too. |
+| `FILER_RESOURCES` | Resource requests and limits of the filer's container, as a JSON object (e.g. `{"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}}`), with every quantity as a JSON string (`"1"`, not `1`); unset, empty or `{}` sets none. Values that aren't JSON objects, or whose fields or types don't fit Kubernetes' `ResourceRequirements`, log an error and set none. |
+| `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer: as references to the secret `TESK_FTP_SECRET_NAME` if that is set, otherwise as values in the filer's job, with a warning. |
+| `TESK_FTP_SECRET_NAME` | Name of the secret with the FTP credentials (keys `username` and `password`), which the filer's job then references instead of holding the credentials (see [Filer](filer.md#ftp)). |
 | `TESK_FTP_HOSTS` | Hosts that the filer sends the FTP credentials to, passed on to the filer with them (see [Filer](filer.md#ftp)). |
 | `NETRC_SECRET_NAME` | Name of a secret with a `.netrc` file (key `.netrc`), mounted into the filer for HTTP(S) and FTP credentials. |
 | `HOST_BASE_PATH`, `CONTAINER_BASE_PATH`, `TRANSFER_PVC_NAME` | The shared volume of the `file:` protocol, passed on to the filer (see [Filer](filer.md#shared-volume-file)). |
 
 The taskmaster also mounts the secret `aws-secret` into the filer, if it
 exists, for S3 (see [Filer](filer.md#s3)).
+
+The taskmaster checks only the fields and types of the JSON settings (with
+Kubernetes clients from 37, as in the images), not their values: the API
+server rejects other invalid values (e.g. a CPU of `lots`, or a limit below
+its request) when the taskmaster creates a filer job, which fails every
+task with such a setting. Check a new setting with a test task.
 
 Numbers may have spaces around them; an empty value counts as unset, so
 that a chart value left empty keeps the default. The names are the ones

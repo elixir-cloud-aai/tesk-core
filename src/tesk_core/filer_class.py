@@ -1,8 +1,13 @@
 """The manifest of a filer job."""
 
+import copy
 import json
+import logging
 import os
+import posixpath
 from typing import TYPE_CHECKING, Any
+
+from kubernetes import client
 
 from tesk_core import path
 from tesk_core.path import fileEnabled
@@ -13,6 +18,96 @@ if TYPE_CHECKING:
 
 TASK_VOLUME = "task-volume"
 """Name of the volume of the task's claim in the filer's pod."""
+
+FILER_LABELS = {
+    "app.kubernetes.io/component": "filer",
+    "app.kubernetes.io/part-of": "tesk",
+}
+"""Labels of the filer's pods."""
+
+TMP_VOLUME = "tmp"
+"""Name of the `emptyDir` volume at `/tmp` in the filer's pod."""
+
+DEFAULT_POD_SECURITY_CONTEXT: dict[str, Any] = {
+    "runAsNonRoot": True,
+    "seccompProfile": {"type": "RuntimeDefault"},
+}
+"""Security context of the filer's pod unless `FILER_POD_SECURITY_CONTEXT`
+is set. With the container's (`DEFAULT_SECURITY_CONTEXT`), the pod meets the
+`restricted` Pod Security Standard; the filer image runs as user 100."""
+
+DEFAULT_SECURITY_CONTEXT: dict[str, Any] = {
+    "allowPrivilegeEscalation": False,
+    "capabilities": {"drop": ["ALL"]},
+    "readOnlyRootFilesystem": True,
+}
+"""Security context of the filer's container unless `FILER_SECURITY_CONTEXT`
+is set. The filer writes only to its volumes, `/tmp` included."""
+
+logger = logging.getLogger(__name__)
+
+
+def _object_setting(
+    name: str, model: type, default: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Get a Kubernetes object from a JSON setting in the environment.
+
+    Like `taskmaster.env_whole_number`, logs invalid values and falls back
+    to the default.
+
+    Args:
+        name: The environment variable.
+        model: The Kubernetes client's model that the object must be valid
+            for (e.g. `client.V1SecurityContext`); checked with clients that
+            have pydantic models (37 and later), otherwise only by the API
+            server.
+        default: The object if the setting is unset, empty or invalid.
+
+    Returns:
+        The object, or a copy of the default; None for `{}`, or for an unset,
+        empty or invalid setting without default. Invalid settings are
+        logged.
+    """
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return copy.deepcopy(default)
+    try:
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("not a JSON object")
+        validate = getattr(model, "model_validate", None)
+        if validate is not None:
+            # The models also take snake_case fields, which the API server
+            # would drop: the manifest gets the model's camelCase ones
+            value = validate(value).model_dump(
+                by_alias=True, exclude_none=True, mode="json"
+            )
+    except ValueError as error:
+        # `json.JSONDecodeError` and pydantic's `ValidationError` are
+        # `ValueError`s; only the first line of the error is logged (the
+        # pydantic error's has no values)
+        logger.error(
+            "Ignoring %s: not a JSON object of a valid %s (%s); using the default",
+            name,
+            model.__name__,
+            str(error).splitlines()[0],
+        )
+        return copy.deepcopy(default)
+    return value or None
+
+
+def _set_field(target: dict[str, Any], key: str, value: Any) -> None:
+    """Set a field of a manifest, or remove it.
+
+    Args:
+        target: The manifest, e.g. a container.
+        key: The field.
+        value: Its value; None removes the field.
+    """
+    if value is None:
+        target.pop(key, None)
+    else:
+        target[key] = value
 
 
 class Filer:
@@ -107,7 +202,8 @@ class Filer:
             "metadata": {"name": name},
             "spec": {
                 "template": {
-                    "metadata": {"name": "tesk-filer"},
+                    # The labels select filer pods, e.g. in a NetworkPolicy
+                    "metadata": {"name": "tesk-filer", "labels": dict(FILER_LABELS)},
                     "spec": {
                         "containers": [
                             {
@@ -129,6 +225,8 @@ class Filer:
                 }
             },
         }
+
+        self.set_hardening()
 
         env = self.getEnv()
         if json_pvc is None:
@@ -163,7 +261,59 @@ class Filer:
                 }
             )
 
+        self.add_tmp_mount()
         self.add_s3_mount()
+
+    def add_tmp_mount(self) -> None:
+        """Mount a writable `/tmp` (an `emptyDir`) on the read-only root.
+
+        Not if another volume is mounted there already (the shared volume of
+        `file:`, with `CONTAINER_BASE_PATH` at `/tmp`), as mount paths must be
+        unique.
+        """
+        tmp = "/tmp"  # noqa: S108 -- an emptyDir in the filer's pod
+        if any(
+            posixpath.normpath(mount["mountPath"]) == tmp
+            for mount in self.getVolumeMounts()
+        ):
+            return
+        self.getVolumeMounts().append({"name": TMP_VOLUME, "mountPath": tmp})
+        self.getVolumes().append({"name": TMP_VOLUME, "emptyDir": {}})
+
+    def set_hardening(self) -> None:
+        """Set the security contexts and the resources of the filer's pod.
+
+        From the settings `FILER_POD_SECURITY_CONTEXT`,
+        `FILER_SECURITY_CONTEXT` and `FILER_RESOURCES` (JSON objects) in the
+        taskmaster's environment. Each replaces its default (the security
+        contexts `DEFAULT_POD_SECURITY_CONTEXT` and
+        `DEFAULT_SECURITY_CONTEXT`, no resources); `{}` leaves the field out.
+        """
+        pod = self.spec["spec"]["template"]["spec"]
+        container = self.getContainer(0)
+        _set_field(
+            pod,
+            "securityContext",
+            _object_setting(
+                "FILER_POD_SECURITY_CONTEXT",
+                client.V1PodSecurityContext,
+                DEFAULT_POD_SECURITY_CONTEXT,
+            ),
+        )
+        _set_field(
+            container,
+            "securityContext",
+            _object_setting(
+                "FILER_SECURITY_CONTEXT",
+                client.V1SecurityContext,
+                DEFAULT_SECURITY_CONTEXT,
+            ),
+        )
+        _set_field(
+            container,
+            "resources",
+            _object_setting("FILER_RESOURCES", client.V1ResourceRequirements, None),
+        )
 
     def add_s3_mount(self) -> None:
         """Mount the S3 configuration from the secret `aws-secret`, if it exists."""
@@ -201,6 +351,11 @@ class Filer:
     def set_ftp(self, user: str | None, pw: str | None) -> None:
         """Pass FTP credentials to the filer.
 
+        If `TESK_FTP_SECRET_NAME` is set in the taskmaster's environment,
+        the filer's environment references the keys `username` and
+        `password` of that Kubernetes secret, and holds no credentials;
+        otherwise, it holds them as values, and a warning is logged.
+
         Also passes `TESK_FTP_HOSTS`, the hosts that the filer may send them
         to, from the taskmaster's environment, if it is set there.
 
@@ -209,8 +364,26 @@ class Filer:
             pw: The FTP password.
         """
         env = self.getEnv()
-        env.append({"name": "TESK_FTP_USERNAME", "value": user})
-        env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
+        secret = os.environ.get("TESK_FTP_SECRET_NAME", "").strip()
+        if secret:
+            for var, key in (
+                ("TESK_FTP_USERNAME", "username"),
+                ("TESK_FTP_PASSWORD", "password"),
+            ):
+                env.append(
+                    {
+                        "name": var,
+                        "valueFrom": {"secretKeyRef": {"name": secret, "key": key}},
+                    }
+                )
+        else:
+            logger.warning(
+                "Passing the FTP credentials to the filer as values in its job;"
+                " set TESK_FTP_SECRET_NAME to the name of their secret to pass"
+                " references instead"
+            )
+            env.append({"name": "TESK_FTP_USERNAME", "value": user})
+            env.append({"name": "TESK_FTP_PASSWORD", "value": pw})
         hosts = os.environ.get("TESK_FTP_HOSTS")
         if hosts is not None:
             env.append({"name": "TESK_FTP_HOSTS", "value": hosts})
