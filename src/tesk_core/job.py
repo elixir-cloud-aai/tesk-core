@@ -107,10 +107,12 @@ class Job:
             tried again; a job that is gone then counts as deleted.
         delete_unschedulable: Whether such a job is deleted, rather than
             failed and kept (`fail`).
-        deleted: Whether the job was deleted, rather than failed and kept,
-            as its pod couldn't be scheduled in time (`delete_unscheduled`)
-            or the Kubernetes API rejected failing it (`fail`): its
-            container never ran, or its state and logs are gone.
+        ended_by_taskmaster: Whether the taskmaster ended the job, rather than
+            its pods: it failed it (`fail`, also in an earlier run, as the job's
+            `activeDeadlineSeconds` shows) or deleted it
+            (`delete_unscheduled`), e.g. as its pod couldn't start or be
+            scheduled in time. The job's failure then isn't the executor's
+            own: its container may never have run.
     """
 
     def __init__(
@@ -136,7 +138,7 @@ class Job:
         self.max_queue: int | None = None
         self.delete_unschedulable = False
         self.deleting = False
-        self.deleted = False
+        self.ended_by_taskmaster = False
         self.body = body
         self.body["metadata"]["name"] = self.name
 
@@ -216,6 +218,9 @@ class Job:
             self.status = self.delete_unscheduled()
             return self.status, is_all_pods_runnning
         job = self.bv1.read_namespaced_job(self.name, self.namespace)
+        spec = getattr(job, "spec", None)
+        if getattr(spec, "active_deadline_seconds", None) == FAIL_DEADLINE:
+            self.ended_by_taskmaster = True
         self.status = "Running"
         # Only conditions with the status "True" count. `FailureTarget`
         # (Kubernetes 1.31+) comes before `Failed`, `SuccessCriteriaMet`
@@ -239,7 +244,6 @@ class Job:
             self.failed_pods = failed_pods
             is_all_pods_runnning = False
         # A job that an earlier run of the taskmaster failed (see `fail`)
-        spec = getattr(job, "spec", None)
         if (
             self.failing_since is None
             and getattr(spec, "active_deadline_seconds", None) == FAIL_DEADLINE
@@ -351,11 +355,11 @@ class Job:
             The job's status: `Failed` once deleted (or already gone),
             `Running` to try again, otherwise as `fail`.
         """
+        self.ended_by_taskmaster = True
         try:
             self.delete(request_timeout=DELETE_TIMEOUT)
         except ApiException as ex:
             if ex.status == 404:
-                self.deleted = True
                 return "Failed"
             if ex.status is not None and 400 <= ex.status < 500:
                 return self.fail(UNSCHEDULED_REASON)
@@ -366,7 +370,6 @@ class Job:
             logging.warning("Can't delete job '%s' (%s) yet", self.name, ex)
             self.deleting = True
             return "Running"
-        self.deleted = True
         return "Failed"
 
     def fail(self, reason: str = "its pod can't start") -> str:
@@ -386,6 +389,7 @@ class Job:
             The job's status: `Running` while Kubernetes fails it, or the
             next poll tries again; `Failed` if the change was rejected.
         """
+        self.ended_by_taskmaster = True
         logging.info("Failing job '%s': %s", self.name, reason)
         try:
             self.bv1.patch_namespaced_job(
@@ -399,7 +403,6 @@ class Job:
                     "Can't fail job '%s' (%s); deleting it", self.name, ex.status
                 )
                 self.delete_quietly()
-                self.deleted = True
                 return "Failed"
             logging.warning("Can't fail job '%s' (%s) yet", self.name, ex.status)
             return "Running"

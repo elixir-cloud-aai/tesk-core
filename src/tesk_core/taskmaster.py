@@ -113,8 +113,9 @@ def run_executor(
     and the executor ignores errors (`ignores_error`): then it returns, and
     the task goes on. A job that failed is kept, so that the TESK API
     reports the executor's state (`EXECUTOR_ERROR`, unless ignored), exit
-    code and logs. An executor whose job was deleted (it never ran) stops
-    the task even if it ignores errors. Executor jobs aren't retried
+    code and logs. A job that the taskmaster ended itself
+    (`Job.ended_by_taskmaster`, e.g. as its pod couldn't start) stops the
+    task even if the executor ignores errors. Executor jobs aren't retried
     (`backoffLimit: 0`), unless the job or `EXECUTOR_BACKOFF_LIMIT` sets a
     limit; that limit also covers pods that are evicted.
 
@@ -175,7 +176,7 @@ def run_executor(
     created_jobs.append(job)
 
     status = job.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
-    if status == "Failed" and not job.deleted and ignores_error(executor):
+    if status == "Failed" and not job.ended_by_taskmaster and ignores_error(executor):
         logger.warning("Executor job '%s' failed; ignoring the error", jobname)
         return
     if status != "Complete":
@@ -192,8 +193,8 @@ def ignores_error(executor: dict[str, Any]) -> bool:
         Whether the job has the annotation `ignore_error_annotation` with
         the value `true` (from the executor's `ignore_error`).
     """
-    annotations = executor.get("metadata", {}).get("annotations") or {}
-    return bool(annotations.get(ignore_error_annotation) == "true")
+    annotations: dict[str, str] = executor.get("metadata", {}).get("annotations") or {}
+    return annotations.get(ignore_error_annotation) == "true"
 
 
 # TODO move this code to PVC class

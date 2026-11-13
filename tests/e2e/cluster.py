@@ -116,6 +116,8 @@ class Task:
             executor(self.name, index, script, **(resources or {}))
             for index, script in enumerate(scripts)
         ]
+        # The annotation that the TESK API sets (`ignore_error_annotation` of
+        # the taskmaster), spelled out as the API's contract
         for index in ignore_error or set():
             executors[index]["metadata"]["annotations"] = {"ignore-error": "true"}
         self.data = {

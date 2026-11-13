@@ -50,11 +50,16 @@ executor's exit code and logs from the kept job, and the task's state from
 the other jobs (`COMPLETE` if they complete); this needs a TESK API
 release that passes `ignore_error` (see
 [tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
-Only the job's failure is ignored: a cancelled task stops as before, and
-so does a task whose executor's job was deleted because its pod couldn't
-be scheduled in time, or because the job couldn't be failed (see below):
-that executor never ran, or its state is gone. Other values of the
-annotation, or none, stop the task at the executor's failure.
+Only the executor's own failure is ignored: its pods failed, e.g. as its
+command exited with a non-zero code. A job that the taskmaster ended
+itself still stops the task, as for any executor: one it failed because
+a pod couldn't start (e.g. an image that can't be pulled) or wasn't
+scheduled in time, also in an earlier run of the taskmaster (the job's
+`activeDeadlineSeconds` is 1, see below), and one it deleted. Its
+container may never have run, and the TESK API doesn't ignore such a
+failure either (Kubernetes marks the job failed with the reason
+`DeadlineExceeded`). A cancelled task stops as before. Other values of
+the annotation, or none, stop the task at the executor's failure.
 
 The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
