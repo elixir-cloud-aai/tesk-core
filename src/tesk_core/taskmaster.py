@@ -573,21 +573,46 @@ def positive_seconds(value: str) -> float:
     return seconds
 
 
+class Terminated(BaseException):
+    """The taskmaster got `SIGTERM`; raised by `on_sigterm`.
+
+    A `BaseException`, like `KeyboardInterrupt`, so that no handler of
+    errors catches it on its way to `main`.
+    """
+
+
 def on_sigterm(signum: int, frame: FrameType | None) -> NoReturn:
-    """Stop the taskmaster on `SIGTERM`, e.g. when Kubernetes stops its pod.
+    """Stop the running code on `SIGTERM`, e.g. when Kubernetes stops its pod.
+
+    Only raises `Terminated`, which `main` handles (`stop_on_sigterm`)
+    outside the signal handler: logging or calling the Kubernetes API in it
+    could fail when the signal interrupts the same in the main code (e.g. a
+    write to stderr). Further `SIGTERM`s are ignored, so that they don't
+    interrupt that handling.
+
+    Args:
+        signum: The signal's number.
+        frame: The current stack frame.
+
+    Raises:
+        Terminated: Always.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    raise Terminated
+
+
+def stop_on_sigterm() -> NoReturn:
+    """Stop the taskmaster after `SIGTERM`.
 
     If the task was cancelled (`check_cancelled`), its running jobs are
     stopped and the taskmaster stops as cancelled (`cancel_task`): the TESK
     API fails the job of a task that was cancelled before the taskmaster's
     pod existed, which stops a pod that started in the meantime, and its
     jobs must not run on. Otherwise, and before the task is read, the jobs
-    are left as they are: a new attempt of the pod (e.g. after the node was
-    drained) continues with them, and deleting the taskmaster's job deletes
-    them with it (`ownerReferences`).
-
-    Args:
-        signum: The signal's number.
-        frame: The current stack frame.
+    are left as they are and the taskmaster exits with code 143: a new
+    attempt of the pod (e.g. after the node was drained) continues with
+    them, and deleting the taskmaster's job deletes them with it
+    (`ownerReferences`).
     """
     data = task_data
     if data is not None and check_cancelled():
@@ -602,7 +627,7 @@ def main() -> None:
 
     On `SIGINT` (e.g. Ctrl-C when run by hand), deletes the jobs that it
     created (`clean_on_interrupt`) and exits with code 130; on `SIGTERM`, see
-    `on_sigterm`.
+    `stop_on_sigterm`.
     """
     signal.signal(signal.SIGTERM, on_sigterm)
     try:
@@ -610,6 +635,8 @@ def main() -> None:
     except KeyboardInterrupt:
         clean_on_interrupt()
         sys.exit(sigint_exit_code)
+    except Terminated:
+        stop_on_sigterm()
 
 
 def run_main() -> None:
