@@ -291,8 +291,9 @@ which meet the `restricted`
   and the `RuntimeDefault` seccomp profile.
 - Container: no privilege escalation, all capabilities dropped, and a
   read-only root filesystem; `/tmp` is a writable `emptyDir` (limited only
-  by an `ephemeral-storage` limit, e.g. in `FILER_RESOURCES`), and the filer
-  writes only to its volumes.
+  by an `ephemeral-storage` limit, e.g. in `FILER_RESOURCES`; or the shared
+  volume, if `CONTAINER_BASE_PATH` is `/tmp`), and the filer writes only to
+  its volumes.
 - No service account token (`automountServiceAccountToken: false`): the
   filer doesn't use the Kubernetes API.
 

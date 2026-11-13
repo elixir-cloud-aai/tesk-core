@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import os
+import posixpath
 from typing import TYPE_CHECKING, Any
 
 from kubernetes import client
@@ -76,7 +77,11 @@ def _object_setting(
             raise ValueError("not a JSON object")
         validate = getattr(model, "model_validate", None)
         if validate is not None:
-            validate(value)
+            # The models also take snake_case fields, which the API server
+            # would drop: the manifest gets the model's camelCase ones
+            value = validate(value).model_dump(
+                by_alias=True, exclude_none=True, mode="json"
+            )
     except ValueError as error:
         # `json.JSONDecodeError` and pydantic's `ValidationError` are
         # `ValueError`s; only the first line of the error is logged (the
@@ -206,20 +211,13 @@ class Filer:
                                 "image": f"{filer_name}:{filer_version}",
                                 "args": [],
                                 "env": [],
-                                # A writable `/tmp` on the read-only root
-                                # filesystem
-                                "volumeMounts": [
-                                    {
-                                        "name": TMP_VOLUME,
-                                        "mountPath": "/tmp",  # noqa: S108 -- an emptyDir in the pod
-                                    }
-                                ],
+                                "volumeMounts": [],
                                 "imagePullPolicy": "Always"
                                 if pullPolicyAlways
                                 else "IfNotPresent",
                             }
                         ],
-                        "volumes": [{"name": TMP_VOLUME, "emptyDir": {}}],
+                        "volumes": [],
                         "restartPolicy": "Never",
                         # The filer doesn't use the Kubernetes API
                         "automountServiceAccountToken": False,
@@ -263,7 +261,24 @@ class Filer:
                 }
             )
 
+        self.add_tmp_mount()
         self.add_s3_mount()
+
+    def add_tmp_mount(self) -> None:
+        """Mount a writable `/tmp` (an `emptyDir`) on the read-only root.
+
+        Not if another volume is mounted there already (the shared volume of
+        `file:`, with `CONTAINER_BASE_PATH` at `/tmp`), as mount paths must be
+        unique.
+        """
+        tmp = "/tmp"  # noqa: S108 -- an emptyDir in the filer's pod
+        if any(
+            posixpath.normpath(mount["mountPath"]) == tmp
+            for mount in self.getVolumeMounts()
+        ):
+            return
+        self.getVolumeMounts().append({"name": TMP_VOLUME, "mountPath": tmp})
+        self.getVolumes().append({"name": TMP_VOLUME, "emptyDir": {}})
 
     def set_hardening(self) -> None:
         """Set the security contexts and the resources of the filer's pod.

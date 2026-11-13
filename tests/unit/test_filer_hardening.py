@@ -6,7 +6,7 @@ from typing import Any
 from kubernetes import client
 import pytest
 
-from tesk_core import filer_class
+from tesk_core import filer_class, path
 from tesk_core.filer_class import (
     DEFAULT_POD_SECURITY_CONTEXT,
     DEFAULT_SECURITY_CONTEXT,
@@ -94,6 +94,58 @@ def test_writable_tmp() -> None:
 
     assert {"name": "tmp", "mountPath": "/tmp"} in filer.getVolumeMounts()
     assert {"name": "tmp", "emptyDir": {}} in filer.getVolumes()
+
+
+@pytest.mark.parametrize("base", ["/tmp", "/tmp/"])
+def test_tmp_is_the_shared_volume(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
+    """Test that `/tmp` isn't mounted twice if the shared volume is there.
+
+    Kubernetes rejects pods with two mounts at one path.
+    """
+    monkeypatch.setattr(path, "HOST_BASE_PATH", "/data")
+    monkeypatch.setattr(path, "CONTAINER_BASE_PATH", base)
+    monkeypatch.setattr(path, "TRANSFER_PVC_NAME", "transfer-pvc")
+
+    filer = Filer("name", {"a": 1})
+
+    names = [mount["name"] for mount in filer.getVolumeMounts()]
+    assert "transfer-volume" in names
+    assert "tmp" not in names
+    assert all(volume["name"] != "tmp" for volume in filer.getVolumes())
+
+
+def test_tmp_below_the_shared_volume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that `/tmp` is mounted with a shared volume below it."""
+    monkeypatch.setattr(path, "HOST_BASE_PATH", "/data")
+    monkeypatch.setattr(path, "CONTAINER_BASE_PATH", "/tmp/transfer")
+    monkeypatch.setattr(path, "TRANSFER_PVC_NAME", "transfer-pvc")
+
+    filer = Filer("name", {"a": 1})
+
+    assert {"name": "tmp", "mountPath": "/tmp"} in filer.getVolumeMounts()
+
+
+def test_snake_case_fields_become_camel_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the manifest gets the fields that the API server knows.
+
+    The client's models also take snake_case names, which the API server
+    would drop with a warning only.
+    """
+    if not hasattr(client.V1SecurityContext, "model_validate"):
+        pytest.skip("the Kubernetes client has no pydantic models (before 37)")
+    monkeypatch.setenv(
+        "FILER_SECURITY_CONTEXT",
+        '{"run_as_user": 1000, "read_only_root_filesystem": true,'
+        ' "seccomp_profile": {"type": "RuntimeDefault"}}',
+    )
+
+    filer = Filer("name", {"a": 1})
+
+    assert filer.getContainer(0)["securityContext"] == {
+        "runAsUser": 1000,
+        "readOnlyRootFilesystem": True,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
 
 
 def test_defaults_are_copies() -> None:
