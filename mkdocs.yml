@@ -13,6 +13,10 @@ repo_url: https://github.com/elixir-cloud-aai/tesk-core
 repo_name: elixir-cloud-aai/tesk-core
 edit_uri: edit/dev/docs/
 copyright: Copyright &copy; ELIXIR On-Cloud
+# Not pages; the curated release notes (`releases/`) are published as GitHub
+# releases
+exclude_docs: |
+  releases/
 
 theme:
   name: material
