@@ -100,8 +100,11 @@ output_logs_annotation = "output-file-logs"
 max_output_logs_bytes = 200_000
 # The keys of each uploaded file as the outputs filer lists it
 output_log_keys = {"output", "relative", "size_bytes"}
-# The lines at the end of the outputs filer's log that are read for them
-output_logs_tail_lines = 10
+# The lines at the end of the outputs filer's log that are read for them:
+# container runtimes split long lines into records (CRI-O: at most 8 KiB),
+# which count as lines here; 1,000 leave room for the filer's line of up to
+# 100,000 bytes
+output_logs_tail_lines = 1000
 # The max queue time of the task's jobs; set by `main`
 max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;

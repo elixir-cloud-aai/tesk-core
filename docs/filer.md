@@ -114,7 +114,7 @@ entries. Wildcard outputs without `path_prefix` (TES 1.0) give none
 either. The line can be long, with one entry per file; entries beyond
 100,000 bytes are left out, with a warning (shown with `--debug`). If an
 output fails, or the files can't be listed, the filer prints no line; the
-latter is logged as a warning and doesn't fail the filer. The taskmaster
+latter is logged as an error and doesn't fail the filer. The taskmaster
 reads the line from the pod's log and stores the files for the TESK API
 (see [Taskmaster](taskmaster.md#what-it-does)).
 

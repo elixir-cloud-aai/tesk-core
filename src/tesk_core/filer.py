@@ -1490,7 +1490,7 @@ def print_output_logs(outputs: list[dict[str, Any]]) -> None:
     try:
         logs = json.dumps(output_file_logs(outputs), separators=(",", ":"))
     except Exception as err:  # the outputs are uploaded
-        logging.warning("Can't list the uploaded files: %s", err)
+        logging.error("Can't list the uploaded files: %s", err)
         return
     print(OUTPUT_LOGS_MARKER, logs, flush=True)
 

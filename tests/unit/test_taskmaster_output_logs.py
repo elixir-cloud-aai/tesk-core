@@ -172,7 +172,7 @@ def test_record_output_logs(core: MagicMock, batch: MagicMock) -> None:
         f"job-name={JOB}"
     )
     assert core.read_namespaced_pod_log.call_args.args[:2] == ("p-2", "ns")
-    assert core.read_namespaced_pod_log.call_args.kwargs["tail_lines"] == 10
+    assert core.read_namespaced_pod_log.call_args.kwargs["tail_lines"] == 1000
     batch.patch_namespaced_job.assert_called_once()
     assert batch.patch_namespaced_job.call_args.args[:2] == (JOB, "ns")
     assert stored(batch) == LOGS

@@ -72,7 +72,7 @@ annotation, or none, stop the task at the executor's failure.
 
 Once the outputs filer has completed, the taskmaster records the uploaded
 files (TES 1.1 `logs[].outputs`): it reads the last line that starts with
-`TESK_OUTPUT_FILE_LOGS` among the last 10 lines of the log of the filer's
+`TESK_OUTPUT_FILE_LOGS` among the last 1,000 lines of the log of the filer's
 succeeded pod (see [Filer](filer.md#output-file-logs)), checks it, adds
 each file's URL and path in the executors, derived from its output as the
 upload does, and stores the list, with the keys `url`, `path` and
