@@ -650,13 +650,14 @@ def run_main() -> None:
     else:
         with open(args.file) as fh:
             data = json.load(fh)
+    # From here on, `SIGTERM` stops the jobs of a cancelled task, also those
+    # that an earlier attempt of this pod started
+    task_data = data
 
     # Known before the claim is created, so that a task cancelled now also
     # deletes the claim that an earlier attempt of this pod left behind
     # after an unexpected error (a claim that doesn't exist is no error)
     created_pvc = task_pvc(data)
-    # From here on, `SIGTERM` stops the jobs of a cancelled task
-    task_data = data
 
     # Check if we're cancelled during init
     if check_cancelled():

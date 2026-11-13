@@ -56,7 +56,8 @@ client); the taskmaster goes on as it would
 (e.g. stops, or ends a completed task). An unexpected error of the
 taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
 reuses it; if every retry fails, the PVC is left behind. An interrupt
-(`SIGINT` or `SIGTERM`, see below) keeps it too.
+(`SIGINT` or `SIGTERM`, see below) keeps it too, except a `SIGTERM` on a
+cancelled task, which deletes it like any other cancellation.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
