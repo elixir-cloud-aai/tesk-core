@@ -36,6 +36,7 @@ from tesk_core.path import (
     filerPath,
     getPath,
     hasWildcards,
+    taskPath,
 )
 from tesk_core.transput import (
     Transput,
@@ -47,6 +48,11 @@ from tesk_core.transput import (
     within,
 )
 from tesk_core.Util import configure_logging
+
+OUTPUT_LOGS_MARKER = "TESK_OUTPUT_FILE_LOGS"
+"""Start of the outputs filer's last line on standard output, before the
+uploaded files as JSON (see `output_file_logs`), which the taskmaster reads
+from the pod's log."""
 
 
 def http_join(url: str, name: str) -> str:
@@ -1307,6 +1313,72 @@ def process_file(ttype: str, filedata: dict[str, Any]) -> int:
     return 0
 
 
+def output_file_logs(filedata: dict[str, Any]) -> list[dict[str, str]]:
+    """Describe the files of an output that was uploaded (TES `tesOutputFileLog`).
+
+    Each file of a `FILE` output, every file below a `DIRECTORY` output,
+    and every file that the wildcards of an output with `path_prefix`
+    matched (or that is below a matched directory). Symbolic links, which
+    an upload refuses, and empty directories give none.
+
+    Args:
+        filedata: The output, uploaded.
+
+    Returns:
+        For each file, in order of paths: its `url`, its `path` in the
+        executors, and its `size_bytes` (a string, as in TES).
+    """
+    url = filedata["url"]
+    if filedata.get("path_prefix") and hasWildcards(filedata["path"]):
+        prefix = taskPath(filedata["path_prefix"])
+        logs = []
+        for match in sorted(glob(filerPath(filedata["path"]))):
+            relative = os.path.relpath(match, filerPath(prefix)).replace(os.sep, "/")
+            logs.extend(
+                files_below(
+                    match, prefix.rstrip("/") + "/" + relative, url_join(url, relative)
+                )
+            )
+        return logs
+    return files_below(filerPath(filedata["path"]), taskPath(filedata["path"]), url)
+
+
+def files_below(local: str, task_path: str, url: str) -> list[dict[str, str]]:
+    """Describe a file, or every file below a directory, with its URL.
+
+    Args:
+        local: The file or directory, in the filer.
+        task_path: Its path in the executors.
+        url: Its URL.
+
+    Returns:
+        The `url`, `path` and `size_bytes` of each regular file, in order of
+        paths; none for a symbolic link or a path that doesn't exist.
+    """
+    if os.path.islink(local):
+        return []
+    if os.path.isfile(local):
+        return [
+            {"url": url, "path": task_path, "size_bytes": str(os.path.getsize(local))}
+        ]
+    logs = []
+    for root, dirs, files in os.walk(local):
+        dirs.sort()
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            if os.path.islink(full) or not os.path.isfile(full):
+                continue
+            relative = os.path.relpath(full, local).replace(os.sep, "/")
+            logs.append(
+                {
+                    "url": url_join(url, relative),
+                    "path": task_path.rstrip("/") + "/" + relative,
+                    "size_bytes": str(os.path.getsize(full)),
+                }
+            )
+    return sorted(logs, key=lambda log: log["path"])
+
+
 def logConfig(loglevel: int) -> None:
     """Configure logging to standard output.
 
@@ -1344,13 +1416,19 @@ def main() -> int:
     else:
         data = json.loads(args.data)
 
+    logs: list[dict[str, str]] = []
     for afile in data[args.transputtype]:
         logging.debug("Processing file: %s", afile["path"])
         if process_file(args.transputtype, afile):
             logging.error("Unable to process file, aborting")
             return 1
         logging.debug("Processed file: %s", afile["path"])
+        if args.transputtype == "outputs":
+            logs.extend(output_file_logs(afile))
 
+    # Whatever the log level: the taskmaster reads it from the pod's log
+    if args.transputtype == "outputs":
+        print(OUTPUT_LOGS_MARKER, json.dumps(logs, separators=(",", ":")), flush=True)
     return 0
 
 

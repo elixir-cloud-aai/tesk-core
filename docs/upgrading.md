@@ -25,6 +25,15 @@ to the filer.
   ([tesk-api#159](https://github.com/elixir-cloud-aai/tesk-api/issues/159)).
   Older taskmasters ignore the annotation and stop at the failure. Upgrade
   the taskmaster before the TESK API.
+- **Output file logs**: the outputs filer prints the uploaded files, and
+  the taskmaster stores them as the annotation `output-file-logs` of the
+  outputs filer's job (see
+  [Taskmaster](taskmaster.md#what-it-does)), which a TESK API release
+  reports as `logs[].outputs`
+  ([tesk-api#160](https://github.com/elixir-cloud-aai/tesk-api/issues/160)).
+  Both images must be of this release; with an older filer or taskmaster,
+  tasks run as before, without the annotation. No new permissions are
+  needed.
 
 ### Hardened filer pods
 

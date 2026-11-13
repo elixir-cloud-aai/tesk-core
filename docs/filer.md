@@ -89,6 +89,26 @@ output is uploaded. Executors that create links in
 their outputs should copy the files they point to instead (e.g. `cp -L`).
 The outputs filer mounts the task's paths read-only.
 
+## Output file logs
+
+Once all outputs are uploaded, the outputs filer prints the uploaded files
+(TES 1.1 `tesOutputFileLog`) as its last line on standard output, whatever
+the log level:
+
+```text
+TESK_OUTPUT_FILE_LOGS [{"url":"s3://bucket/run/s1/out.txt","path":"/data/s1/out.txt","size_bytes":"3"}]
+```
+
+The list has one entry per uploaded file, in order of paths per output:
+the file of a `FILE` output, every file below a `DIRECTORY` output, and
+every file that the wildcards of an output with `path_prefix` matched (or
+that is below a matched directory). `url` is where the file was uploaded,
+`path` its path in the executors and `size_bytes` its size, as a string.
+Empty directories give no entries. Wildcard outputs without `path_prefix`
+(TES 1.0) give none either. If an output fails, the filer prints no line.
+The taskmaster reads the line from the pod's log and stores it for the
+TESK API (see [Taskmaster](taskmaster.md#what-it-does)).
+
 ## Protocols
 
 | Scheme | Inputs | Outputs |

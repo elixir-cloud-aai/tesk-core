@@ -88,7 +88,8 @@ The end-to-end tests run tasks as the TESK API does: one taskmaster job per
 task, with the task's JSON and its pod's labels, in a namespace with the
 taskmaster's service account and role (the rules of TESK's Helm chart) and
 a small HTTP server for inputs and outputs (`tests/e2e/manifests/`). They
-check the resulting jobs, PVCs and uploads: a task with inputs and outputs,
+check the resulting jobs, PVCs and uploads: a task with inputs and outputs
+(also its output file logs),
 a failing executor, an executor whose error is ignored, a cancelled task,
 and a task that can't be scheduled (`TESK_MAX_QUEUE_SECONDS`). The images
 run with `imagePullPolicy: Never`, and the filer image also runs the
