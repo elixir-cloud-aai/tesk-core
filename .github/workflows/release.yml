@@ -12,7 +12,8 @@
 # shared action `elixir-cloud-aai/.github/actions/publish-release`). The
 # package version is the tag's, passed to the image builds
 # (`SETUPTOOLS_SCM_PRETEND_VERSION`) and checked in the images by `scan`, so
-# no file but `CITATION.cff` has to be set. See "Versioning and releases" in
+# the only version to set is the one in `CITATION.cff` (besides adding the
+# curated notes). See "Versioning and releases" in
 # `docs/development.md`.
 #
 # `push` and `release-image` each need approval in the `release` environment
