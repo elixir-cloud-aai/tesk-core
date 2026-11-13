@@ -161,31 +161,16 @@ def test_empty_setting_keeps_default(
     assert "resources" not in filer.getContainer(0)
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        "runAsNonRoot: true",
-        "[]",
-        '"text"',
-        '{"runAsNonRoot": "maybe"}',
-        '{"runAsNonroot": true}',
-    ],
-)
-def test_invalid_setting_keeps_default(
+@pytest.mark.parametrize("value", ["runAsNonRoot: true", "[]", '"text"', "null"])
+def test_setting_not_an_object_keeps_default(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str
 ) -> None:
-    """Test that a setting that isn't a valid object logs an error.
+    """Test that a setting that isn't a JSON object logs an error.
 
-    Not JSON, not an object, or not valid for the Kubernetes client's model
-    (wrong types, unknown fields; with clients from 37): the defaults stay.
+    The defaults stay.
     """
-    if value.startswith('{"') and not hasattr(
-        client.V1SecurityContext, "model_validate"
-    ):
-        pytest.skip("the Kubernetes client has no pydantic models (before 37)")
-    monkeypatch.setenv("FILER_POD_SECURITY_CONTEXT", value)
-    monkeypatch.setenv("FILER_SECURITY_CONTEXT", value)
-    monkeypatch.setenv("FILER_RESOURCES", value)
+    for name in SETTINGS[:3]:
+        monkeypatch.setenv(name, value)
 
     with caplog.at_level(logging.ERROR):
         filer = Filer("name", {"a": 1})
@@ -197,20 +182,68 @@ def test_invalid_setting_keeps_default(
         assert any(name in record.getMessage() for record in caplog.records), name
 
 
+@pytest.mark.parametrize(
+    ("name", "model", "value"),
+    [
+        # Wrong types and unknown fields, of each setting's own model
+        ("FILER_POD_SECURITY_CONTEXT", client.V1PodSecurityContext, '{"fsGroup": "x"}'),
+        (
+            "FILER_POD_SECURITY_CONTEXT",
+            client.V1PodSecurityContext,
+            '{"runAsNonroot": true}',
+        ),
+        (
+            "FILER_POD_SECURITY_CONTEXT",
+            client.V1PodSecurityContext,
+            '{"allowPrivilegeEscalation": false}',
+        ),
+        ("FILER_SECURITY_CONTEXT", client.V1SecurityContext, '{"privileged": "maybe"}'),
+        ("FILER_SECURITY_CONTEXT", client.V1SecurityContext, '{"fsGroup": 1000}'),
+        ("FILER_RESOURCES", client.V1ResourceRequirements, '{"limits": 5}'),
+        ("FILER_RESOURCES", client.V1ResourceRequirements, '{"limit": {"cpu": "1"}}'),
+    ],
+)
+def test_setting_invalid_for_model_keeps_default(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+    model: type,
+    value: str,
+) -> None:
+    """Test that an object that isn't valid for its model logs an error.
+
+    Checked with the Kubernetes client's pydantic models (from 37); the
+    default stays.
+    """
+    if not hasattr(model, "model_validate"):
+        pytest.skip("the Kubernetes client has no pydantic models (before 37)")
+    monkeypatch.setenv(name, value)
+
+    with caplog.at_level(logging.ERROR):
+        filer = Filer("name", {"a": 1})
+
+    assert pod_spec(filer)["securityContext"] == DEFAULT_POD_SECURITY_CONTEXT
+    assert filer.getContainer(0)["securityContext"] == DEFAULT_SECURITY_CONTEXT
+    assert "resources" not in filer.getContainer(0)
+    assert name in caplog.text
+    assert model.__name__ in caplog.text
+
+
 def test_unvalidated_without_pydantic_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that objects are only parsed with clients without `model_validate`.
+    """Test that objects are only parsed with models without `model_validate`.
 
     Kubernetes clients before 37 have no pydantic models; the API server
     checks the fields then.
     """
-    monkeypatch.setattr(
-        filer_class, "_model", lambda name: object()
-    )  # no `model_validate`
-    monkeypatch.setenv("FILER_SECURITY_CONTEXT", '{"unknownField": 1}')
 
-    filer = Filer("name", {"a": 1})
+    class Model:
+        """A model without `model_validate`."""
 
-    assert filer.getContainer(0)["securityContext"] == {"unknownField": 1}
+    monkeypatch.setenv("SOME_SETTING", '{"unknownField": 1}')
+
+    assert filer_class._object_setting("SOME_SETTING", Model, None) == {
+        "unknownField": 1
+    }
 
 
 def test_ftp_credentials_from_secret(

@@ -46,28 +46,20 @@ is set. The filer writes only to its volumes, `/tmp` included."""
 logger = logging.getLogger(__name__)
 
 
-def _model(name: str) -> Any:
-    """Get a model of the Kubernetes client.
-
-    Args:
-        name: Name of the model, e.g. `V1SecurityContext`.
-
-    Returns:
-        The model.
-    """
-    return getattr(client, name)
-
-
 def _object_setting(
-    name: str, model: str, default: dict[str, Any] | None
+    name: str, model: type, default: dict[str, Any] | None
 ) -> dict[str, Any] | None:
     """Get a Kubernetes object from a JSON setting in the environment.
 
+    Like `taskmaster.env_whole_number`, logs invalid values and falls back
+    to the default.
+
     Args:
         name: The environment variable.
-        model: Name of the Kubernetes client's model that the object must be
-            valid for; checked with clients that have pydantic models (37
-            and later), otherwise only by the API server.
+        model: The Kubernetes client's model that the object must be valid
+            for (e.g. `client.V1SecurityContext`); checked with clients that
+            have pydantic models (37 and later), otherwise only by the API
+            server.
         default: The object if the setting is unset, empty or invalid.
 
     Returns:
@@ -82,20 +74,35 @@ def _object_setting(
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ValueError("not a JSON object")
-        validate = getattr(_model(model), "model_validate", None)
+        validate = getattr(model, "model_validate", None)
         if validate is not None:
             validate(value)
     except ValueError as error:
         # `json.JSONDecodeError` and pydantic's `ValidationError` are
-        # `ValueError`s; only the first line of the error is logged
+        # `ValueError`s; only the first line of the error is logged (the
+        # pydantic error's has no values)
         logger.error(
             "Ignoring %s: not a JSON object of a valid %s (%s); using the default",
             name,
-            model,
+            model.__name__,
             str(error).splitlines()[0],
         )
         return copy.deepcopy(default)
     return value or None
+
+
+def _set_field(target: dict[str, Any], key: str, value: Any) -> None:
+    """Set a field of a manifest, or remove it.
+
+    Args:
+        target: The manifest, e.g. a container.
+        key: The field.
+        value: Its value; None removes the field.
+    """
+    if value is None:
+        target.pop(key, None)
+    else:
+        target[key] = value
 
 
 class Filer:
@@ -202,7 +209,10 @@ class Filer:
                                 # A writable `/tmp` on the read-only root
                                 # filesystem
                                 "volumeMounts": [
-                                    {"name": TMP_VOLUME, "mountPath": "/tmp"}  # noqa: S108
+                                    {
+                                        "name": TMP_VOLUME,
+                                        "mountPath": "/tmp",  # noqa: S108 -- an emptyDir in the pod
+                                    }
                                 ],
                                 "imagePullPolicy": "Always"
                                 if pullPolicyAlways
@@ -266,29 +276,29 @@ class Filer:
         """
         pod = self.spec["spec"]["template"]["spec"]
         container = self.getContainer(0)
-        settings: tuple[tuple[dict[str, Any], str, str, str, Any], ...] = (
-            (
-                pod,
-                "securityContext",
+        _set_field(
+            pod,
+            "securityContext",
+            _object_setting(
                 "FILER_POD_SECURITY_CONTEXT",
-                "V1PodSecurityContext",
+                client.V1PodSecurityContext,
                 DEFAULT_POD_SECURITY_CONTEXT,
             ),
-            (
-                container,
-                "securityContext",
+        )
+        _set_field(
+            container,
+            "securityContext",
+            _object_setting(
                 "FILER_SECURITY_CONTEXT",
-                "V1SecurityContext",
+                client.V1SecurityContext,
                 DEFAULT_SECURITY_CONTEXT,
             ),
-            (container, "resources", "FILER_RESOURCES", "V1ResourceRequirements", None),
         )
-        for target, key, name, model, default in settings:
-            value = _object_setting(name, model, default)
-            if value is None:
-                target.pop(key, None)
-            else:
-                target[key] = value
+        _set_field(
+            container,
+            "resources",
+            _object_setting("FILER_RESOURCES", client.V1ResourceRequirements, None),
+        )
 
     def add_s3_mount(self) -> None:
         """Mount the S3 configuration from the secret `aws-secret`, if it exists."""
