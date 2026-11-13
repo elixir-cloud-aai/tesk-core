@@ -2,6 +2,7 @@
 
 import argparse
 from argparse import Namespace
+import json
 import logging
 import signal
 from typing import Any
@@ -43,6 +44,7 @@ def module_state(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr(taskmaster, "created_jobs", [])
     monkeypatch.setattr(taskmaster, "created_pvc", None)
     monkeypatch.setattr(taskmaster, "poll_interval", 5)
+    monkeypatch.setattr(taskmaster, "task_data", None)
     return api
 
 
@@ -249,12 +251,24 @@ def test_main_interrupt_deletes_jobs(
     mock_signal.assert_called_once_with(signal.SIGTERM, on_sigterm)
 
 
+@pytest.mark.parametrize("data", [None, task()])
+@patch("tesk_core.taskmaster.stop_task_jobs")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=False)
 def test_on_sigterm_keeps_jobs(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    mock_cancelled: MagicMock,
+    mock_stop: MagicMock,
+    data: dict[str, Any] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test that `SIGTERM` exits as failed and keeps the jobs."""
+    """Test that `SIGTERM` exits as failed and keeps the jobs.
+
+    Also before the task is read (no task), when the cancellation isn't
+    checked.
+    """
     created = MagicMock(spec=Job)
     monkeypatch.setattr(taskmaster, "created_jobs", [created])
+    monkeypatch.setattr(taskmaster, "task_data", data)
 
     with pytest.raises(SystemExit) as exc:
         on_sigterm(signal.SIGTERM, None)
@@ -262,7 +276,65 @@ def test_on_sigterm_keeps_jobs(
     assert exc.value.code == 143
     created.delete_quietly.assert_not_called()
     created.delete.assert_not_called()
+    mock_stop.assert_not_called()
+    assert mock_cancelled.called == (data is not None)
     assert "SIGTERM" in caplog.text
+
+
+@patch("tesk_core.taskmaster.delete_created_pvc")
+@patch("tesk_core.taskmaster.stop_task_jobs")
+@patch("tesk_core.taskmaster.check_cancelled", return_value=True)
+def test_on_sigterm_cancelled_stops_jobs(
+    mock_cancelled: MagicMock,
+    mock_stop: MagicMock,
+    mock_delete_pvc: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that `SIGTERM` on a cancelled task stops its running jobs.
+
+    The TESK API fails the job of a task cancelled before its taskmaster's
+    pod existed (`activeDeadlineSeconds`), and the pod is stopped; a pod that
+    started in the meantime must not leave executor jobs behind
+    (elixir-cloud-aai/tesk-core#132).
+    """
+    data = task()
+    monkeypatch.setattr(taskmaster, "task_data", data)
+
+    with pytest.raises(SystemExit) as exc:
+        on_sigterm(signal.SIGTERM, None)
+
+    assert exc.value.code == 0
+    mock_stop.assert_called_once_with(data)
+    mock_delete_pvc.assert_called_once_with()
+    assert "Got SIGTERM on a cancelled task" in caplog.text
+
+
+@patch("tesk_core.taskmaster.run_task")
+@patch("tesk_core.taskmaster.task_pvc", return_value=None)
+@patch("tesk_core.taskmaster.check_cancelled", return_value=False)
+@patch("tesk_core.taskmaster.config")
+def test_main_keeps_task_for_sigterm(
+    mock_config: MagicMock,
+    mock_cancelled: MagicMock,
+    mock_task_pvc: MagicMock,
+    mock_run_task: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that the task is known to `on_sigterm` before it runs."""
+    data = task()
+    monkeypatch.setattr("sys.argv", ["taskmaster", "-n", "tesk", json.dumps(data)])
+    monkeypatch.setattr(taskmaster, "init_own_job", MagicMock())
+
+    def run(*args: Any) -> None:
+        assert taskmaster.task_data == data
+
+    mock_run_task.side_effect = run
+
+    with patch("tesk_core.taskmaster.signal.signal"):
+        main()
+
+    mock_run_task.assert_called_once()
 
 
 @pytest.mark.parametrize(

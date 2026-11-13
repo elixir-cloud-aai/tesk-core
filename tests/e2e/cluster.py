@@ -88,6 +88,8 @@ class Task:
         outputs: list[dict[str, Any]] | None = None,
         env: dict[str, str] | None = None,
         resources: dict[str, Any] | None = None,
+        args: list[str] | None = None,
+        job_labels: dict[str, str] | None = None,
     ) -> None:
         """Describe the task and its taskmaster job; `submit` creates the job.
 
@@ -99,6 +101,10 @@ class Task:
             outputs: The task's outputs.
             env: The taskmaster's environment, as the TESK API passes it.
             resources: The resources of each executor's container.
+            args: More arguments of the taskmaster, after the others.
+            job_labels: More labels of the taskmaster's job, not of its pod
+                (e.g. the cancel label of a task cancelled before its pod
+                existed).
         """
         self.batch = batch
         self.core = core
@@ -128,6 +134,7 @@ class Task:
                 "-pt",
                 "120",
                 "-d",
+                *(args or []),
             ],
             "env": [{"name": k, "value": v} for k, v in (env or {}).items()],
             "volumeMounts": [
@@ -137,7 +144,10 @@ class Task:
         self.body = {
             "apiVersion": "batch/v1",
             "kind": "Job",
-            "metadata": {"name": self.name, "labels": {"job-type": "taskmaster"}},
+            "metadata": {
+                "name": self.name,
+                "labels": {"job-type": "taskmaster", **(job_labels or {})},
+            },
             "spec": {
                 "backoffLimit": 0,
                 "template": {

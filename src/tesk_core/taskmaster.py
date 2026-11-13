@@ -92,6 +92,9 @@ max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;
 # set by `init_own_job`, none if the job can't be read
 owner_references: list[dict[str, str]] = []
+# The task, once `run_main` has read it, so that `on_sigterm` can stop the
+# jobs of a cancelled task
+task_data: dict[str, Any] | None = None
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -573,14 +576,23 @@ def positive_seconds(value: str) -> float:
 def on_sigterm(signum: int, frame: FrameType | None) -> NoReturn:
     """Stop the taskmaster on `SIGTERM`, e.g. when Kubernetes stops its pod.
 
-    The jobs are left as they are: a new attempt of the pod (e.g. after the
-    node was drained) continues with them, and deleting the taskmaster's job
-    deletes them with it (`ownerReferences`).
+    If the task was cancelled (`check_cancelled`), its running jobs are
+    stopped and the taskmaster stops as cancelled (`cancel_task`): the TESK
+    API fails the job of a task that was cancelled before the taskmaster's
+    pod existed, which stops a pod that started in the meantime, and its
+    jobs must not run on. Otherwise, and before the task is read, the jobs
+    are left as they are: a new attempt of the pod (e.g. after the node was
+    drained) continues with them, and deleting the taskmaster's job deletes
+    them with it (`ownerReferences`).
 
     Args:
         signum: The signal's number.
         frame: The current stack frame.
     """
+    data = task_data
+    if data is not None and check_cancelled():
+        logger.error("Got SIGTERM on a cancelled task; stopping its jobs")
+        cancel_task(data, "Cancelled; got SIGTERM")
     logger.error("Got SIGTERM; stopping, the jobs are kept")
     sys.exit(sigterm_exit_code)
 
@@ -602,7 +614,7 @@ def main() -> None:
 
 def run_main() -> None:
     """Run the taskmaster with the arguments of the command line."""
-    global args, logger, created_pvc, max_queue, poll_interval  # noqa: PLW0603 -- module state of the run
+    global args, logger, created_pvc, max_queue, poll_interval, task_data  # noqa: PLW0603 -- module state of the run
 
     have_json_pvc = False
 
@@ -643,6 +655,8 @@ def run_main() -> None:
     # deletes the claim that an earlier attempt of this pod left behind
     # after an unexpected error (a claim that doesn't exist is no error)
     created_pvc = task_pvc(data)
+    # From here on, `SIGTERM` stops the jobs of a cancelled task
+    task_data = data
 
     # Check if we're cancelled during init
     if check_cancelled():

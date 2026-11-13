@@ -175,6 +175,18 @@ deleted, by hand or after `TASK_TTL_SECONDS`, which deletes them with it (see
 `SIGTERM` would restart a running executor from scratch after, e.g., a
 node drain; a run by hand has no new attempt that would continue them.
 
+A cancelled task is the exception: on `SIGTERM`, once it has read the task,
+the taskmaster checks for cancellation as above, and if the task was
+cancelled, it stops the task's running jobs, deletes the PVC (unless
+`KEEP_FAILED_PVC` keeps it) and exits with code 0, as when it finds the
+label while it runs. TESK API 1.2.0 and later also set
+`activeDeadlineSeconds: 1` on the job of a task that they cancel, so that
+Kubernetes fails the job and stops its pod: a pod that started just before,
+without the cancel label, would otherwise leave its jobs running. The check
+and the deletions have to finish within the pod's termination grace period
+(30 seconds by default); Kubernetes kills the taskmaster after it, and jobs
+that aren't deleted yet keep running until the taskmaster's job is deleted.
+
 ## Options
 
 The TESK API sets these in the taskmaster's job; they are listed for
