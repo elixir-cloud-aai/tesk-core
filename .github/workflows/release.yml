@@ -404,9 +404,9 @@ jobs:
   # environment: it needs no secrets, only `contents: write`. The tag must
   # still point to the release commit. Fails on a draft of the tag, and on a
   # published release unless an earlier attempt of this job created it (then
-  # it passes without changes). One at a time, so that the latest release is
-  # decided in order; a cancelled pending run (see the header) is re-run like
-  # a failed one
+  # it passes without changes). One at a time, so that GitHub's latest release
+  # is set in order; a cancelled pending run (see the header) is re-run like a
+  # failed one
   publish:
     name: Publish release
     needs: [prepare, release-image]

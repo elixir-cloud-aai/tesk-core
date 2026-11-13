@@ -196,8 +196,8 @@ and high vulnerabilities that have a fix, except those accepted in
 `.trivyignore.yaml`), in a job without credentials; and only then attests
 their build provenance, signs them (Sigstore) and tags them. Pushing and
 publishing the images each wait for an approval in the environment
-`release`, which only allows `v*` tags and has the secrets `DOCKERHUB_LOGIN` and
-`DOCKERHUB_TOKEN`. A version that is published never moves to another
+`release`, which only allows `v*` tags and has the secrets
+`DOCKERHUB_LOGIN` and `DOCKERHUB_TOKEN`. A version that is published never moves to another
 digest: if a release fails after publishing, follow it with a higher version
 (`latest` goes by tags). Only admins can create release tags, and nobody can
 move or delete them (tag rulesets).
@@ -216,9 +216,9 @@ draft of the tag before you push the tag. If only `Publish release` fails,
 re-run the failed jobs (not all jobs: once the GitHub release exists,
 `Prepare release` fails); a re-run passes without changes if the earlier
 attempt created the release after all. `Publish release` runs one release at
-a time, so that the latest release is set in order; if several tags are
-released at once, GitHub can cancel a waiting run of the job: re-run it the
-same way. Releases are never edited afterwards: fix mistakes in the notes of
+a time, so that GitHub's latest release is set in order; if several tags
+are released at once, GitHub can cancel a waiting run of the job: re-run it
+the same way. Releases are never edited afterwards: fix mistakes in the notes of
 the next release.
 
 After the first release of this workflow, drop `fail: "false"` in
