@@ -56,7 +56,8 @@ client); the taskmaster goes on as it would
 (e.g. stops, or ends a completed task). An unexpected error of the
 taskmaster itself fails its pod and keeps the PVC, as a retry of the pod
 reuses it; if every retry fails, the PVC is left behind. An interrupt
-(`SIGINT` or `SIGTERM`, see below) keeps it too.
+(`SIGINT` or `SIGTERM`, see below) keeps it too, except a `SIGTERM` on a
+cancelled task, which deletes it like any other cancellation.
 
 A job counts as failed when Kubernetes sets its condition `Failed`, or
 `FailureTarget`, which Kubernetes 1.31 and later set first; it counts as
@@ -138,8 +139,8 @@ Kubernetes would also restart failed containers within the pod.
 
 To cancel a task, the TESK API labels the taskmaster's job and, if it runs,
 its pod with `task-status: Cancelled`. The taskmaster checks for this label
-before it creates the first job, before each executor and the outputs
-filer, and while it polls: on its pod, through `/podinfo/labels` (a
+before it creates the PVC, before the inputs filer, each executor and the
+outputs filer, and while it polls: on its pod, through `/podinfo/labels` (a
 Kubernetes downward API volume), and on its job, read from the Kubernetes
 API (the job's name is in the pod's `job-name` label). A task that was
 cancelled while its taskmaster's pod was pending, or before the pod existed,
@@ -165,15 +166,29 @@ poll. Without `/podinfo/labels` (e.g. when run by hand), it doesn't check
 for cancellation at all.
 
 On `SIGINT` (e.g. Ctrl-C when run by hand), the taskmaster deletes the jobs
-that it created and exits with code 130. On `SIGTERM`, which Kubernetes
-sends when it stops the taskmaster's pod (e.g. when its job is deleted, or
-its node is drained), it logs an error and exits with code 143, and keeps
-the jobs: a new attempt of the pod, if the taskmaster's job has retries
-left, continues with them; otherwise they run until the taskmaster's job is
-deleted, by hand or after `TASK_TTL_SECONDS`, which deletes them with it (see
+that it created and exits with code 130; a `SIGTERM` then doesn't cut that
+short. On `SIGTERM`, which Kubernetes sends when it stops the taskmaster's
+pod (e.g. when its job is deleted, or its node is drained), it logs an
+error and exits with code 143, and keeps the jobs (except for a cancelled
+task, see below): a new attempt of the pod, if the taskmaster's job has
+retries left, continues with them; otherwise they run until the
+taskmaster's job is deleted, by hand or after `TASK_TTL_SECONDS`, which
+deletes them with it (see
 [Deleting finished tasks](#deleting-finished-tasks)). Deleting them on
 `SIGTERM` would restart a running executor from scratch after, e.g., a
 node drain; a run by hand has no new attempt that would continue them.
+
+A cancelled task is the exception: on `SIGTERM`, once it has read the task,
+the taskmaster checks for cancellation as above, and if the task was
+cancelled, it stops the task's running jobs, deletes the PVC (unless
+`KEEP_FAILED_PVC` keeps it) and exits with code 0, as when it finds the
+label while it runs. TESK API 1.2.0 and later also set
+`activeDeadlineSeconds: 1` on the job of a task that they cancel, so that
+Kubernetes fails the job and stops its pod: a pod that started just before,
+without the cancel label, would otherwise leave its jobs running. The check
+and the deletions have to finish within the pod's termination grace period
+(30 seconds by default); Kubernetes kills the taskmaster after it, and jobs
+that aren't deleted yet keep running until the taskmaster's job is deleted.
 
 ## Options
 

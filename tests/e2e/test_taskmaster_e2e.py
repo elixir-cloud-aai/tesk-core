@@ -74,6 +74,45 @@ def test_cancel_running_task(run_task: Callable[..., Task]) -> None:
     task.wait(lambda: task.gone("-ex-00"), "the executor job to be deleted")
 
 
+def test_cancel_before_start(run_task: Callable[..., Task]) -> None:
+    """Test that a task cancelled before its taskmaster's pod existed never runs.
+
+    Only the taskmaster's job has the cancel label, not its pod: the
+    taskmaster reads it from its job and creates no job; its own job
+    completes (elixir-cloud-aai/tesk-core#132).
+    """
+    task = run_task(["sleep 600"], job_labels={"task-status": "Cancelled"})
+
+    assert task.wait_finished() == "Complete", task.logs()
+    assert task.job("-ex-00") is None
+    assert "Cancelled during init" in task.logs()
+
+
+def test_cancel_on_deadline_stops_jobs(run_task: Callable[..., Task]) -> None:
+    """Test that a task cancelled as the TESK API does it leaves no jobs running.
+
+    The TESK API labels the taskmaster's job (its pod may not have the label
+    yet) and sets `activeDeadlineSeconds: 1`, so that Kubernetes fails the
+    job and stops its pod (`SIGTERM`). The taskmaster polls only once an hour
+    here, so only `SIGTERM` makes it stop the running executor's job
+    (elixir-cloud-aai/tesk-core#132).
+    """
+    task = run_task(["sleep 600"], args=["-p", "3600"])
+    task.wait(lambda: task.running("-ex-00"), "the executor to run")
+
+    task.batch.patch_namespaced_job(
+        task.name,
+        NAMESPACE,
+        {
+            "metadata": {"labels": {"task-status": "Cancelled"}},
+            "spec": {"activeDeadlineSeconds": 1},
+        },
+    )
+
+    assert task.wait_finished() == "Failed", task.logs()
+    task.wait(lambda: task.gone("-ex-00"), "the executor job to be deleted")
+
+
 def test_unschedulable_task_times_out(run_task: Callable[..., Task]) -> None:
     """Test that an executor that can't be scheduled ends the task.
 

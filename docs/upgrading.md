@@ -62,6 +62,19 @@ and refuses patterns with wildcards in their first component (`/*.txt`; see
 fail such outputs or put their matches in the wrong place, so a TESK API
 that passes `path_prefix` needs this release of both images.
 
+### `SIGTERM` stops the jobs of a cancelled task
+
+On `SIGTERM`, the taskmaster now checks whether its task was cancelled; if
+so, it stops the task's running jobs, deletes the PVC (unless
+`KEEP_FAILED_PVC` keeps it) and exits with code 0, instead of exiting with
+code 143 and keeping the jobs. A taskmaster pod that started just before
+the TESK API cancelled its task, and that Kubernetes then stopped (the TESK
+API sets `activeDeadlineSeconds: 1` on the job), no longer leaves its
+executor running (see [What it does](taskmaster.md#what-it-does)). Other
+`SIGTERM`s (e.g. a node drain) keep the jobs, as before. The deployment
+needs no change: the check uses the same `get` on `jobs` as the other
+checks for cancellation.
+
 ## 0.11.0
 
 ### Compatibility

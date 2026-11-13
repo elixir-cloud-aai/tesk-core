@@ -92,6 +92,9 @@ max_queue: int | None = None
 # References to the taskmaster's job, which owns the jobs that it creates;
 # set by `init_own_job`, none if the job can't be read
 owner_references: list[dict[str, str]] = []
+# The task, once `run_main` has read it, so that `on_sigterm` can stop the
+# jobs of a cancelled task
+task_data: dict[str, Any] | None = None
 # Set by `main`
 args = argparse.Namespace()
 logger = logging.getLogger(__name__)
@@ -347,6 +350,10 @@ def init_pvc(data: dict[str, Any], filer: Filer) -> PVC:
     if not data["inputs"]:
         return pvc
 
+    # Checked again before the first job, after the claim was created
+    if check_cancelled():
+        cancel_task(data, "Cancelled before the inputs filer")
+
     filerjob = new_job(
         filer.get_spec("inputs", args.debug),
         task_name + "-inputs-filer",
@@ -570,17 +577,55 @@ def positive_seconds(value: str) -> float:
     return seconds
 
 
-def on_sigterm(signum: int, frame: FrameType | None) -> NoReturn:
-    """Stop the taskmaster on `SIGTERM`, e.g. when Kubernetes stops its pod.
+class Terminated(BaseException):
+    """The taskmaster got `SIGTERM`; raised by `on_sigterm`.
 
-    The jobs are left as they are: a new attempt of the pod (e.g. after the
-    node was drained) continues with them, and deleting the taskmaster's job
-    deletes them with it (`ownerReferences`).
+    A `BaseException`, like `KeyboardInterrupt`, so that no handler of
+    errors catches it on its way to `main`.
+    """
+
+
+def on_sigterm(signum: int, frame: FrameType | None) -> NoReturn:
+    """Stop the running code on `SIGTERM`, e.g. when Kubernetes stops its pod.
+
+    Only raises `Terminated`, which `main` handles (`stop_on_sigterm`)
+    outside the signal handler: logging or calling the Kubernetes API in it
+    could fail when the signal interrupts the same in the main code (e.g. a
+    write to stderr). Further `SIGTERM`s are ignored, so that they don't
+    interrupt that handling.
 
     Args:
         signum: The signal's number.
         frame: The current stack frame.
+
+    Raises:
+        Terminated: Always.
     """
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    raise Terminated
+
+
+def stop_on_sigterm() -> NoReturn:
+    """Stop the taskmaster after `SIGTERM`.
+
+    If the task was cancelled (`check_cancelled`), its running jobs are
+    stopped and the taskmaster stops as cancelled (`cancel_task`): the TESK
+    API fails the job of a task that was cancelled before the taskmaster's
+    pod existed, which stops a pod that started in the meantime, and its
+    jobs must not run on. Otherwise, and before the task is read, the jobs
+    are left as they are and the taskmaster exits with code 143: a new
+    attempt of the pod (e.g. after the node was drained) continues with
+    them, and deleting the taskmaster's job deletes them with it
+    (`ownerReferences`).
+    """
+    data = task_data
+    try:
+        if data is not None and check_cancelled():
+            logger.error("Got SIGTERM on a cancelled task; stopping its jobs")
+            cancel_task(data, "Cancelled; got SIGTERM")
+    except Exception:
+        # An error that the checks don't expect: exit as without cancellation
+        logger.exception("Can't check for cancellation after SIGTERM")
     logger.error("Got SIGTERM; stopping, the jobs are kept")
     sys.exit(sigterm_exit_code)
 
@@ -590,19 +635,23 @@ def main() -> None:
 
     On `SIGINT` (e.g. Ctrl-C when run by hand), deletes the jobs that it
     created (`clean_on_interrupt`) and exits with code 130; on `SIGTERM`, see
-    `on_sigterm`.
+    `stop_on_sigterm`.
     """
     signal.signal(signal.SIGTERM, on_sigterm)
     try:
         run_main()
     except KeyboardInterrupt:
+        # So that `SIGTERM` (`Terminated`) can't cut the cleanup short
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         clean_on_interrupt()
         sys.exit(sigint_exit_code)
+    except Terminated:
+        stop_on_sigterm()
 
 
 def run_main() -> None:
     """Run the taskmaster with the arguments of the command line."""
-    global args, logger, created_pvc, max_queue, poll_interval  # noqa: PLW0603 -- module state of the run
+    global args, logger, created_pvc, max_queue, poll_interval, task_data  # noqa: PLW0603 -- module state of the run
 
     have_json_pvc = False
 
@@ -638,6 +687,9 @@ def run_main() -> None:
     else:
         with open(args.file) as fh:
             data = json.load(fh)
+    # From here on, `SIGTERM` stops the jobs of a cancelled task, also those
+    # that an earlier attempt of this pod started
+    task_data = data
 
     # Known before the claim is created, so that a task cancelled now also
     # deletes the claim that an earlier attempt of this pod left behind
@@ -775,8 +827,6 @@ def delete_created_pvc(*, keep_failed: bool = True) -> None:
     if keep_failed and keep_failed_pvc():
         logger.info("Keeping PVC '%s' (%s)", pvc.name, keep_failed_pvc_env)
         return
-    # Forgotten first, so that it isn't deleted twice
-    created_pvc = None
     try:
         pvc.delete(request_timeout=pvc_delete_timeout)
     except ApiException as ex:
@@ -784,6 +834,10 @@ def delete_created_pvc(*, keep_failed: bool = True) -> None:
             logger.error("Can't delete PVC '%s': %s %s", pvc.name, ex.status, ex.reason)
     except HTTPError as ex:
         logger.error("Can't delete PVC '%s': %s", pvc.name, ex)
+    # Forgotten only once the delete returned, so that a delete that
+    # `SIGTERM` (`Terminated`) cut short is tried again (`stop_on_sigterm`);
+    # deleting it again only gets a 404
+    created_pvc = None
 
 
 def exit_cancelled(reason: str = "Unknown reason") -> NoReturn:
