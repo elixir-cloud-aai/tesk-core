@@ -52,9 +52,13 @@ to the filer.
   `taskmaster-name=<task>,job-type=executor`. Deploy that TESK API first,
   then this taskmaster (see "Upgrade order for filer labels" in the TESK
   API's upgrade notes): switch the taskmaster image only once no older
-  TESK API replica serves requests, e.g. in a second deployment after the
-  rollout, or in the same one with the `Recreate` strategy, which also
-  meets the upgrade order above. Older TESK API releases read a single
+  TESK API replica serves requests. If the new TESK API also passes
+  `path_prefix` on outputs (TES 1.1, see "Upgrade order" above), it must
+  not start tasks with the old taskmaster either, so switch both in one
+  deployment with the `Recreate` strategy: the old TESK API stops before
+  the new one, which starts tasks with the new taskmaster only. Otherwise,
+  a second deployment after the TESK API's rollout also works. Older TESK
+  API releases read a single
   task's jobs (`GET /tasks/{id}` and cancel) by `taskmaster-name` alone
   and take every job without `job-type` as the outputs filer. With this
   taskmaster, that is the inputs filer until the outputs filer exists, so
