@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import requests
@@ -1339,7 +1339,8 @@ def output_file_logs(outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         (a string, as in TES).
     """
     logs: list[dict[str, Any]] = []
-    size = len("[]")
+    # The brackets, less the comma that the first entry doesn't need
+    size = len("[]") - 1
     for index, output in enumerate(outputs):
         for relative, file_size in output_files(output):
             entry = {
@@ -1396,7 +1397,11 @@ def files_below(local: str) -> Iterator[tuple[str, int]]:
     if os.path.isfile(local):
         yield "", os.path.getsize(local)
         return
-    for root, dirs, files in os.walk(local):
+    if not os.path.isdir(local):
+        return
+    # A directory that can't be read raises, rather than giving a list that
+    # looks complete but isn't
+    for root, dirs, files in os.walk(local, onerror=raise_error):
         # Files by name, then the subdirectories by name, depth first
         dirs.sort()
         for name in sorted(files):
@@ -1419,13 +1424,27 @@ def output_file_url(output: dict[str, Any], relative: str) -> tuple[str, str]:
     Returns:
         The file's URL and its path in the executors.
     """
-    if output.get("path_prefix") and hasWildcards(output["path"]):
-        base = taskPath(output["path_prefix"])
-    else:
-        base = taskPath(output["path"])
+    wildcards = bool(output.get("path_prefix")) and hasWildcards(output["path"])
+    base = taskPath(output["path_prefix"] if wildcards else output["path"])
     if not relative:
         return output["url"], base
-    return url_join(output["url"], relative), base.rstrip("/") + "/" + relative
+    path = base.rstrip("/") + "/" + relative
+    if not wildcards and urlsplit(output["url"]).scheme == "ftp":
+        # The FTP upload of a directory appends the path as it is
+        return output["url"] + "/" + relative, path
+    return url_join(output["url"], relative), path
+
+
+def raise_error(err: OSError) -> NoReturn:
+    """Raise an error of `os.walk`, which ignores them by default.
+
+    Args:
+        err: The error.
+
+    Raises:
+        OSError: Always, the error.
+    """
+    raise err
 
 
 def logConfig(loglevel: int) -> None:

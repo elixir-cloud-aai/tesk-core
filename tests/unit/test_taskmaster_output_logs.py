@@ -192,14 +192,16 @@ def test_record_output_logs_cut(
         monkeypatch: The fixture that sets the limit.
         caplog: The fixture that captures the log.
     """
-    monkeypatch.setattr(taskmaster, "max_output_logs_bytes", 80)
+    # Exactly one entry fits: the limit counts the JSON as stored
+    limit = len(json.dumps(LOGS[:1], separators=(",", ":")))
+    monkeypatch.setattr(taskmaster, "max_output_logs_bytes", limit)
 
     with patch("tesk_core.taskmaster.client.CoreV1Api", return_value=core):
         record_output_logs(JOB, OUTPUTS)
 
     assert stored(batch) == LOGS[:1]
     body = batch.patch_namespaced_job.call_args.args[2]
-    assert len(body["metadata"]["annotations"][output_logs_annotation]) <= 80
+    assert len(body["metadata"]["annotations"][output_logs_annotation]) == limit
     assert "only 1 of 2" in caplog.text
 
 
@@ -284,7 +286,7 @@ def test_run_task_records_output_logs(
     mock_delete: MagicMock,
     mock_record: MagicMock,
 ) -> None:
-    """Test that the logs are recorded once the outputs filer has completed.
+    """Test that the logs are recorded after the outputs filer has completed.
 
     Args:
         mock_run: The mocked run of a job.
@@ -295,7 +297,12 @@ def test_run_task_records_output_logs(
     with (RESOURCES / "inputFile.json").open() as fh:
         data = json.load(fh)
     data["outputs"] = [{"path": "/out", "url": "s3://b/out", "type": "DIRECTORY"}]
+    calls = MagicMock()
+    calls.attach_mock(mock_run, "run")
+    calls.attach_mock(mock_record, "record")
 
     run_task(data, "filer_name", "filer_version")
 
     mock_record.assert_called_once_with("task-1000-outputs-filer", data["outputs"])
+    # After the run of the outputs filer, the last job
+    assert [name for name, _, _ in calls.mock_calls][-2:] == ["run", "record"]

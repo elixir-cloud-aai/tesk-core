@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -165,8 +165,9 @@ def test_too_many_files(
     """
     for name in ("a", "b", "c"):
         write(prefix, f"out/{name}", "x")
-    one = len(json.dumps(entry(0, "a", 1), separators=(",", ":")))
-    monkeypatch.setattr(filer, "OUTPUT_LOGS_MAX_BYTES", 2 + 2 * (one + 1))
+    # Exactly two entries fit: the limit counts the JSON as printed
+    two = json.dumps([entry(0, "a", 1), entry(0, "b", 1)], separators=(",", ":"))
+    monkeypatch.setattr(filer, "OUTPUT_LOGS_MAX_BYTES", len(two))
     output = {"path": "/out", "url": "s3://b/out", "type": "DIRECTORY"}
 
     assert output_file_logs([output]) == [entry(0, "a", 1), entry(0, "b", 1)]
@@ -201,6 +202,22 @@ def test_too_many_files(
             "s1/out.txt",
             ("s3://b/res/s1/out.txt", "/data/s1/out.txt"),
         ),
+        # The FTP upload of a directory appends the path as it is
+        (
+            {"path": "/out", "url": "ftp://h/up/", "type": "DIRECTORY"},
+            "d/x.txt",
+            ("ftp://h/up//d/x.txt", "/out/d/x.txt"),
+        ),
+        (
+            {
+                "path": "/data/*.txt",
+                "path_prefix": "/data",
+                "url": "ftp://h/res/",
+                "type": "FILE",
+            },
+            "a.txt",
+            ("ftp://h/res/a.txt", "/data/a.txt"),
+        ),
     ],
 )
 def test_output_file_url(
@@ -214,6 +231,24 @@ def test_output_file_url(
         expected: The URL and the path.
     """
     assert output_file_url(output, relative) == expected
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
+def test_unreadable_directory(prefix: Path) -> None:
+    """Test that a directory that can't be read raises, rather than giving less.
+
+    Args:
+        prefix: The directory below which the task's paths are.
+    """
+    write(prefix, "out/a.txt", "a")
+    write(prefix, "out/locked/b.txt", "b")
+    (prefix / "out/locked").chmod(0)
+    output = {"path": "/out", "url": "s3://b/out", "type": "DIRECTORY"}
+    try:
+        with pytest.raises(PermissionError):
+            output_file_logs([output])
+    finally:
+        (prefix / "out/locked").chmod(0o755)
 
 
 def run_main(monkeypatch: pytest.MonkeyPatch, ttype: str, data: dict[str, Any]) -> int:
@@ -279,6 +314,7 @@ def test_main_prints_output_logs(
         entry(1, "", 2),
     ]
     assert "secret" not in out
+    assert mock_process.call_args_list == [call("outputs", o) for o in outputs]
 
 
 @pytest.mark.parametrize(("ttype", "status"), [("inputs", 0), ("outputs", 1)])
@@ -333,3 +369,4 @@ def test_main_output_logs_error(
 
     assert marker_lines(capsys.readouterr().out) == []
     assert "Can't list the uploaded files: gone" in caplog.text
+    mock_process.assert_called_once_with("outputs", files[0])

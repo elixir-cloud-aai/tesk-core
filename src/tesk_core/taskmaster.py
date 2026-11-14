@@ -1022,7 +1022,8 @@ def record_output_logs(job_name: str, outputs: list[dict[str, Any]]) -> None:
             logger.warning("Can't read the output file logs of job '%s'", job_name)
             return
         entries: list[dict[str, str]] = []
-        size = len("[]")
+        # The brackets, less the comma that the first entry doesn't need
+        size = len("[]") - 1
         for file in files:
             url, path = output_file_url(outputs[file["output"]], file["relative"])
             entry = {"url": url, "path": path, "size_bytes": file["size_bytes"]}
