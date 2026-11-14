@@ -4,7 +4,7 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
-## Unreleased
+## 0.12.0
 
 ### Compatibility
 
