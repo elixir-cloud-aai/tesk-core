@@ -88,6 +88,20 @@ def test_pod_labels() -> None:
     }
 
 
+def test_job_labels() -> None:
+    """Test that the filer's job has the task's label, as executor jobs do.
+
+    Only the job: its pods keep the labels of `test_pod_labels`.
+    """
+    filer = Filer("task-1-filer", {"a": 1}, task_name="task-1")
+
+    for mode in ("inputs", "outputs"):
+        spec = filer.get_spec(mode)
+        assert spec["metadata"]["labels"] == {"taskmaster-name": "task-1"}
+        assert "taskmaster-name" not in spec["spec"]["template"]["metadata"]["labels"]
+    assert "labels" not in Filer("name", {"a": 1}).get_spec("inputs")["metadata"]
+
+
 def test_writable_tmp() -> None:
     """Test that the filer gets a writable `/tmp` on its read-only root."""
     filer = Filer("name", {"a": 1})

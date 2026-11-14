@@ -25,6 +25,9 @@ FILER_LABELS = {
 }
 """Labels of the filer's pods."""
 
+TASK_LABEL = "taskmaster-name"
+"""Label of the filer's job with the name of its task, as on executor jobs."""
+
 TMP_VOLUME = "tmp"
 """Name of the `emptyDir` volume at `/tmp` in the filer's pod."""
 
@@ -178,6 +181,7 @@ class Filer:
         filer_version: str = "v0.5",
         pullPolicyAlways: bool = False,
         json_pvc: str | None = None,
+        task_name: str | None = None,
     ) -> None:
         """Describe the filer job.
 
@@ -189,6 +193,10 @@ class Filer:
             filer_version: Tag of the filer image.
             pullPolicyAlways: Whether to always pull the image.
             json_pvc: Name of the ConfigMap with the gzipped task, if any.
+            task_name: Name of the task (its taskmaster's job), if any: the
+                value of the job's label `taskmaster-name` (`TASK_LABEL`),
+                as on the executors' jobs, by which the TESK API selects the
+                task's jobs. Not on the pod, whose labels are `FILER_LABELS`.
 
         Raises:
             ValueError: `CONTAINER_BASE_PATH` is inside or contains
@@ -225,6 +233,9 @@ class Filer:
                 }
             },
         }
+
+        if task_name is not None:
+            self.spec["metadata"]["labels"] = {TASK_LABEL: task_name}
 
         self.set_hardening()
 
