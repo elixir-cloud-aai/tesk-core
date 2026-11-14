@@ -39,11 +39,13 @@ to the filer.
   file or directory whose name has `#`, `?`, a tab or a line break (or
   `;`, for FTP) below them now fail, uploading nothing, where older filers
   uploaded such files to truncated or changed keys or paths and reported
-  success (see [Names in outputs](filer.md#names-in-outputs)). The same
+  success (see [Names in outputs](filer.md#names-in-outputs)). So do
+  names that aren't valid UTF-8, which failed after the other files were
+  uploaded, and directories below them that the filer can't read. The same
   goes for these characters in matches of outputs with wildcards (other
-  than HTTP(S); before, only `#` and `?` failed them), and for such names
-  below matched directories. Tasks that write such names should rename
-  them.
+  than HTTP(S); before, only `#` and `?` failed them; `;` also for URLs
+  without a scheme), and for such names below matched directories. Tasks
+  that write such names should rename them.
 
 ### Hardened filer pods
 

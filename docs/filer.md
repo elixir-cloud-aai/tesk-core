@@ -97,16 +97,20 @@ FTP, ends its last segment at `;`). `s3://bucket/out/a#1` would land at
 the key `out/a`, where `a#2` would overwrite it. So the filer fails such
 an output, with an error that names the first file or directory whose name
 has one of these characters (`#`, `?`, tab, CR and LF for S3, and `;`
-too for FTP), before anything of it is uploaded; so does a directory
-below it that the filer can't read, whose names it can't check. Executors
-should give their output files other names. HTTP(S) uploads escape the names (`a#1`
-is uploaded to `.../a%231`), and `file:` directory outputs are copied as
-they are, so they keep these names.
+too for FTP), or isn't valid UTF-8, before anything of it is uploaded; so
+does a directory below it that the filer can't read, whose names it can't
+check. Executors should give their output files other names. HTTP(S)
+uploads escape the names (`a#1` is uploaded to `.../a%231`), and `file:`
+directory outputs are copied as they are, so they keep these names. The
+errors show the paths in the filer, as those about symbolic links do (see
+[Task paths in the filer](#task-paths-in-the-filer)).
 
 [Outputs with wildcards](#outputs-with-wildcards) fail likewise, before
 anything is uploaded, if the path of a match below `path_prefix` has one
 of these characters, for any scheme but HTTP(S) (`;` anywhere in the path,
-for FTP), or, for S3 and FTP, if a name below a matched directory has one.
+for FTP and for URLs without a scheme, which are taken as `file:`), or,
+for S3 and FTP, isn't valid UTF-8 or has a name below a matched directory
+that the directory output would refuse.
 
 ## Output file logs
 

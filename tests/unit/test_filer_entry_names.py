@@ -20,6 +20,9 @@ from pytest_mock import MockerFixture
 from tesk_core.filer import process_file
 from tesk_core.transput import Type, unsafe_entry
 
+# A name whose bytes aren't UTF-8, as Python gives it (surrogate escapes)
+NOT_UTF8 = os.fsdecode(b"z\xff")
+
 
 @pytest.fixture
 def bucket() -> Iterator[None]:
@@ -79,6 +82,7 @@ def directory(path: Path, url: str) -> dict[str, str]:
         ("a\nb", "a\nb"),
         ("a\tb", "a\tb"),
         ("a\rb", "a\rb"),
+        (NOT_UTF8, NOT_UTF8),
         ("sub/c#d.txt", "sub/c#d.txt"),
         ("d#2/x.txt", "d#2"),
     ],
@@ -89,9 +93,10 @@ def test_s3_directory_entry_names_are_refused(
     """Test that an S3 directory output with such a name uploads nothing.
 
     Before the fix, `a#1` was uploaded to the key `out/a`, and `a<LF>b` to
-    `out/ab`, and the output succeeded. Entries that sort before the
-    refused one aren't uploaded either, and the error names the file or
-    directory.
+    `out/ab`, and the output succeeded; a name that isn't UTF-8 failed with
+    `UnicodeEncodeError` after the others were uploaded. Entries that sort
+    before the refused one aren't uploaded either, and the error names the
+    file or directory.
     """
     write(tmp_path / "0.txt")
     write(tmp_path / name)
@@ -109,6 +114,9 @@ def test_s3_directory_entry_names_are_refused(
         ("a?1", "a?1"),
         ("a;1", "a;1"),
         ("a\nb", "a\nb"),
+        ("a\tb", "a\tb"),
+        ("a\rb", "a\rb"),
+        (NOT_UTF8, NOT_UTF8),
         ("sub/b;x.txt", "sub/b;x.txt"),
         ("d;2/x.txt", "d;2"),
     ],
@@ -297,6 +305,61 @@ def test_file_directory_entry_names_are_copied(tmp_path: Path) -> None:
     ):
         assert process_file("outputs", directory(work, f"file://{shared}/out")) == 0
     assert (shared / "out" / "a#1;2?").read_text() == "x"
+
+
+@pytest.mark.parametrize(
+    "scheme, expected", [("", 1), ("file://", 0)], ids=["none", "file"]
+)
+def test_wildcard_match_with_semicolon_without_scheme_is_refused(
+    tmp_path: Path, scheme: str, expected: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that `;` fails wildcard outputs whose URL has no scheme.
+
+    `urlparse` ends the last segment of such URLs at `;`, so `a;1.txt` and
+    `a;2.txt` would both be copied to `out/a`; `file:` URLs keep it.
+    """
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    work = tmp_path / "work"
+    write(work / "a;1.txt", "1")
+    write(work / "a;2.txt", "2")
+    filedata = {
+        "path": f"{work}/*.txt",
+        "path_prefix": str(work),
+        "url": f"{scheme}{shared}/out",
+        "type": Type.File.value,
+    }
+    with (
+        patch("tesk_core.path.TASK_PATH_PREFIX", "/"),
+        patch("tesk_core.path.HOST_BASE_PATH", str(shared)),
+        patch("tesk_core.path.CONTAINER_BASE_PATH", str(shared)),
+    ):
+        assert process_file("outputs", filedata) == expected
+    if expected:
+        assert not (shared / "out").exists()
+        assert repr(str(work / "a;1.txt")) in caplog.text
+    else:
+        assert (shared / "out" / "a;2.txt").read_text() == "2"
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_s3_wildcard_match_not_utf8_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a wildcard match whose name isn't UTF-8 fails S3 outputs."""
+    write(tmp_path / "a.txt")
+    write(tmp_path / (NOT_UTF8 + ".txt"))
+
+    filedata = {
+        "path": f"{tmp_path}/*.txt",
+        "path_prefix": str(tmp_path),
+        "url": "s3://tesk/out",
+        "type": Type.File.value,
+    }
+    assert process_file("outputs", filedata) == 1
+    assert keys() == []
+    assert repr(str(tmp_path / (NOT_UTF8 + ".txt"))) in caplog.text
 
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")

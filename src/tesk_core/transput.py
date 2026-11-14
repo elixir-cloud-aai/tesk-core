@@ -202,8 +202,31 @@ keys `out/a` and `out/ab`. FTP URLs also end their last segment at `;`
 (parameters)."""
 
 
+def unsafe_name(name: str, chars: str) -> bool:
+    """Tell whether a name can't be appended to a URL as it is.
+
+    Args:
+        name: The name, or a relative path.
+        chars: The characters it can't have; none (empty) allows any name.
+
+    Returns:
+        Whether it has one of `chars`, or, if there are any, isn't valid
+        UTF-8 (a name that the file system gave as bytes that aren't UTF-8,
+        decoded with surrogate escapes, which a URL can't carry).
+    """
+    if not chars:
+        return False
+    if any(char in name for char in chars):
+        return True
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def unsafe_entry(path: str, chars: str) -> str | None:
-    """Find an entry below a directory whose name has any of some characters.
+    """Find an entry below a directory whose name can't be part of a URL.
 
     Walks the directory top-down, without following links, and each
     directory's entries by name. A second walk after `symlink_in`'s, which
@@ -211,7 +234,8 @@ def unsafe_entry(path: str, chars: str) -> str | None:
 
     Args:
         path: The directory.
-        chars: The characters; none (empty) finds nothing.
+        chars: The characters the names can't have (see `unsafe_name`);
+            none (empty) finds nothing.
 
     Returns:
         The path of the first such file or directory, or `None` (also if
@@ -240,7 +264,7 @@ def unsafe_entry(path: str, chars: str) -> str | None:
     for root, dirs, files in os.walk(path, onerror=unreadable, followlinks=False):
         dirs.sort()
         for name in sorted(dirs + files):
-            if any(char in name for char in chars):
+            if unsafe_name(name, chars):
                 return os.path.join(root, name)
     return None
 
@@ -269,7 +293,7 @@ def output_has_unsafe_entry(path: str, chars: str) -> bool:
         return False
     logging.error(
         "Output %s contains %r, whose name can't be part of its URL: names "
-        "with any of %r are refused for this protocol",
+        "with any of %r, or that aren't UTF-8, are refused for this protocol",
         path,
         entry,
         chars,

@@ -46,6 +46,7 @@ from tesk_core.transput import (
     open_for_upload,
     output_has_symlink,
     output_has_unsafe_entry,
+    unsafe_name,
     url_for_log,
     within,
 )
@@ -1235,6 +1236,11 @@ def checked_matches(
         that a URL of the scheme can't carry, or is a directory with an
         entry whose name the transfer can't upload.
     """
+    chars = trans.url_unsafe_chars
+    if not urlparse(filedata["url"]).scheme:
+        # `urlparse` also ends the last segment of URLs without scheme
+        # (taken as `file:`) at `;` (parameters)
+        chars += ";"
     uploads = []
     for match in matches:
         if not within(prefix, match):
@@ -1249,8 +1255,11 @@ def checked_matches(
             return None
         relative = os.path.relpath(match, prefix).replace(os.sep, "/")
         # The whole path below `prefix` is checked, also for FTP's `;`,
-        # which only ends the last segment: refusing more is the safe side
-        if any(c in relative for c in trans.url_unsafe_chars):
+        # which only ends the last segment: refusing more is the safe side.
+        # S3 and FTP can't take names that aren't UTF-8 either
+        if any(c in relative for c in chars) or unsafe_name(
+            relative, trans.entry_unsafe_chars
+        ):
             logging.error(
                 "Output %s matches %r, whose name can't be part of a %s: URL",
                 filedata["path"],
