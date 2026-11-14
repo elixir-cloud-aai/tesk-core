@@ -35,6 +35,20 @@ to the filer.
   tasks run as before, without the annotation (a new taskmaster with an
   older filer logs the warning `Can't read the output file logs` for each
   task with outputs). No new permissions are needed.
+- **Labels of the filer jobs**: the inputs and outputs filers' jobs have
+  the label `taskmaster-name: <task>`, as the executor jobs have (see
+  [Taskmaster](taskmaster.md#what-it-does)), so that the TESK API can
+  select the filer jobs of the tasks it lists
+  ([tesk-api#177](https://github.com/elixir-cloud-aai/tesk-api/issues/177)).
+  Jobs of tasks started by older taskmasters don't have it. Selectors on
+  `taskmaster-name` alone now also match the filer jobs; tell them apart
+  from the executor jobs by `job-type: executor`, which they don't have.
+  Current TESK API releases read a single task's jobs (`GET /tasks/{id}`,
+  cancel) by `taskmaster-name` alone and take a job without `job-type` as
+  the outputs filer: until a task's outputs filer exists, that is its
+  inputs filer, so the task counts as active while the inputs filer runs,
+  and a failed inputs filer gives `SYSTEM_ERROR`. The label is set when
+  the job is created, so no new permissions are needed.
 
 ### Hardened filer pods
 

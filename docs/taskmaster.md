@@ -33,6 +33,13 @@ outputs, volumes and resources.
    there is one. Volumes need no filer: their directories on the PVC are
    created when the executors start, and their contents aren't uploaded.
 
+The filer jobs have the label `taskmaster-name: <task>`, as the executor
+jobs have it from the TESK API, so that all jobs of a task can be selected
+by it (`kubectl get jobs -l taskmaster-name=<task>`). Unlike the executor
+jobs, they have no `job-type` label, which tells them apart. The label is
+on the jobs only; the filer pods have their own labels (see
+[Pod security](filer.md#pod-security)).
+
 The taskmaster polls each job until it completes. If a job doesn't complete,
 the taskmaster stops without running the remaining jobs, deletes the PVC, and
 exits with code 0. The TESK API derives the task's state from the jobs, not

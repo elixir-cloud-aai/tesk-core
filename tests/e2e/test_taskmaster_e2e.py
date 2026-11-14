@@ -15,13 +15,14 @@ from tests.e2e.cluster import HTTP_POD, HTTP_URL, NAMESPACE, Task, condition
 
 
 def test_task_with_inputs_and_outputs(
-    run_task: Callable[..., Task], core: client.CoreV1Api
+    run_task: Callable[..., Task], core: client.CoreV1Api, batch: client.BatchV1Api
 ) -> None:
     """Test that a task stages its inputs, runs, uploads, and deletes its PVC.
 
     One input has content, one comes from the HTTP server; the executor
     concatenates them into the output, which the filer uploads to the HTTP
-    server.
+    server. The jobs of the task, the filers' too, have the label
+    `taskmaster-name`, by which the TESK API selects them.
     """
     upload = f"/out-{uuid.uuid4().hex[:8]}.txt"
     task = run_task(
@@ -39,6 +40,14 @@ def test_task_with_inputs_and_outputs(
         job = task.job(suffix)
         assert job is not None, suffix
         assert condition(job, "Complete"), suffix
+    labelled = batch.list_namespaced_job(
+        NAMESPACE, label_selector=f"taskmaster-name={task.name}"
+    )
+    assert sorted(job.metadata.name for job in labelled.items) == [
+        task.name + "-ex-00",
+        task.name + "-inputs-filer",
+        task.name + "-outputs-filer",
+    ]
     log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
     assert f"PUT {upload} 'content-a;input /b.txt'" in log
     # The output file logs (TES `logs[].outputs`) for the TESK API
