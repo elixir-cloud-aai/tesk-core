@@ -70,6 +70,26 @@ job that the taskmaster failed has the condition `Failed` with the reason
 `SYSTEM_ERROR`. A cancelled task stops as before. Other values of the
 annotation, or none, stop the task at the executor's failure.
 
+Once the outputs filer has completed, the taskmaster records the uploaded
+files (TES 1.1 `logs[].outputs`): it reads the last line that starts with
+`TESK_OUTPUT_FILE_LOGS` among the last 1,000 lines of the log of the filer's
+succeeded pod (see [Filer](filer.md#output-file-logs)), checks it, adds
+each file's URL and path in the executors, derived from its output as the
+upload does, and stores the list, with the keys `url`, `path` and
+`size_bytes`, as the annotation `output-file-logs` (compact JSON) of the
+outputs filer's job, from which the TESK API reports it
+([tesk-api#160](https://github.com/elixir-cloud-aai/tesk-api/issues/160)).
+The annotation holds at most 200,000 bytes, as Kubernetes allows 256 KiB
+for all of a job's annotations: if the list is longer, the last entries are
+left out, with a warning. If the log can't be read, has no valid line, or
+the job can't be patched, or any other error occurs, the taskmaster logs a
+warning and the task completes without the annotation; the outputs are
+uploaded either way. The URLs are those of the task, so the annotation
+holds credentials only where the task's URLs do, like the task stored
+with the taskmaster's job.
+This uses the role's existing permissions (`list` on `pods`, `get` on
+`pods/log`, `patch` on `jobs`).
+
 The PVC is also deleted when the taskmaster stops on a cancelled task, also
 one cancelled before the taskmaster started. Kubernetes frees the PVC's
 storage only once no pod refers to it: until the task's jobs, and so their

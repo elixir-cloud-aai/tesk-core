@@ -7,7 +7,7 @@ JSON file (`*.gz`).
 
 import argparse
 import base64
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 import contextlib
 import errno
 import ftplib
@@ -23,7 +23,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import requests
@@ -36,6 +36,7 @@ from tesk_core.path import (
     filerPath,
     getPath,
     hasWildcards,
+    taskPath,
 )
 from tesk_core.transput import (
     Transput,
@@ -47,6 +48,13 @@ from tesk_core.transput import (
     within,
 )
 from tesk_core.Util import configure_logging
+
+# Prefix of the line on which the outputs filer prints the uploaded files as
+# JSON (see `output_file_logs`), which the taskmaster reads from its log
+OUTPUT_LOGS_MARKER = "TESK_OUTPUT_FILE_LOGS"
+# The most bytes of that JSON; the taskmaster stores at most 200,000 bytes,
+# with the URLs added
+OUTPUT_LOGS_MAX_BYTES = 100_000
 
 
 def http_join(url: str, name: str) -> str:
@@ -1307,6 +1315,138 @@ def process_file(ttype: str, filedata: dict[str, Any]) -> int:
     return 0
 
 
+def output_file_logs(outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Describe the uploaded files of a task's outputs (TES `tesOutputFileLog`).
+
+    Each file of a `FILE` output, every file below a `DIRECTORY` output,
+    and every file that the wildcards of an output with `path_prefix`
+    matched (or that is below a matched directory). Symbolic links, which
+    an upload refuses, and empty directories give none. The entries hold
+    no URLs, which may carry credentials and would then be in the pod's
+    log: the taskmaster derives them from the task (see `output_file_url`).
+    Entries beyond `OUTPUT_LOGS_MAX_BYTES` of JSON are left out, so that
+    the list stays small however many files there are.
+
+    Args:
+        outputs: The task's outputs, uploaded.
+
+    Returns:
+        For each file, in the order of the outputs, of the wildcard matches
+        by path, and of the files of a directory by name before those of
+        its subdirectories: `output`, the index of the output; `relative`,
+        the file's path below the output's (empty for a file output) or,
+        for wildcards, below its `path_prefix`; and `size_bytes`, its size
+        (a string, as in TES).
+    """
+    logs: list[dict[str, Any]] = []
+    # The brackets, less the comma that the first entry doesn't need
+    size = len("[]") - 1
+    for index, output in enumerate(outputs):
+        for relative, file_size in output_files(output):
+            entry = {
+                "output": index,
+                "relative": relative,
+                "size_bytes": str(file_size),
+            }
+            size += len(json.dumps(entry, separators=(",", ":"))) + 1
+            if size > OUTPUT_LOGS_MAX_BYTES:
+                logging.warning(
+                    "Reporting only the first %d uploaded files: the others exceed "
+                    "%d bytes",
+                    len(logs),
+                    OUTPUT_LOGS_MAX_BYTES,
+                )
+                return logs
+            logs.append(entry)
+    return logs
+
+
+def output_files(filedata: dict[str, Any]) -> Iterator[tuple[str, int]]:
+    """Find the uploaded files of an output.
+
+    Args:
+        filedata: The output.
+
+    Yields:
+        For each file (see `output_file_logs`), its path below the output's
+        (below `path_prefix` for wildcards; empty for a file output) and its
+        size.
+    """
+    if filedata.get("path_prefix") and hasWildcards(filedata["path"]):
+        prefix = filerPath(taskPath(filedata["path_prefix"]))
+        for match in sorted(glob(filerPath(filedata["path"]))):
+            relative = os.path.relpath(match, prefix).replace(os.sep, "/")
+            for below, size in files_below(match):
+                yield (relative + "/" + below if below else relative), size
+    else:
+        yield from files_below(filerPath(filedata["path"]))
+
+
+def files_below(local: str) -> Iterator[tuple[str, int]]:
+    """Find a file, or every file below a directory.
+
+    Args:
+        local: The file or directory, in the filer.
+
+    Yields:
+        The path below `local` (empty for a file) and the size of each
+        regular file; none for a symbolic link or a path that doesn't exist.
+    """
+    if os.path.islink(local):
+        return
+    if os.path.isfile(local):
+        yield "", os.path.getsize(local)
+        return
+    if not os.path.isdir(local):
+        return
+    # A directory that can't be read raises, rather than giving a list that
+    # looks complete but isn't
+    for root, dirs, files in os.walk(local, onerror=raise_error):
+        # Files by name, then the subdirectories by name, depth first
+        dirs.sort()
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            if not os.path.islink(full) and os.path.isfile(full):
+                relative = os.path.relpath(full, local).replace(os.sep, "/")
+                yield relative, os.path.getsize(full)
+
+
+def output_file_url(output: dict[str, Any], relative: str) -> tuple[str, str]:
+    """Get the URL and the path in the executors of an uploaded file.
+
+    As the upload derives them (see `url_join` and `upload_matches`).
+
+    Args:
+        output: The output.
+        relative: The file's path below the output's, as in
+            `output_file_logs`.
+
+    Returns:
+        The file's URL and its path in the executors.
+    """
+    wildcards = bool(output.get("path_prefix")) and hasWildcards(output["path"])
+    base = taskPath(output["path_prefix"] if wildcards else output["path"])
+    if not relative:
+        return output["url"], base
+    path = base.rstrip("/") + "/" + relative
+    if not wildcards and urlsplit(output["url"]).scheme == "ftp":
+        # The FTP upload of a directory appends the path as it is
+        return output["url"] + "/" + relative, path
+    return url_join(output["url"], relative), path
+
+
+def raise_error(err: OSError) -> NoReturn:
+    """Raise an error of `os.walk`, which ignores them by default.
+
+    Args:
+        err: The error.
+
+    Raises:
+        OSError: Always, the error.
+    """
+    raise err
+
+
 def logConfig(loglevel: int) -> None:
     """Configure logging to standard output.
 
@@ -1351,7 +1491,27 @@ def main() -> int:
             return 1
         logging.debug("Processed file: %s", afile["path"])
 
+    if args.transputtype == "outputs":
+        print_output_logs(data["outputs"])
     return 0
+
+
+def print_output_logs(outputs: list[dict[str, Any]]) -> None:
+    """Print the uploaded files for the taskmaster, after `OUTPUT_LOGS_MARKER`.
+
+    Whatever the log level, as the taskmaster reads them from the pod's
+    log. The outputs are uploaded: an error here is logged and prints
+    nothing, rather than failing the filer.
+
+    Args:
+        outputs: The task's outputs, uploaded.
+    """
+    try:
+        logs = json.dumps(output_file_logs(outputs), separators=(",", ":"))
+    except Exception as err:  # the outputs are uploaded
+        logging.error("Can't list the uploaded files: %s", err)
+        return
+    print(OUTPUT_LOGS_MARKER, logs, flush=True)
 
 
 if __name__ == "__main__":

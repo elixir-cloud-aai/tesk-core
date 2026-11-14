@@ -6,6 +6,7 @@ API derives a task's state from.
 """
 
 from collections.abc import Callable
+import json
 import uuid
 
 from kubernetes import client
@@ -40,6 +41,11 @@ def test_task_with_inputs_and_outputs(
         assert condition(job, "Complete"), suffix
     log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
     assert f"PUT {upload} 'content-a;input /b.txt'" in log
+    # The output file logs (TES `logs[].outputs`) for the TESK API
+    filer = task.job("-outputs-filer")
+    assert json.loads(filer.metadata.annotations["output-file-logs"]) == [
+        {"url": HTTP_URL + upload, "path": "/data/out/c.txt", "size_bytes": "22"}
+    ]
     task.wait(task.pvc_gone, "the PVC to be deleted")
 
 
