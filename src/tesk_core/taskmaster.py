@@ -449,6 +449,7 @@ def run_task(
             filer_version,
             args.pull_policy_always,
             json_pvc,
+            task_name=task_name,
         )
 
         if os.environ.get("TESK_FTP_USERNAME") is not None:
