@@ -140,6 +140,10 @@ def test_run_task(mock_create: MagicMock, mock_delete: MagicMock) -> None:
         "task-1000-ex-00",
         "task-1000-outputs-filer",
     ]
+    # Every job of the task, the filers' too, has the task's label, by which
+    # the TESK API selects them
+    for job in taskmaster.created_jobs:
+        assert job.body["metadata"]["labels"]["taskmaster-name"] == "task-1000"
     mock_create.assert_called_once_with()
     mock_delete.assert_called_once()
     assert mock_delete.call_args.args[0].name == "task-1000-pvc"

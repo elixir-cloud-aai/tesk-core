@@ -35,6 +35,37 @@ to the filer.
   tasks run as before, without the annotation (a new taskmaster with an
   older filer logs the warning `Can't read the output file logs` for each
   task with outputs). No new permissions are needed.
+- **Labels of the filer jobs**: the inputs and outputs filers' jobs have
+  the label `taskmaster-name: <task>`, as the executor jobs have (see
+  [Taskmaster](taskmaster.md#what-it-does)), so that the TESK API can
+  select the filer jobs of the tasks it lists
+  ([tesk-api#177](https://github.com/elixir-cloud-aai/tesk-api/issues/177)).
+  Jobs of tasks started by older taskmasters don't have it. The label is
+  set when the job is created, so no new permissions are needed.
+  Selectors on `taskmaster-name` alone now also match the filer jobs; tell
+  the executor jobs apart by `job-type: executor`, which the filer jobs
+  don't have.
+- **Upgrade order for the filer job labels**: this taskmaster needs a
+  TESK API that includes
+  [tesk-api#183](https://github.com/elixir-cloud-aai/tesk-api/pull/183),
+  which selects a single task's executor jobs by
+  `taskmaster-name=<task>,job-type=executor`. Deploy that TESK API first,
+  then this taskmaster (see "Upgrade order for filer labels" in the TESK
+  API's upgrade notes): switch the taskmaster image only once no older
+  TESK API replica serves requests. If the new TESK API also passes
+  `path_prefix` on outputs (TES 1.1, see "Upgrade order" above), it must
+  not start tasks with the old taskmaster either, so switch both in one
+  deployment with the `Recreate` strategy: the old TESK API stops before
+  the new one, which starts tasks with the new taskmaster only. Otherwise,
+  a second deployment after the TESK API's rollout also works. Older TESK
+  API releases read a single
+  task's jobs (`GET /tasks/{id}` and cancel) by `taskmaster-name` alone
+  and take every job without `job-type` as the outputs filer. With this
+  taskmaster, that is the inputs filer until the outputs filer exists, so
+  `GET /tasks/{id}` can differ from `GET /tasks`: e.g. a task whose
+  ignored executor failure stopped it before the outputs filer could
+  report `COMPLETE` instead of `SYSTEM_ERROR`, and a failed inputs filer
+  gives `SYSTEM_ERROR` while the taskmaster still cleans up.
 - **Names in directory outputs**: S3 and FTP `DIRECTORY` outputs with a
   file or directory whose name has `#`, `?`, a tab or a line break (or
   `;`, for FTP) below them now fail, uploading nothing, where older filers
