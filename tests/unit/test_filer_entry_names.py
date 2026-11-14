@@ -7,7 +7,9 @@ before anything is uploaded, as for the matches of wildcard outputs.
 """
 
 from collections.abc import Iterator
+import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import boto3
@@ -253,6 +255,33 @@ def test_unsafe_entry(tmp_path: Path) -> None:
     assert unsafe_entry(str(tmp_path / "b"), "#?") == str(tmp_path / "b" / "c#1")
     assert unsafe_entry(str(tmp_path), "") is None
     assert unsafe_entry(str(tmp_path / "missing"), "#?") is None
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_s3_directory_with_unreadable_subdirectory_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a directory whose names can't all be checked uploads nothing.
+
+    `os.walk` would skip the unreadable subdirectory, whose names may be
+    unsafe; `0.txt` sorts first and would be uploaded before the upload of
+    the subdirectory fails.
+    """
+    write(tmp_path / "0.txt")
+    write(tmp_path / "sub" / "a#1")
+    scandir = os.scandir
+
+    def denied(path: str) -> Any:
+        if os.fspath(path) == str(tmp_path / "sub"):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", denied)
+
+    assert process_file("outputs", directory(tmp_path, "s3://tesk/out")) == 1
+    assert keys() == []
+    assert "can't be checked for names" in caplog.text
 
 
 def test_file_directory_entry_names_are_copied(tmp_path: Path) -> None:

@@ -97,8 +97,9 @@ FTP, ends its last segment at `;`). `s3://bucket/out/a#1` would land at
 the key `out/a`, where `a#2` would overwrite it. So the filer fails such
 an output, with an error that names the first file or directory whose name
 has one of these characters (`#`, `?`, tab, CR and LF for S3, and `;`
-too for FTP), before anything of it is uploaded. Executors should give
-their output files other names. HTTP(S) uploads escape the names (`a#1`
+too for FTP), before anything of it is uploaded; so does a directory
+below it that the filer can't read, whose names it can't check. Executors
+should give their output files other names. HTTP(S) uploads escape the names (`a#1`
 is uploaded to `.../a%231`), and `file:` directory outputs are copied as
 they are, so they keep these names.
 

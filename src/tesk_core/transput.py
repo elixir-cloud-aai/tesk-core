@@ -207,8 +207,7 @@ def unsafe_entry(path: str, chars: str) -> str | None:
 
     Walks the directory top-down, without following links, and each
     directory's entries by name. A second walk after `symlink_in`'s, which
-    keeps both checks simple; directories that can't be read are skipped,
-    as their upload fails anyway.
+    keeps both checks simple.
 
     Args:
         path: The directory.
@@ -216,11 +215,29 @@ def unsafe_entry(path: str, chars: str) -> str | None:
 
     Returns:
         The path of the first such file or directory, or `None` (also if
-        the directory doesn't exist).
+        the directory doesn't exist: its upload reports that).
+
+    Raises:
+        OSError: A directory below `path` (or `path` itself, if it exists)
+            can't be read, so its names can't be checked.
     """
+
+    def unreadable(error: OSError) -> None:
+        """Raise an error of the walk, unless `path` doesn't exist.
+
+        Args:
+            error: The error.
+
+        Raises:
+            OSError: The error.
+        """
+        if error.filename == path and isinstance(error, FileNotFoundError):
+            return
+        raise error
+
     if not chars:
         return None
-    for root, dirs, files in os.walk(path, followlinks=False):
+    for root, dirs, files in os.walk(path, onerror=unreadable, followlinks=False):
         dirs.sort()
         for name in sorted(dirs + files):
             if any(char in name for char in chars):
@@ -236,9 +253,18 @@ def output_has_unsafe_entry(path: str, chars: str) -> bool:
         chars: The characters its entries' names can't have.
 
     Returns:
-        Whether such an entry was found (and logged).
+        Whether such an entry was found, or a directory below the output
+        can't be read (logged either way), before anything is uploaded.
     """
-    entry = unsafe_entry(path, chars)
+    try:
+        entry = unsafe_entry(path, chars)
+    except OSError as err:
+        logging.error(
+            "Output %s can't be checked for names its URL can't carry: %s",
+            path,
+            err,
+        )
+        return True
     if entry is None:
         return False
     logging.error(
