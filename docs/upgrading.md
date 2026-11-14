@@ -45,18 +45,34 @@ to the filer.
   Selectors on `taskmaster-name` alone now also match the filer jobs; tell
   the executor jobs apart by `job-type: executor`, which the filer jobs
   don't have.
-- **Upgrade order for the filer job labels**: the TESK API (up to its
-  `dev` branch of 2026-11-14) reads a single task's jobs (`GET
-  /tasks/{id}` and cancel) by `taskmaster-name` alone, and takes every
-  job without `job-type` as the outputs filer. With this taskmaster, that
-  is the inputs filer until the outputs filer exists, so `GET
-  /tasks/{id}` can differ from `GET /tasks`: e.g. a task whose ignored
-  executor failure stopped it before the outputs filer could report
-  `COMPLETE` instead of `SYSTEM_ERROR`, and a failed inputs filer gives
-  `SYSTEM_ERROR` while the taskmaster still cleans up. Upgrade the TESK
-  API to a release that selects only executor jobs there
-  (`taskmaster-name=<task>,job-type=executor`) first, then the
-  taskmaster.
+- **Upgrade order for the filer job labels**: this taskmaster needs a
+  TESK API that includes
+  [tesk-api#183](https://github.com/elixir-cloud-aai/tesk-api/pull/183),
+  which selects a single task's executor jobs by
+  `taskmaster-name=<task>,job-type=executor`. Deploy that TESK API first,
+  then this taskmaster (see "Upgrade order for filer labels" in the TESK
+  API's upgrade notes): switch the taskmaster image only once no older
+  TESK API replica serves requests, e.g. in a second deployment after the
+  rollout, or in the same one with the `Recreate` strategy, which also
+  meets the upgrade order above. Older TESK API releases read a single
+  task's jobs (`GET /tasks/{id}` and cancel) by `taskmaster-name` alone
+  and take every job without `job-type` as the outputs filer. With this
+  taskmaster, that is the inputs filer until the outputs filer exists, so
+  `GET /tasks/{id}` can differ from `GET /tasks`: e.g. a task whose
+  ignored executor failure stopped it before the outputs filer could
+  report `COMPLETE` instead of `SYSTEM_ERROR`, and a failed inputs filer
+  gives `SYSTEM_ERROR` while the taskmaster still cleans up.
+- **Names in directory outputs**: S3 and FTP `DIRECTORY` outputs with a
+  file or directory whose name has `#`, `?`, a tab or a line break (or
+  `;`, for FTP) below them now fail, uploading nothing, where older filers
+  uploaded such files to truncated or changed keys or paths and reported
+  success (see [Names in outputs](filer.md#names-in-outputs)). So do
+  names that aren't valid UTF-8, which failed after the other files were
+  uploaded, and directories below them that the filer can't read. The same
+  goes for these characters in matches of outputs with wildcards (other
+  than HTTP(S); before, only `#` and `?` failed them; `;` also for URLs
+  without a scheme), and for such names below matched directories. Tasks
+  that write such names should rename them.
 
 ### Hardened filer pods
 
