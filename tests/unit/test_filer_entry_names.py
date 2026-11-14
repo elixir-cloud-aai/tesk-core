@@ -69,28 +69,54 @@ def directory(path: Path, url: str) -> dict[str, str]:
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
 @pytest.mark.usefixtures("bucket")
-@pytest.mark.parametrize("name", ["a#1", "a?1", "sub/c#d.txt"])
+@pytest.mark.parametrize(
+    "name, refused",
+    [
+        ("a#1", "a#1"),
+        ("a?1", "a?1"),
+        ("a\nb", "a\nb"),
+        ("a\tb", "a\tb"),
+        ("a\rb", "a\rb"),
+        ("sub/c#d.txt", "sub/c#d.txt"),
+        ("d#2/x.txt", "d#2"),
+    ],
+)
 def test_s3_directory_entry_names_are_refused(
-    tmp_path: Path, name: str, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, name: str, refused: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that an S3 directory output with such a name uploads nothing.
 
-    Before the fix, `a#1` was uploaded to the key `out/a`, and the output
-    succeeded. Entries that sort before the refused one aren't uploaded
-    either, and the error names the file.
+    Before the fix, `a#1` was uploaded to the key `out/a`, and `a<LF>b` to
+    `out/ab`, and the output succeeded. Entries that sort before the
+    refused one aren't uploaded either, and the error names the file or
+    directory.
     """
     write(tmp_path / "0.txt")
     write(tmp_path / name)
 
     assert process_file("outputs", directory(tmp_path, "s3://tesk/out")) == 1
     assert keys() == []
-    assert str(tmp_path / name) in caplog.text
+    assert repr(str(tmp_path / refused)) in caplog.text
 
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
-@pytest.mark.parametrize("name", ["a#1", "a?1", "a;1", "sub/b;x.txt"])
+@pytest.mark.parametrize(
+    "name, refused",
+    [
+        ("a#1", "a#1"),
+        ("a?1", "a?1"),
+        ("a;1", "a;1"),
+        ("a\nb", "a\nb"),
+        ("sub/b;x.txt", "sub/b;x.txt"),
+        ("d;2/x.txt", "d;2"),
+    ],
+)
 def test_ftp_directory_entry_names_are_refused(
-    tmp_path: Path, name: str, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    name: str,
+    refused: str,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test that an FTP directory output with such a name uploads nothing.
 
@@ -108,7 +134,7 @@ def test_ftp_directory_entry_names_are_refused(
     upload.assert_not_called()
     make_dirs.assert_not_called()
     ftp.return_value.storbinary.assert_not_called()
-    assert str(tmp_path / name) in caplog.text
+    assert repr(str(tmp_path / refused)) in caplog.text
 
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
@@ -119,6 +145,41 @@ def test_s3_directory_with_semicolon_is_uploaded(tmp_path: Path) -> None:
 
     assert process_file("outputs", directory(tmp_path, "s3://tesk/out")) == 0
     assert keys() == ["out/a;1"]
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_s3_wildcard_match_with_semicolon_is_uploaded(tmp_path: Path) -> None:
+    """Test that S3 wildcard matches keep `;` too."""
+    write(tmp_path / "res;1" / "a;1.txt")
+
+    filedata = {
+        "path": f"{tmp_path}/res*",
+        "path_prefix": str(tmp_path),
+        "url": "s3://tesk/out",
+        "type": Type.Directory.value,
+    }
+    assert process_file("outputs", filedata) == 0
+    assert keys() == ["out/res;1/a;1.txt"]
+
+
+@patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.usefixtures("bucket")
+def test_s3_wildcard_match_with_line_break_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that a wildcard match with a line break fails an S3 output."""
+    write(tmp_path / "a\nb.txt")
+
+    filedata = {
+        "path": f"{tmp_path}/*.txt",
+        "path_prefix": str(tmp_path),
+        "url": "s3://tesk/out",
+        "type": Type.File.value,
+    }
+    assert process_file("outputs", filedata) == 1
+    assert keys() == []
+    assert repr(str(tmp_path / "a\nb.txt")) in caplog.text
 
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
@@ -156,18 +217,23 @@ def test_s3_wildcard_directory_match_entries_are_refused(
 
 
 @patch("tesk_core.path.TASK_PATH_PREFIX", "/")
+@pytest.mark.parametrize("pattern", ["*.txt", "res_*"])
 def test_ftp_wildcard_match_with_semicolon_is_refused(
-    tmp_path: Path, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    pattern: str,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test that a wildcard match whose name has `;` fails an FTP output."""
+    """Test that `;` in a match, or below a matched directory, fails FTP outputs."""
     mocker.patch("tesk_core.filer.FTP")
     mocker.patch("tesk_core.filer.ftp_login")
     upload = mocker.patch("tesk_core.filer.ftp_upload_file", return_value=0)
     write(tmp_path / "a.txt")
     write(tmp_path / "b;1.txt")
+    write(tmp_path / "res_1" / "b;1.txt")
 
     filedata = {
-        "path": f"{tmp_path}/*.txt",
+        "path": f"{tmp_path}/{pattern}",
         "path_prefix": str(tmp_path),
         "url": "ftp://ftp.example.org/out",
         "type": Type.File.value,

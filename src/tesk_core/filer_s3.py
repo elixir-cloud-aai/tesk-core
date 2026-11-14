@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING
 import boto3
 import botocore.exceptions
 
-from tesk_core.transput import Transput, Type, open_for_upload, within
+from tesk_core.transput import (
+    URL_UNSAFE_CHARS,
+    Transput,
+    Type,
+    open_for_upload,
+    within,
+)
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import Bucket, S3ServiceResource
@@ -28,9 +34,9 @@ class S3Transput(Transput):
         bucket_obj: The bucket, once the transfer is entered as a context.
     """
 
-    # The keys of a directory's entries are cut at these characters
-    # (`Transput.__init__` takes the URL's path through `urlparse`)
-    url_unsafe_chars = "#?"
+    # The keys of a directory's entries would lose them (`Transput.__init__`
+    # takes the URL's path through `urlparse`)
+    entry_unsafe_chars = URL_UNSAFE_CHARS
 
     def __init__(self, path: str, url: str, ftype: Type) -> None:
         """Describe the transfer.

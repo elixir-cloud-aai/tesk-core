@@ -193,11 +193,22 @@ def output_has_symlink(path: str, recursive: bool = False) -> bool:
     return True
 
 
+URL_UNSAFE_CHARS = "#?\t\r\n"
+"""Characters that names appended to a URL as they are can't have.
+
+`urlparse` ends the URL's path at `#` and `?`, and removes tabs and line
+breaks anywhere: `s3://b/out/a#1` and `s3://b/out/a<LF>b` would be the
+keys `out/a` and `out/ab`. FTP URLs also end their last segment at `;`
+(parameters)."""
+
+
 def unsafe_entry(path: str, chars: str) -> str | None:
     """Find an entry below a directory whose name has any of some characters.
 
     Walks the directory top-down, without following links, and each
-    directory's entries by name.
+    directory's entries by name. A second walk after `symlink_in`'s, which
+    keeps both checks simple; directories that can't be read are skipped,
+    as their upload fails anyway.
 
     Args:
         path: The directory.
@@ -231,7 +242,7 @@ def output_has_unsafe_entry(path: str, chars: str) -> bool:
     if entry is None:
         return False
     logging.error(
-        "Output %s contains %s, whose name can't be part of its URL: names "
+        "Output %s contains %r, whose name can't be part of its URL: names "
         "with any of %r are refused for this protocol",
         path,
         entry,
@@ -277,15 +288,19 @@ class Transput:
         url_path: Path of the URL.
         netrc_file: Credentials from `$HOME/.netrc` (or `/.netrc`), if it
             can be read.
-        url_unsafe_chars: Characters that the names of entries below a
-            directory output can't have: the protocol's directory uploads
-            append each entry's name to the directory's URL, and take the
-            URL's path as it is (`urlparse`), which ends at them. None by
-            default (protocols that escape the names, or don't build URLs
-            per entry).
+        url_unsafe_chars: Characters that a name appended to an output's
+            URL as it is can't have (see `URL_UNSAFE_CHARS`): the paths of
+            the matches of outputs with wildcards are checked for them.
+            None for protocols that escape the names.
+        entry_unsafe_chars: Characters that the names of entries below a
+            directory output can't have, for protocols whose directory
+            uploads append each entry's name to the directory's URL as it
+            is. None by default (protocols that escape the names, or don't
+            build URLs per entry).
     """
 
-    url_unsafe_chars: ClassVar[str] = ""
+    url_unsafe_chars: ClassVar[str] = URL_UNSAFE_CHARS
+    entry_unsafe_chars: ClassVar[str] = ""
 
     def __init__(self, path: str, url: str, ftype: Type) -> None:
         """Describe the transfer and read the `.netrc` file.
@@ -327,7 +342,7 @@ class Transput:
         Outputs aren't uploaded if their path, or anything below a
         directory, is a symbolic link: links would be resolved in the
         filer's file system, not in the executor's. Nor are directories
-        with an entry whose name has one of `url_unsafe_chars`, which its
+        with an entry whose name has one of `entry_unsafe_chars`, which its
         URL would lose (see `output_has_unsafe_entry`).
 
         Args:
@@ -352,7 +367,7 @@ class Transput:
         if (
             check_links
             and self.ftype == Type.Directory
-            and output_has_unsafe_entry(self.path, self.url_unsafe_chars)
+            and output_has_unsafe_entry(self.path, self.entry_unsafe_chars)
         ):
             return 1
         if self.ftype == Type.File:
