@@ -39,11 +39,13 @@ from tesk_core.path import (
     taskPath,
 )
 from tesk_core.transput import (
+    URL_UNSAFE_CHARS,
     Transput,
     Type,
     body_for_log,
     open_for_upload,
     output_has_symlink,
+    output_has_unsafe_entry,
     url_for_log,
     within,
 )
@@ -173,6 +175,9 @@ def error_body(req: requests.Response) -> str:
 
 class HTTPTransput(Transput):
     """Transfer of an input or output over HTTP(S)."""
+
+    # Names appended to the URL are escaped (`http_join`)
+    url_unsafe_chars = ""
 
     def _status_ok(self, req: requests.Response) -> bool:
         """Check the status of a response, and log it if it isn't 2xx.
@@ -460,6 +465,11 @@ class FTPTransput(Transput):
             directory.
         ftp_connection: The FTP connection.
     """
+
+    # FTP URLs also end their last path segment at `;` (parameters, see
+    # `Transput.__init__`)
+    url_unsafe_chars = URL_UNSAFE_CHARS + ";"
+    entry_unsafe_chars = URL_UNSAFE_CHARS + ";"
 
     def __init__(
         self, path: str, url: str, ftype: Type, ftp_conn: FTP | None = None
@@ -1183,7 +1193,7 @@ def upload_matches(filedata: dict[str, Any]) -> int:
     parsed_url = urlparse(filedata["url"])
     scheme = parsed_url.scheme or "file"
     trans = newTransput(scheme, parsed_url.netloc)
-    uploads = checked_matches(filedata, matches, prefix, scheme)
+    uploads = checked_matches(filedata, matches, prefix, scheme, trans)
     if uploads is None:
         return 1
     for match, relative in uploads:
@@ -1202,7 +1212,11 @@ def upload_matches(filedata: dict[str, Any]) -> int:
 
 
 def checked_matches(
-    filedata: dict[str, Any], matches: list[str], prefix: str, scheme: str
+    filedata: dict[str, Any],
+    matches: list[str],
+    prefix: str,
+    scheme: str,
+    trans: type[Transput],
 ) -> list[tuple[str, str]] | None:
     """Check the matches of an output before any of them is uploaded.
 
@@ -1211,11 +1225,15 @@ def checked_matches(
         matches: The matches, in the filer.
         prefix: The output's `path_prefix`, in the filer.
         scheme: The scheme of the output's URL.
+        trans: The transfer class of the scheme, whose `url_unsafe_chars`
+            the matches' paths below `prefix` can't have, and whose
+            `entry_unsafe_chars` the names below matched directories can't.
 
     Returns:
         Each match with its path below `prefix`; `None` (logged) if a match
-        is not below `prefix`, is or contains a symbolic link, or has a name
-        that a URL of the scheme can't carry.
+        is not below `prefix`, is or contains a symbolic link, has a name
+        that a URL of the scheme can't carry, or is a directory with an
+        entry whose name the transfer can't upload.
     """
     uploads = []
     for match in matches:
@@ -1230,15 +1248,20 @@ def checked_matches(
         if output_has_symlink(match, recursive=True):
             return None
         relative = os.path.relpath(match, prefix).replace(os.sep, "/")
-        if scheme not in {"http", "https"} and any(c in relative for c in "#?"):
-            # Only HTTP(S) URLs are escaped (`http_join`): other transfers
-            # read the URL's path as it is, where `#` and `?` would end it
+        # The whole path below `prefix` is checked, also for FTP's `;`,
+        # which only ends the last segment: refusing more is the safe side
+        if any(c in relative for c in trans.url_unsafe_chars):
             logging.error(
-                "Output %s matches %s, whose name can't be part of a %s: URL",
+                "Output %s matches %r, whose name can't be part of a %s: URL",
                 filedata["path"],
                 match,
                 scheme,
             )
+            return None
+        # The entries below a matched directory, as for a directory output
+        if os.path.isdir(match) and output_has_unsafe_entry(
+            match, trans.entry_unsafe_chars
+        ):
             return None
         uploads.append((match, relative))
     return uploads

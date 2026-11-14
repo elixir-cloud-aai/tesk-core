@@ -63,11 +63,10 @@ uploaded with their contents. As in the shell, `*` doesn't match names
 that start with `.`, while `.command.*` does. A pattern that matches
 nothing uploads nothing and succeeds, so a single-file class such as
 `out.tx[*t]` makes an optional output. A match that isn't below
-`path_prefix` fails the output, before anything is uploaded. So does a
-match whose name has `#` or `?` for a URL other than HTTP(S): those
-transfers take the URL's path as it is, where these characters would end
-it. For `file:` URLs, matches are copied as they are, creating the
-directories below the URL. The executors and the filer mount the pattern's
+`path_prefix` fails the output, before anything is uploaded. So do names
+that the URL can't carry (see [Names in outputs](#names-in-outputs)). For
+`file:` URLs, matches are copied as they are, creating the directories
+below the URL. The executors and the filer mount the pattern's
 deepest directory without wildcards (`/data`); a pattern with wildcards in
 its first component (`/*.txt`) would need a mount at `/`, so the
 taskmaster refuses it.
@@ -88,6 +87,25 @@ them in its own container rather than the executor's; nothing of such an
 output is uploaded. Executors that create links in
 their outputs should copy the files they point to instead (e.g. `cp -L`).
 The outputs filer mounts the task's paths read-only.
+
+## Names in outputs
+
+S3 and FTP uploads of a `DIRECTORY` output append the name of each file
+and directory below it to the output's URL, and take the URL's path as it
+is, which ends at `#` and `?` and loses tabs and line breaks (and, for
+FTP, ends its last segment at `;`). `s3://bucket/out/a#1` would land at
+the key `out/a`, where `a#2` would overwrite it. So the filer fails such
+an output, with an error that names the first file or directory whose name
+has one of these characters (`#`, `?`, tab, CR and LF for S3, and `;`
+too for FTP), before anything of it is uploaded. Executors should give
+their output files other names. HTTP(S) uploads escape the names (`a#1`
+is uploaded to `.../a%231`), and `file:` directory outputs are copied as
+they are, so they keep these names.
+
+[Outputs with wildcards](#outputs-with-wildcards) fail likewise, before
+anything is uploaded, if the path of a match below `path_prefix` has one
+of these characters, for any scheme but HTTP(S) (`;` anywhere in the path,
+for FTP), or, for S3 and FTP, if a name below a matched directory has one.
 
 ## Output file logs
 
