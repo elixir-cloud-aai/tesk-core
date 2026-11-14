@@ -35,8 +35,9 @@ outputs, volumes and resources.
 
 The filer jobs have the label `taskmaster-name: <task>`, as the executor
 jobs have it from the TESK API, so that all jobs of a task can be selected
-by it (`kubectl get jobs -l taskmaster-name=<task>`). Unlike the executor
-jobs, they have no `job-type` label, which tells them apart. The label is
+by it (`kubectl get jobs -l taskmaster-name=<task>`). The executor jobs
+have `job-type: executor`; the filer jobs have no `job-type` (see
+[Upgrading](upgrading.md) for the TESK API release they need). The label is
 on the jobs only; the filer pods have their own labels (see
 [Pod security](filer.md#pod-security)).
 

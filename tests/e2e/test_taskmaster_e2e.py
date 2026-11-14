@@ -40,6 +40,8 @@ def test_task_with_inputs_and_outputs(
         job = task.job(suffix)
         assert job is not None, suffix
         assert condition(job, "Complete"), suffix
+    # The taskmaster's job isn't among them: the TESK API (and `Task`) give
+    # it only `job-type`
     labelled = batch.list_namespaced_job(
         NAMESPACE, label_selector=f"taskmaster-name={task.name}"
     )

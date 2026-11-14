@@ -40,15 +40,23 @@ to the filer.
   [Taskmaster](taskmaster.md#what-it-does)), so that the TESK API can
   select the filer jobs of the tasks it lists
   ([tesk-api#177](https://github.com/elixir-cloud-aai/tesk-api/issues/177)).
-  Jobs of tasks started by older taskmasters don't have it. Selectors on
-  `taskmaster-name` alone now also match the filer jobs; tell them apart
-  from the executor jobs by `job-type: executor`, which they don't have.
-  Current TESK API releases read a single task's jobs (`GET /tasks/{id}`,
-  cancel) by `taskmaster-name` alone and take a job without `job-type` as
-  the outputs filer: until a task's outputs filer exists, that is its
-  inputs filer, so the task counts as active while the inputs filer runs,
-  and a failed inputs filer gives `SYSTEM_ERROR`. The label is set when
-  the job is created, so no new permissions are needed.
+  Jobs of tasks started by older taskmasters don't have it. The label is
+  set when the job is created, so no new permissions are needed.
+  Selectors on `taskmaster-name` alone now also match the filer jobs; tell
+  the executor jobs apart by `job-type: executor`, which the filer jobs
+  don't have.
+- **Upgrade order for the filer job labels**: the TESK API (up to its
+  `dev` branch of 2026-11-14) reads a single task's jobs (`GET
+  /tasks/{id}` and cancel) by `taskmaster-name` alone, and takes every
+  job without `job-type` as the outputs filer. With this taskmaster, that
+  is the inputs filer until the outputs filer exists, so `GET
+  /tasks/{id}` can differ from `GET /tasks`: e.g. a task whose ignored
+  executor failure stopped it before the outputs filer could report
+  `COMPLETE` instead of `SYSTEM_ERROR`, and a failed inputs filer gives
+  `SYSTEM_ERROR` while the taskmaster still cleans up. Upgrade the TESK
+  API to a release that selects only executor jobs there
+  (`taskmaster-name=<task>,job-type=executor`) first, then the
+  taskmaster.
 
 ### Hardened filer pods
 
