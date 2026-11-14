@@ -6,10 +6,10 @@
 # uv, to export the locked requirements (`uv.lock`), build the wheel and
 # install both; mounted into the steps that use it only. Pinned by digest, as
 # the base image; Dependabot updates the tags and digests together
-FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
 # Builder: the wheel of the package, and the locked runtime requirements
-FROM alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad AS builder
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS builder
 
 RUN apk add --no-cache python3 git
 
@@ -41,7 +41,7 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
 # Install: the locked requirements, checked against their hashes, as wheels
 # only and without resolving anything else, then the package without its
 # dependencies, offline; then check that they meet each other's requirements
-FROM alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 RUN apk add --no-cache python3
 
