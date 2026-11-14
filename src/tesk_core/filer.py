@@ -44,6 +44,7 @@ from tesk_core.transput import (
     body_for_log,
     open_for_upload,
     output_has_symlink,
+    output_has_unsafe_entry,
     url_for_log,
     within,
 )
@@ -460,6 +461,10 @@ class FTPTransput(Transput):
             directory.
         ftp_connection: The FTP connection.
     """
+
+    # FTP URLs also end their last path segment at `;` (parameters, see
+    # `Transput.__init__`)
+    url_unsafe_chars = "#?;"
 
     def __init__(
         self, path: str, url: str, ftype: Type, ftp_conn: FTP | None = None
@@ -1183,7 +1188,7 @@ def upload_matches(filedata: dict[str, Any]) -> int:
     parsed_url = urlparse(filedata["url"])
     scheme = parsed_url.scheme or "file"
     trans = newTransput(scheme, parsed_url.netloc)
-    uploads = checked_matches(filedata, matches, prefix, scheme)
+    uploads = checked_matches(filedata, matches, prefix, scheme, trans.url_unsafe_chars)
     if uploads is None:
         return 1
     for match, relative in uploads:
@@ -1201,8 +1206,32 @@ def upload_matches(filedata: dict[str, Any]) -> int:
     return 0
 
 
+def match_unsafe_chars(scheme: str) -> str:
+    """Get the characters that matches of an output with wildcards can't have.
+
+    Only HTTP(S) URLs are escaped (`http_join`); other transfers take the
+    URL's path as it is, which ends at `#` and `?`, and, for FTP, its last
+    segment at `;` (parameters).
+
+    Args:
+        scheme: The scheme of the output's URL.
+
+    Returns:
+        The characters.
+    """
+    if scheme in {"http", "https"}:
+        return ""
+    if scheme == "ftp":
+        return "#?;"
+    return "#?"
+
+
 def checked_matches(
-    filedata: dict[str, Any], matches: list[str], prefix: str, scheme: str
+    filedata: dict[str, Any],
+    matches: list[str],
+    prefix: str,
+    scheme: str,
+    entry_chars: str = "",
 ) -> list[tuple[str, str]] | None:
     """Check the matches of an output before any of them is uploaded.
 
@@ -1211,11 +1240,15 @@ def checked_matches(
         matches: The matches, in the filer.
         prefix: The output's `path_prefix`, in the filer.
         scheme: The scheme of the output's URL.
+        entry_chars: The characters that the names of entries below a
+            matched directory can't have (`Transput.url_unsafe_chars` of
+            the transfer).
 
     Returns:
         Each match with its path below `prefix`; `None` (logged) if a match
-        is not below `prefix`, is or contains a symbolic link, or has a name
-        that a URL of the scheme can't carry.
+        is not below `prefix`, is or contains a symbolic link, has a name
+        that a URL of the scheme can't carry, or is a directory with an
+        entry whose name has one of `entry_chars`.
     """
     uploads = []
     for match in matches:
@@ -1230,15 +1263,16 @@ def checked_matches(
         if output_has_symlink(match, recursive=True):
             return None
         relative = os.path.relpath(match, prefix).replace(os.sep, "/")
-        if scheme not in {"http", "https"} and any(c in relative for c in "#?"):
-            # Only HTTP(S) URLs are escaped (`http_join`): other transfers
-            # read the URL's path as it is, where `#` and `?` would end it
+        if any(c in relative for c in match_unsafe_chars(scheme)):
             logging.error(
                 "Output %s matches %s, whose name can't be part of a %s: URL",
                 filedata["path"],
                 match,
                 scheme,
             )
+            return None
+        # The entries below a matched directory, as for a directory output
+        if os.path.isdir(match) and output_has_unsafe_entry(match, entry_chars):
             return None
         uploads.append((match, relative))
     return uploads

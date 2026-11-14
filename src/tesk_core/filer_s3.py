@@ -28,6 +28,10 @@ class S3Transput(Transput):
         bucket_obj: The bucket, once the transfer is entered as a context.
     """
 
+    # The keys of a directory's entries are cut at these characters
+    # (`Transput.__init__` takes the URL's path through `urlparse`)
+    url_unsafe_chars = "#?"
+
     def __init__(self, path: str, url: str, ftype: Type) -> None:
         """Describe the transfer.
 

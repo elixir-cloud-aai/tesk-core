@@ -35,6 +35,13 @@ to the filer.
   tasks run as before, without the annotation (a new taskmaster with an
   older filer logs the warning `Can't read the output file logs` for each
   task with outputs). No new permissions are needed.
+- **Names in directory outputs**: S3 and FTP `DIRECTORY` outputs with a
+  file or directory whose name has `#` or `?` (or `;`, for FTP) below them
+  now fail, uploading nothing, where older filers uploaded such files to
+  truncated keys or paths and reported success (see
+  [Names in outputs](filer.md#names-in-outputs)). The same goes for
+  `;` in matches of FTP outputs with wildcards, and for such names below
+  matched directories. Tasks that write such names should rename them.
 
 ### Hardened filer pods
 

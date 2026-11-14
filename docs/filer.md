@@ -64,9 +64,9 @@ that start with `.`, while `.command.*` does. A pattern that matches
 nothing uploads nothing and succeeds, so a single-file class such as
 `out.tx[*t]` makes an optional output. A match that isn't below
 `path_prefix` fails the output, before anything is uploaded. So does a
-match whose name has `#` or `?` for a URL other than HTTP(S): those
-transfers take the URL's path as it is, where these characters would end
-it. For `file:` URLs, matches are copied as they are, creating the
+match whose name has `#` or `?` for a URL other than HTTP(S), or `;` for
+FTP, and a matched directory with such a name below it for S3 or FTP (see
+[Names in outputs](#names-in-outputs)). For `file:` URLs, matches are copied as they are, creating the
 directories below the URL. The executors and the filer mount the pattern's
 deepest directory without wildcards (`/data`); a pattern with wildcards in
 its first component (`/*.txt`) would need a mount at `/`, so the
@@ -88,6 +88,21 @@ them in its own container rather than the executor's; nothing of such an
 output is uploaded. Executors that create links in
 their outputs should copy the files they point to instead (e.g. `cp -L`).
 The outputs filer mounts the task's paths read-only.
+
+## Names in outputs
+
+S3 and FTP uploads of a `DIRECTORY` output append the name of each file
+and directory below it to the output's URL, and take the URL's path as it
+is, where `#` and `?` would end it (and, for FTP, `;` its last segment).
+`s3://bucket/out/a#1` would land at the key `out/a`, where `a#2` would
+overwrite it. So the filer fails such an output, with an error that names
+the first file or directory whose name has one of these characters (`#`
+and `?` for S3; `#`, `?` and `;` for FTP), before anything of it is
+uploaded. Executors should give their output files other names.
+HTTP(S) uploads escape the names (`a#1` is uploaded to `.../a%231`), and
+`file:` outputs are copied as they are, so they keep these names. The same
+characters fail [outputs with wildcards](#outputs-with-wildcards) whose
+matches, or entries below matched directories, have them.
 
 ## Output file logs
 

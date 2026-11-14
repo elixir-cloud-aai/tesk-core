@@ -7,7 +7,7 @@ import netrc
 import os
 import re
 from types import TracebackType
-from typing import BinaryIO, Literal
+from typing import BinaryIO, ClassVar, Literal
 from urllib.parse import unquote_plus, urlparse, urlsplit, urlunsplit
 
 
@@ -193,6 +193,53 @@ def output_has_symlink(path: str, recursive: bool = False) -> bool:
     return True
 
 
+def unsafe_entry(path: str, chars: str) -> str | None:
+    """Find an entry below a directory whose name has any of some characters.
+
+    Walks the directory top-down, without following links, and each
+    directory's entries by name.
+
+    Args:
+        path: The directory.
+        chars: The characters; none (empty) finds nothing.
+
+    Returns:
+        The path of the first such file or directory, or `None` (also if
+        the directory doesn't exist).
+    """
+    if not chars:
+        return None
+    for root, dirs, files in os.walk(path, followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            if any(char in name for char in chars):
+                return os.path.join(root, name)
+    return None
+
+
+def output_has_unsafe_entry(path: str, chars: str) -> bool:
+    """Check a directory output for entries with some characters; log one.
+
+    Args:
+        path: The directory output.
+        chars: The characters its entries' names can't have.
+
+    Returns:
+        Whether such an entry was found (and logged).
+    """
+    entry = unsafe_entry(path, chars)
+    if entry is None:
+        return False
+    logging.error(
+        "Output %s contains %s, whose name can't be part of its URL: names "
+        "with any of %r are refused for this protocol",
+        path,
+        entry,
+        chars,
+    )
+    return True
+
+
 def open_for_upload(path: str) -> BinaryIO:
     """Open a file for reading, refusing a symbolic link.
 
@@ -230,7 +277,15 @@ class Transput:
         url_path: Path of the URL.
         netrc_file: Credentials from `$HOME/.netrc` (or `/.netrc`), if it
             can be read.
+        url_unsafe_chars: Characters that the names of entries below a
+            directory output can't have: the protocol's directory uploads
+            append each entry's name to the directory's URL, and take the
+            URL's path as it is (`urlparse`), which ends at them. None by
+            default (protocols that escape the names, or don't build URLs
+            per entry).
     """
+
+    url_unsafe_chars: ClassVar[str] = ""
 
     def __init__(self, path: str, url: str, ftype: Type) -> None:
         """Describe the transfer and read the `.netrc` file.
@@ -271,11 +326,15 @@ class Transput:
 
         Outputs aren't uploaded if their path, or anything below a
         directory, is a symbolic link: links would be resolved in the
-        filer's file system, not in the executor's.
+        filer's file system, not in the executor's. Nor are directories
+        with an entry whose name has one of `url_unsafe_chars`, which its
+        URL would lose (see `output_has_unsafe_entry`).
 
         Args:
-            check_links: Whether to check for links; the entries of a
-                directory skip it, as the check of the directory covers them.
+            check_links: Whether to check for links and names; the entries
+                of a directory skip it, as the check of the directory covers
+                them, and so do the matches of outputs with wildcards,
+                checked before any of them is uploaded.
 
         Returns:
             0 on success, otherwise 1.
@@ -288,6 +347,12 @@ class Transput:
         )
         if check_links and output_has_symlink(
             self.path, recursive=self.ftype == Type.Directory
+        ):
+            return 1
+        if (
+            check_links
+            and self.ftype == Type.Directory
+            and output_has_unsafe_entry(self.path, self.url_unsafe_chars)
         ):
             return 1
         if self.ftype == Type.File:
