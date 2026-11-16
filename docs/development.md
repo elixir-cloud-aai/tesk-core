@@ -146,10 +146,9 @@ Hub organization if it sets the variable `DOCKERHUB_ORG`.
 
 The workflow `Scan` (`.github/workflows/scan.yml`) scans the `latest` images
 weekly, so that vulnerabilities found after a release are reported to code
-scanning, with a full report as a workflow artifact. Until the first release
-of the release workflow below, `latest` is still the image of v0.10.6 from
-the old tag workflows, and the scan only reports; after that release, it
-fails on critical and high vulnerabilities that have a fix.
+scanning, with a full report as a workflow artifact. It fails on critical
+and high vulnerabilities that have a fix (except those accepted in
+`.trivyignore.yaml`): release a new version to fix them.
 
 ## Versioning and releases
 
@@ -221,9 +220,6 @@ a time, so that GitHub's latest release is set in order; if several tags
 are released at once, GitHub can cancel a waiting run of the job: re-run it
 the same way. Releases are never edited afterwards: fix mistakes in the notes of
 the next release.
-
-After the first release of this workflow, drop `fail: "false"` in
-`.github/workflows/scan.yml`, and the note on it above.
 
 ## Dependencies and metadata
 
