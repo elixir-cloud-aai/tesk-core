@@ -4,12 +4,9 @@
 # a release are reported: the findings that have a fix are uploaded to code
 # scanning, and a full report (findings without a fix included) is uploaded as
 # the workflow artifact `trivy-report-release-image-<image>` (JSON and table).
-# Accepted findings are listed in `.trivyignore.yaml`. Doesn't fail on
-# findings until the first release of `release.yml`: until then, `latest` is
-# the image that the old tag workflows published for v0.10.6. Drop
-# `fail: "false"` once a release has published `latest`, so that it fails on
-# critical and high vulnerabilities that have a fix (fixed by a new release),
-# as CI, `release.yml` and tesk-api do. Scheduled runs use this workflow (with
+# Accepted findings are listed in `.trivyignore.yaml`. Fails on critical and
+# high vulnerabilities that have a fix (fixed by a new release), as CI,
+# `release.yml` and tesk-api do. Scheduled runs use this workflow (with
 # its pin of the shared action `elixir-cloud-aai/.github/actions/scan-image`)
 # and `.trivyignore.yaml` as on the default branch, and file their findings
 # under it. The images are public, so no Docker Hub secrets are needed; their
@@ -51,4 +48,3 @@ jobs:
           image: docker.io/${{ vars.DOCKERHUB_ORG || 'elixircloud' }}/tesk-core-${{ matrix.image }}:latest
           category: release-image-${{ matrix.image }}
           report: "true"
-          fail: "false"
