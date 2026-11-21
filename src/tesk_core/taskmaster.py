@@ -155,13 +155,8 @@ def run_executor(
         spec["restartPolicy"] = spec["restart_policy"]
 
     for container in spec["containers"]:
-        if "limits" not in container["resources"]:
-            container["resources"]["limits"] = None
-        if container["resources"]["limits"] is None and (
-            "requests" in container["resources"]
-            and container["resources"]["requests"] is not None
-        ):
-            container["resources"]["limits"] = container["resources"]["requests"]
+        if container.get("resources"):
+            limits_from_requests(container["resources"])
 
     if pvc is not None:
         mounts = spec["containers"][0].setdefault("volumeMounts", [])
@@ -202,6 +197,31 @@ def run_executor(
         return
     if status != "Complete":
         exit_cancelled("Got status " + status)
+
+
+def limits_from_requests(resources: dict[str, Any]) -> dict[str, Any]:
+    """Fill in an executor's missing limits from its requests.
+
+    Per resource: the TESK API sets the limits from `cpu_cores` only, so an
+    executor with `cpu_cores` and `ram_gb` would get no memory limit, and a
+    namespace's default memory limit (`LimitRange`) below the request would
+    make its pod invalid. Limits that are set are kept; without requests,
+    nothing is added, so that a `LimitRange` applies.
+
+    Args:
+        resources: The `resources` of the executor's container; changed in
+            place.
+
+    Returns:
+        The same resources.
+    """
+    requests = resources.get("requests")
+    if requests:
+        limits = dict(resources.get("limits") or {})
+        for name, quantity in requests.items():
+            limits.setdefault(name, quantity)
+        resources["limits"] = limits
+    return resources
 
 
 def ignores_error(executor: dict[str, Any]) -> bool:
