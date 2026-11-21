@@ -4,6 +4,48 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
+## Unreleased
+
+### Resources of the filer
+
+The filer's pods now have resource requests (100m CPU, 128Mi memory) and
+limits (1 CPU, 512Mi memory) by default, so that namespaces with a
+`ResourceQuota` on `limits.cpu` or `limits.memory`, which refuse
+containers without limits, accept them (see
+[Resources](filer.md#resources)). Before, they had none, unless
+`FILER_RESOURCES` set them, so a `LimitRange` of the namespace applied.
+Settings of `FILER_RESOURCES` are kept. If a `LimitRange` of your
+namespace refuses the defaults (e.g. a maximum CPU below 1, or a maximum
+ratio of limit to request below 10 for CPU or 4 for memory), set
+`FILER_RESOURCES` to resources that it accepts, or to `{}` for the old
+behaviour. `FILER_RESOURCES` now also refuses resources that a container
+can't have, quantities that aren't valid and requests above their limits,
+with an error in the taskmaster's log,
+and keeps the default; before, the API server refused each filer pod.
+TESK's Helm chart doesn't have a value for it yet: the TESK API passes its
+environment variable `TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on
+to the taskmaster as `FILER_RESOURCES`.
+
+### Executors get a limit for each resource they request
+
+An executor gets a limit for each resource that it requests without one,
+also when other resources have limits; before, only an executor without
+any limits got its requests as limits. The TESK API sets the CPU limit of
+`cpu_cores` only, so an executor with `cpu_cores` and `ram_gb` had no
+memory limit, and in a namespace with a default memory limit
+(`LimitRange`) below its `ram_gb`, its pod was invalid and the task ran
+forever (see [Taskmaster](taskmaster.md#what-it-does)).
+
+**`ram_gb` is now a hard memory limit for tasks that also set
+`cpu_cores`**, as it already was for tasks that set only `ram_gb`. Before,
+such executors had no memory limit (or the namespace's default limit, if
+it was higher), so a task that used more memory than its `ram_gb` could
+still complete; now Kubernetes stops its executor when it goes over
+(`OOMKilled`, exit code 137), and the task ends with `EXECUTOR_ERROR`. Tell
+your users to request the memory that their tools need at their peak.
+Such executors also count their memory against a `ResourceQuota` on
+`limits.memory` with their request instead of the namespace's default.
+
 ## 0.12.0
 
 ### Compatibility

@@ -1,13 +1,17 @@
 """The manifest of a filer job."""
 
+from collections.abc import Callable
 import copy
+from decimal import Decimal
 import json
 import logging
 import os
 import posixpath
+import re
 from typing import TYPE_CHECKING, Any
 
 from kubernetes import client
+from kubernetes.utils import parse_quantity
 
 from tesk_core import path
 from tesk_core.path import fileEnabled
@@ -47,11 +51,83 @@ DEFAULT_SECURITY_CONTEXT: dict[str, Any] = {
 """Security context of the filer's container unless `FILER_SECURITY_CONTEXT`
 is set. The filer writes only to its volumes, `/tmp` included."""
 
+DEFAULT_RESOURCES: dict[str, Any] = {
+    "requests": {"cpu": "100m", "memory": "128Mi"},
+    "limits": {"cpu": "1", "memory": "512Mi"},
+}
+"""Resources of the filer's container unless `FILER_RESOURCES` is set, so
+that namespaces with a `ResourceQuota` on `limits.cpu` or `limits.memory`
+accept its pods; the filer streams its transfers, so its memory doesn't grow
+with their size (see "Resources" in `docs/filer.md`)."""
+
+_QUANTITY = re.compile(r"\+?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+|[KMGTPE]i|[numkMGTPE])?")
+"""A Kubernetes quantity that a resource can have: a number that isn't
+negative, with an optional exponent or suffix (`apimachinery`'s grammar).
+`parse_quantity` alone also takes what Kubernetes refuses (spaces, `NaN`,
+negative numbers). As in Kubernetes, `1E` is the suffix exa, `1e3` and
+`1E3` an exponent, and `1e` isn't a quantity."""
+
+_STANDARD_RESOURCES = ("cpu", "memory", "ephemeral-storage")
+"""The names of the resources of a container that Kubernetes knows; others
+are `hugepages-<size>`, or extended resources with a domain
+(`<domain>/<name>`, e.g. `nvidia.com/gpu`)."""
+
 logger = logging.getLogger(__name__)
 
 
+def _check_resources(resources: dict[str, Any]) -> None:
+    """Check resources that the API server would refuse for every pod.
+
+    Each resource must be one that a container can have, each quantity a
+    string in Kubernetes' notation, and no request above its limit.
+
+    Args:
+        resources: The `resources` of a container.
+
+    Raises:
+        ValueError: The resources aren't valid.
+    """
+    quantities: dict[str, dict[str, Decimal | float]] = {}
+    for kind in ("requests", "limits"):
+        values = resources.get(kind)
+        if values is None:
+            values = {}
+        elif not isinstance(values, dict):
+            raise ValueError(f"resources.{kind} isn't an object")
+        quantities[kind] = {}
+        for resource, quantity in values.items():
+            if not (
+                resource in _STANDARD_RESOURCES
+                or resource.startswith("hugepages-")
+                or "/" in resource
+            ):
+                raise ValueError(f"resources.{kind}.{resource} isn't a resource")
+            if not isinstance(quantity, str) or not _QUANTITY.fullmatch(quantity):
+                raise ValueError(
+                    f"resources.{kind}.{resource} isn't a quantity: {quantity!r}"
+                )
+            try:
+                quantities[kind][resource] = parse_quantity(quantity)
+            except ArithmeticError as error:
+                # E.g. `decimal.Overflow`, which isn't a `ValueError`
+                raise ValueError(
+                    f"resources.{kind}.{resource} is out of range: {quantity!r}"
+                ) from error
+    for resource, request in quantities["requests"].items():
+        limit = quantities["limits"].get(resource)
+        if limit is not None and request > limit:
+            raise ValueError(
+                f"resources.requests.{resource} is above its limit:"
+                f" {resources['requests'][resource]}"
+                f" > {resources['limits'][resource]}"
+            )
+
+
 def _object_setting(
-    name: str, model: type, default: dict[str, Any] | None
+    name: str,
+    model: type,
+    default: dict[str, Any] | None,
+    check: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Get a Kubernetes object from a JSON setting in the environment.
 
@@ -65,6 +141,8 @@ def _object_setting(
             have pydantic models (37 and later), otherwise only by the API
             server.
         default: The object if the setting is unset, empty or invalid.
+        check: A further check of the object, with any client; raises
+            `ValueError` if the object isn't valid.
 
     Returns:
         The object, or a copy of the default; None for `{}`, or for an unset,
@@ -85,6 +163,8 @@ def _object_setting(
             value = validate(value).model_dump(
                 by_alias=True, exclude_none=True, mode="json"
             )
+        if check is not None:
+            check(value)
     except ValueError as error:
         # `json.JSONDecodeError` and pydantic's `ValidationError` are
         # `ValueError`s; only the first line of the error is logged (the
@@ -296,9 +376,9 @@ class Filer:
 
         From the settings `FILER_POD_SECURITY_CONTEXT`,
         `FILER_SECURITY_CONTEXT` and `FILER_RESOURCES` (JSON objects) in the
-        taskmaster's environment. Each replaces its default (the security
-        contexts `DEFAULT_POD_SECURITY_CONTEXT` and
-        `DEFAULT_SECURITY_CONTEXT`, no resources); `{}` leaves the field out.
+        taskmaster's environment. Each replaces its default
+        (`DEFAULT_POD_SECURITY_CONTEXT`, `DEFAULT_SECURITY_CONTEXT` and
+        `DEFAULT_RESOURCES`); `{}` leaves the field out.
         """
         pod = self.spec["spec"]["template"]["spec"]
         container = self.getContainer(0)
@@ -323,7 +403,12 @@ class Filer:
         _set_field(
             container,
             "resources",
-            _object_setting("FILER_RESOURCES", client.V1ResourceRequirements, None),
+            _object_setting(
+                "FILER_RESOURCES",
+                client.V1ResourceRequirements,
+                DEFAULT_RESOURCES,
+                _check_resources,
+            ),
         )
 
     def add_s3_mount(self) -> None:

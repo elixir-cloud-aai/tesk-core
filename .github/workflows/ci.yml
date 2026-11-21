@@ -184,8 +184,9 @@ jobs:
   # The end-to-end tests (`tests/e2e/`) on a kind cluster: builds both images
   # from the commit and loads them into the cluster's node (pushed nowhere, so
   # the job needs no secrets and runs for pull requests from forks), applies
-  # the taskmaster's role (the rules of TESK's Helm chart) and a small HTTP
-  # server (`tests/e2e/manifests/`), and runs tasks through taskmaster jobs as
+  # the taskmaster's role (the rules of TESK's Helm chart), a small HTTP
+  # server and a namespace that requires resource limits
+  # (`tests/e2e/manifests/`), and runs tasks through taskmaster jobs as
   # the TESK API creates them. See "End-to-end tests" in `docs/development.md`
   # for running them locally
   e2e:
@@ -236,6 +237,7 @@ jobs:
       - name: Apply manifests
         run: |
           kubectl apply -f tests/e2e/manifests/
+          kubectl apply -f tests/e2e/manifests/quota/
           kubectl wait --for=condition=Ready pod/tesk-e2e-http --timeout=120s
       - name: Run end-to-end tests
         run: pytest tests/e2e

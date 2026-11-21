@@ -90,8 +90,11 @@ taskmaster's service account and role (the rules of TESK's Helm chart) and
 a small HTTP server for inputs and outputs (`tests/e2e/manifests/`). They
 check the resulting jobs, PVCs and uploads: a task with inputs and outputs
 (and its output file logs), a failing executor, an executor whose error is
-ignored, a cancelled task, and a task that can't be scheduled
-(`TESK_MAX_QUEUE_SECONDS`). The images
+ignored, a cancelled task, a task that can't be scheduled
+(`TESK_MAX_QUEUE_SECONDS`), and a task in a namespace that requires
+resource limits (`tesk-e2e-quota`, from `tests/e2e/manifests/quota/`: a
+`ResourceQuota` on `limits.cpu` and a default memory limit below the
+executor's request). The images
 run with `imagePullPolicy: Never`, and the filer image also runs the
 executors and the HTTP server, so no other image is pulled. The unit tests in `tests/unit/test_manifests.py`
 check the manifests against the Kubernetes client's models without a
@@ -109,6 +112,7 @@ docker build --file containers/taskmaster.Dockerfile --tag tesk-core-taskmaster:
 docker build --file containers/filer.Dockerfile --tag tesk-core-filer:e2e .
 kind load docker-image tesk-core-taskmaster:e2e tesk-core-filer:e2e --name tesk-core-e2e
 kubectl apply -f tests/e2e/manifests/
+kubectl apply -f tests/e2e/manifests/quota/
 kubectl wait --for=condition=Ready pod/tesk-e2e-http --timeout=120s
 TESK_E2E=1 uv run pytest tests/e2e
 kind delete cluster --name tesk-core-e2e
@@ -117,10 +121,12 @@ rm "$KUBECONFIG"
 
 The tests use the namespace `default`; for another one, apply the manifests
 and wait for the server with `-n <namespace>`, and set
-`TESK_E2E_NAMESPACE`. The image
+`TESK_E2E_NAMESPACE` (the manifests of `tests/e2e/manifests/quota/` name
+their own namespace, without `-n`). The image
 names are fixed (`tests/e2e/cluster.py`). The role in
-`tests/e2e/manifests/rbac.yaml` grants what the role of TESK's chart
-grants: update both together.
+`tests/e2e/manifests/rbac.yaml` (and its copy in
+`tests/e2e/manifests/quota/quota.yaml`) grants what the role of TESK's
+chart grants: update them together.
 
 ## Continuous integration
 

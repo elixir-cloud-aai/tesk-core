@@ -26,8 +26,14 @@ outputs, volumes and resources.
    `/`, so the taskmaster refuses it: it stops with an error before it
    creates the PVC or any job.
 2. It runs the executors, one after another, each as a job with the task's
-   volume mounted. If an executor has resource requests but no limits, the
-   requests also become its limits.
+   volume mounted. Each resource that an executor requests without a limit
+   gets its request as its limit, also when other resources have limits
+   (the TESK API sets the limit of `cpu_cores` only, and the request of
+   `ram_gb` too), so that a namespace's default limit (`LimitRange`) below
+   the request can't make the executor's pod invalid. Limits that are set
+   are kept; an executor without requests gets no limits, so in a
+   namespace with a `ResourceQuota` on `limits.cpu`, tasks without
+   `cpu_cores` need a `LimitRange` with a default CPU limit.
 3. If the task has outputs, it runs the filer again
    (`<task>-outputs-filer`) to upload them. It then deletes the PVC, if
    there is one. Volumes need no filer: their directories on the PVC are
@@ -289,7 +295,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `TASK_TTL_SECONDS` | Seconds after which Kubernetes deletes the taskmaster's finished job, and with it the task's jobs (`ttlSecondsAfterFinished`; see [Deleting finished tasks](#deleting-finished-tasks)), from 0 to 2147483647; unset or empty keeps them. Other values log an error and set no TTL. |
 | `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
 | `FILER_POD_SECURITY_CONTEXT`, `FILER_SECURITY_CONTEXT` | Security context of the filer's pod and of its container, as JSON objects; each replaces its whole default (repeat the default fields that you want to keep, see [Pod security](filer.md#pod-security)), and `{}` leaves it out. Unset or empty values keep the defaults; values that aren't JSON objects, or whose fields or types don't fit Kubernetes' `PodSecurityContext` or `SecurityContext`, log an error and keep them too. |
-| `FILER_RESOURCES` | Resource requests and limits of the filer's container, as a JSON object (e.g. `{"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}}`), with every quantity as a JSON string (`"1"`, not `1`); unset, empty or `{}` sets none. Values that aren't JSON objects, or whose fields or types don't fit Kubernetes' `ResourceRequirements`, log an error and set none. |
+| `FILER_RESOURCES` | Resource requests and limits of the filer's container, as a JSON object that replaces the whole default `{"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "512Mi"}}` (see [Filer](filer.md#resources)), with every quantity as a JSON string in Kubernetes' notation (`"1"`, not `1`); `{}` sets none, so that a `LimitRange` of the namespace applies. Unset or empty values keep the default; values that aren't JSON objects, whose fields or types don't fit Kubernetes' `ResourceRequirements`, with resources that a container can't have (other than `cpu`, `memory`, `ephemeral-storage`, `hugepages-<size>` and `<domain>/<name>`), quantities that aren't valid, or a request above its limit, log an error and keep it too. |
 | `TESK_FTP_USERNAME`, `TESK_FTP_PASSWORD` | FTP credentials, passed on to the filer: as references to the secret `TESK_FTP_SECRET_NAME` if that is set, otherwise as values in the filer's job, with a warning. |
 | `TESK_FTP_SECRET_NAME` | Name of the secret with the FTP credentials (keys `username` and `password`), which the filer's job then references instead of holding the credentials (see [Filer](filer.md#ftp)). |
 | `TESK_FTP_HOSTS` | Hosts that the filer sends the FTP credentials to, passed on to the filer with them (see [Filer](filer.md#ftp)). |

@@ -1,5 +1,6 @@
 """Tests of the filer pod's hardening and of how it gets the FTP credentials."""
 
+import decimal
 import logging
 from typing import Any
 
@@ -9,6 +10,7 @@ import pytest
 from tesk_core import filer_class, path
 from tesk_core.filer_class import (
     DEFAULT_POD_SECURITY_CONTEXT,
+    DEFAULT_RESOURCES,
     DEFAULT_SECURITY_CONTEXT,
     Filer,
 )
@@ -74,7 +76,23 @@ def test_default_hardening() -> None:
         "readOnlyRootFilesystem": True,
     }
     assert spec["automountServiceAccountToken"] is False
-    assert "resources" not in filer.getContainer(0)
+
+
+def test_default_resources() -> None:
+    """Test that the filer has requests and limits of CPU and memory.
+
+    So that a namespace with a `ResourceQuota` on `limits.cpu` or
+    `limits.memory` accepts its pods, with requests below the limits.
+    """
+    filer = Filer("name", {"a": 1})
+
+    assert filer.getContainer(0)["resources"] == {
+        "requests": {"cpu": "100m", "memory": "128Mi"},
+        "limits": {"cpu": "1", "memory": "512Mi"},
+    }
+    validate = getattr(client.V1ResourceRequirements, "model_validate", None)
+    if validate is not None:
+        validate(DEFAULT_RESOURCES)
 
 
 def test_pod_labels() -> None:
@@ -168,11 +186,68 @@ def test_defaults_are_copies() -> None:
     filer.getContainer(0)["securityContext"]["capabilities"]["drop"].append("X")
     pod_spec(filer)["securityContext"]["seccompProfile"]["type"] = "X"
 
+    filer.getContainer(0)["resources"]["limits"]["cpu"] = "X"
+
     other = Filer("other", {"a": 1})
 
     assert other.getContainer(0)["securityContext"] == DEFAULT_SECURITY_CONTEXT
     assert pod_spec(other)["securityContext"] == DEFAULT_POD_SECURITY_CONTEXT
+    assert other.getContainer(0)["resources"] == DEFAULT_RESOURCES
     assert DEFAULT_SECURITY_CONTEXT["capabilities"] == {"drop": ["ALL"]}
+    assert DEFAULT_RESOURCES["limits"]["cpu"] == "1"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Not quantities
+        '{"limits": {"cpu": "one"}}',
+        '{"requests": {"memory": "1 Gi"}}',
+        '{"limits": {"memory": ""}}',
+        '{"limits": {"memory": "1e"}}',
+        # Numbers, not strings
+        '{"limits": {"cpu": 1}}',
+        # Requests above their limits, which the API server would refuse
+        # for each filer pod
+        '{"requests": {"cpu": "2"}, "limits": {"cpu": "1"}}',
+        '{"requests": {"memory": "1Gi"}, "limits": {"memory": "512Mi"}}',
+    ],
+)
+def test_invalid_resources_keep_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str
+) -> None:
+    """Test that resources that Kubernetes would refuse log an error.
+
+    Checked when the taskmaster starts the filer, also with clients without
+    pydantic models; the default stays.
+    """
+    monkeypatch.setenv("FILER_RESOURCES", value)
+
+    with caplog.at_level(logging.ERROR):
+        filer = Filer("name", {"a": 1})
+
+    assert filer.getContainer(0)["resources"] == DEFAULT_RESOURCES
+    assert "FILER_RESOURCES" in caplog.text
+
+
+def test_resources_with_valid_quantities(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that quantities in every notation, and equal limits, are kept.
+
+    Requests without limits, or limits without requests, are kept too: the
+    API server, or a `LimitRange`, fills in the others.
+    """
+    value = (
+        '{"requests": {"cpu": "0.5", "memory": "1e9", "ephemeral-storage": "1G"},'
+        ' "limits": {"cpu": "500m", "memory": "1e9", "nvidia.com/gpu": "1"}}'
+    )
+    monkeypatch.setenv("FILER_RESOURCES", value)
+
+    filer = Filer("name", {"a": 1})
+
+    assert filer.getContainer(0)["resources"] == {
+        "requests": {"cpu": "0.5", "memory": "1e9", "ephemeral-storage": "1G"},
+        "limits": {"cpu": "500m", "memory": "1e9", "nvidia.com/gpu": "1"},
+    }
 
 
 def test_contexts_and_resources_from_settings(
@@ -224,7 +299,7 @@ def test_empty_setting_keeps_default(
 
     assert pod_spec(filer)["securityContext"] == DEFAULT_POD_SECURITY_CONTEXT
     assert filer.getContainer(0)["securityContext"] == DEFAULT_SECURITY_CONTEXT
-    assert "resources" not in filer.getContainer(0)
+    assert filer.getContainer(0)["resources"] == DEFAULT_RESOURCES
 
 
 @pytest.mark.parametrize("value", ["runAsNonRoot: true", "[]", '"text"', "null"])
@@ -243,7 +318,7 @@ def test_setting_not_an_object_keeps_default(
 
     assert pod_spec(filer)["securityContext"] == DEFAULT_POD_SECURITY_CONTEXT
     assert filer.getContainer(0)["securityContext"] == DEFAULT_SECURITY_CONTEXT
-    assert "resources" not in filer.getContainer(0)
+    assert filer.getContainer(0)["resources"] == DEFAULT_RESOURCES
     for name in SETTINGS[:3]:
         assert any(name in record.getMessage() for record in caplog.records), name
 
@@ -292,7 +367,7 @@ def test_setting_invalid_for_model_keeps_default(
 
     assert pod_spec(filer)["securityContext"] == DEFAULT_POD_SECURITY_CONTEXT
     assert filer.getContainer(0)["securityContext"] == DEFAULT_SECURITY_CONTEXT
-    assert "resources" not in filer.getContainer(0)
+    assert filer.getContainer(0)["resources"] == DEFAULT_RESOURCES
     assert name in caplog.text
     assert model.__name__ in caplog.text
 
@@ -361,3 +436,72 @@ def test_ftp_credentials_as_values(
     }
     assert "TESK_FTP_SECRET_NAME" in caplog.text
     assert "ftp-pw-1" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "resources",
+    [
+        {"limits": {"cpu": 1}},
+        {"limits": {"cpu": "-1"}},
+        {"limits": {"cpu": " 1"}},
+        {"limits": {"memory": "1 Gi"}},
+        {"limits": {"memory": "NaN"}},
+        {"limits": {"memory": "1Qi"}},
+        {"requests": ["cpu"]},
+        # Not resources of a container
+        {"limits": {"cpus": "1"}},
+        {"requests": {"mem": "1Gi"}},
+        {"requests": []},
+        {"limits": ""},
+        {"limits": 0},
+    ],
+)
+def test_check_resources_refuses(resources: dict[str, Any]) -> None:
+    """Test that what isn't a Kubernetes quantity is refused.
+
+    Also numbers, which the pydantic models of newer clients refuse too,
+    but older clients would pass on.
+    """
+    with pytest.raises(ValueError, match="resources"):
+        filer_class._check_resources(resources)
+
+
+@pytest.mark.parametrize(
+    "quantity", ["1", "1.", ".5", "+1", "1k", "1E", "1Ei", "1E3", "1e-3", "1.5Gi"]
+)
+def test_check_resources_accepts(quantity: str) -> None:
+    """Test that quantities in Kubernetes' notations are accepted.
+
+    `1E` is the suffix exa, `1E3` an exponent; a request equal to its limit
+    is accepted.
+    """
+    filer_class._check_resources(
+        {"requests": {"memory": quantity}, "limits": {"memory": quantity}}
+    )
+
+
+def test_check_resources_refuses_out_of_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a quantity that the parser can't compute is refused.
+
+    `parse_quantity` could raise an `ArithmeticError` other than
+    `ValueError` (e.g. `decimal.Overflow`), which would otherwise stop the
+    taskmaster instead of keeping the default.
+    """
+
+    def overflow(quantity: str) -> None:
+        raise decimal.Overflow(quantity)
+
+    monkeypatch.setattr(filer_class, "parse_quantity", overflow)
+
+    with pytest.raises(ValueError, match="out of range"):
+        filer_class._check_resources({"limits": {"cpu": "1"}})
+
+
+@pytest.mark.parametrize(
+    "resource", ["cpu", "memory", "ephemeral-storage", "hugepages-2Mi", "example.com/x"]
+)
+def test_check_resources_accepts_resource_names(resource: str) -> None:
+    """Test that the resources that a container can have are accepted."""
+    filer_class._check_resources({"limits": {resource: "1"}})

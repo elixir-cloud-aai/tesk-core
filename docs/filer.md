@@ -358,9 +358,26 @@ user 1000 with group 1000 on the task's volume, set
 `{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}}`
 (repeat the defaults that you want to keep). On OpenShift, the defaults
 work with the `restricted-v2` security context constraint, which assigns
-the user. `FILER_RESOURCES` sets the container's resource requests and
-limits (none by default, so a `LimitRange` of the namespace applies, if
-any); see [Taskmaster](taskmaster.md#environment-variables).
+the user.
+
+### Resources
+
+The filer's container requests 100m CPU and 128Mi memory, and is limited
+to 1 CPU and 512Mi, so that namespaces with a `ResourceQuota` on
+`limits.cpu` or `limits.memory` accept its pods. The filer streams its
+transfers to and from the task's volume, so its memory doesn't grow with
+the size of the inputs and outputs: its peak resident memory was about
+60 MiB for a 2 GiB HTTP input (measured locally for 0.12.0); S3 transfers
+buffer up to some ten parts of 8 MiB more.
+
+The taskmaster's setting `FILER_RESOURCES` replaces these resources (a
+JSON object with the fields of Kubernetes' `ResourceRequirements`; repeat
+the defaults that you want to keep), and `{}` leaves them out, so that a
+`LimitRange` of the namespace applies, if any (as with earlier releases); see
+[Taskmaster](taskmaster.md#environment-variables). For example, for a
+`LimitRange` whose maximum CPU is 500m, or that limits the ratio of limits
+to requests to 2, set it to
+`{"requests": {"cpu": "250m", "memory": "256Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}`.
 
 Filer pods have the labels `app.kubernetes.io/component: filer` and
 `app.kubernetes.io/part-of: tesk`. They need no incoming connections, and
