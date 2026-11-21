@@ -1,5 +1,6 @@
 """Tests of the filer pod's hardening and of how it gets the FTP credentials."""
 
+import decimal
 import logging
 from typing import Any
 
@@ -447,6 +448,9 @@ def test_ftp_credentials_as_values(
         {"limits": {"memory": "NaN"}},
         {"limits": {"memory": "1Qi"}},
         {"requests": ["cpu"]},
+        # Not resources of a container
+        {"limits": {"cpus": "1"}},
+        {"requests": {"mem": "1Gi"}},
         {"requests": []},
         {"limits": ""},
         {"limits": 0},
@@ -474,3 +478,30 @@ def test_check_resources_accepts(quantity: str) -> None:
     filer_class._check_resources(
         {"requests": {"memory": quantity}, "limits": {"memory": quantity}}
     )
+
+
+def test_check_resources_refuses_out_of_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that a quantity that the parser can't compute is refused.
+
+    `parse_quantity` could raise an `ArithmeticError` other than
+    `ValueError` (e.g. `decimal.Overflow`), which would otherwise stop the
+    taskmaster instead of keeping the default.
+    """
+
+    def overflow(quantity: str) -> None:
+        raise decimal.Overflow(quantity)
+
+    monkeypatch.setattr(filer_class, "parse_quantity", overflow)
+
+    with pytest.raises(ValueError, match="out of range"):
+        filer_class._check_resources({"limits": {"cpu": "1"}})
+
+
+@pytest.mark.parametrize(
+    "resource", ["cpu", "memory", "ephemeral-storage", "hugepages-2Mi", "example.com/x"]
+)
+def test_check_resources_accepts_resource_names(resource: str) -> None:
+    """Test that the resources that a container can have are accepted."""
+    filer_class._check_resources({"limits": {resource: "1"}})

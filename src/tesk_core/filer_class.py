@@ -67,14 +67,19 @@ negative, with an optional exponent or suffix (`apimachinery`'s grammar).
 negative numbers). As in Kubernetes, `1E` is the suffix exa, `1e3` and
 `1E3` an exponent, and `1e` isn't a quantity."""
 
+_STANDARD_RESOURCES = ("cpu", "memory", "ephemeral-storage")
+"""The names of the resources of a container that Kubernetes knows; others
+are `hugepages-<size>`, or extended resources with a domain
+(`<domain>/<name>`, e.g. `nvidia.com/gpu`)."""
+
 logger = logging.getLogger(__name__)
 
 
 def _check_resources(resources: dict[str, Any]) -> None:
     """Check resources that the API server would refuse for every pod.
 
-    Each quantity must be a string in Kubernetes' notation, and no request
-    above its limit.
+    Each resource must be one that a container can have, each quantity a
+    string in Kubernetes' notation, and no request above its limit.
 
     Args:
         resources: The `resources` of a container.
@@ -91,11 +96,23 @@ def _check_resources(resources: dict[str, Any]) -> None:
             raise ValueError(f"resources.{kind} isn't an object")
         quantities[kind] = {}
         for resource, quantity in values.items():
+            if not (
+                resource in _STANDARD_RESOURCES
+                or resource.startswith("hugepages-")
+                or "/" in resource
+            ):
+                raise ValueError(f"resources.{kind}.{resource} isn't a resource")
             if not isinstance(quantity, str) or not _QUANTITY.fullmatch(quantity):
                 raise ValueError(
                     f"resources.{kind}.{resource} isn't a quantity: {quantity!r}"
                 )
-            quantities[kind][resource] = parse_quantity(quantity)
+            try:
+                quantities[kind][resource] = parse_quantity(quantity)
+            except ArithmeticError as error:
+                # E.g. `decimal.Overflow`, which isn't a `ValueError`
+                raise ValueError(
+                    f"resources.{kind}.{resource} is out of range: {quantity!r}"
+                ) from error
     for resource, request in quantities["requests"].items():
         limit = quantities["limits"].get(resource)
         if limit is not None and request > limit:

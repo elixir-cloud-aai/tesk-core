@@ -18,8 +18,9 @@ Settings of `FILER_RESOURCES` are kept. If a `LimitRange` of your
 namespace refuses the defaults (e.g. a maximum CPU below 1, or a maximum
 ratio of limit to request below 10 for CPU or 4 for memory), set
 `FILER_RESOURCES` to resources that it accepts, or to `{}` for the old
-behaviour. `FILER_RESOURCES` now also refuses quantities that aren't valid
-and requests above their limits, with an error in the taskmaster's log,
+behaviour. `FILER_RESOURCES` now also refuses resources that a container
+can't have, quantities that aren't valid and requests above their limits,
+with an error in the taskmaster's log,
 and keeps the default; before, the API server refused each filer pod.
 TESK's Helm chart doesn't have a value for it yet: the TESK API passes its
 environment variable `TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on
