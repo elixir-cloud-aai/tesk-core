@@ -199,7 +199,7 @@ def run_executor(
         exit_cancelled("Got status " + status)
 
 
-def limits_from_requests(resources: dict[str, Any]) -> dict[str, Any]:
+def limits_from_requests(resources: dict[str, Any]) -> None:
     """Fill in an executor's missing limits from its requests.
 
     Per resource: the TESK API sets the limits from `cpu_cores` only, so an
@@ -211,9 +211,6 @@ def limits_from_requests(resources: dict[str, Any]) -> dict[str, Any]:
     Args:
         resources: The `resources` of the executor's container; changed in
             place.
-
-    Returns:
-        The same resources.
     """
     requests = resources.get("requests")
     if requests:
@@ -221,7 +218,6 @@ def limits_from_requests(resources: dict[str, Any]) -> dict[str, Any]:
         for name, quantity in requests.items():
             limits.setdefault(name, quantity)
         resources["limits"] = limits
-    return resources
 
 
 def ignores_error(executor: dict[str, Any]) -> bool:

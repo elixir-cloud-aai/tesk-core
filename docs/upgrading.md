@@ -33,8 +33,16 @@ any limits got its requests as limits. The TESK API sets the CPU limit of
 `cpu_cores` only, so an executor with `cpu_cores` and `ram_gb` had no
 memory limit, and in a namespace with a default memory limit
 (`LimitRange`) below its `ram_gb`, its pod was invalid and the task ran
-forever (see [Taskmaster](taskmaster.md#what-it-does)). Nothing to change;
-such executors now count their memory against a `ResourceQuota` on
+forever (see [Taskmaster](taskmaster.md#what-it-does)).
+
+**`ram_gb` is now a hard memory limit for tasks that also set
+`cpu_cores`**, as it already was for tasks that set only `ram_gb`. Before,
+such executors had no memory limit (or the namespace's default limit, if
+it was higher), so a task that used more memory than its `ram_gb` could
+still complete; now Kubernetes stops its executor when it goes over
+(`OOMKilled`, exit code 137), and the task ends with `EXECUTOR_ERROR`. Tell
+your users to request the memory that their tools need at their peak.
+Such executors also count their memory against a `ResourceQuota` on
 `limits.memory` with their request instead of the namespace's default.
 
 ## 0.12.0

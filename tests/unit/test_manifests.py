@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from kubernetes import client
 import pytest
+import yaml  # type: ignore[import-untyped]  # no stubs in the dev extra
 
 from tesk_core import taskmaster
 from tesk_core.filer_class import Filer
@@ -113,3 +114,29 @@ def test_pvc_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STORAGE_CLASS_NAME", "fast")
 
     validate(client.V1PersistentVolumeClaim, PVC("pvc-1", 1, "tesk").spec)
+
+
+def test_quota_namespace_has_the_taskmaster_role() -> None:
+    """Test that the end-to-end tests' quota namespace has the same role.
+
+    `tests/e2e/manifests/quota/quota.yaml` copies the service account, role
+    and binding of `tests/e2e/manifests/rbac.yaml` into its namespace; both
+    must grant the same rules (those of TESK's Helm chart).
+    """
+    manifests = Path(__file__).parents[1] / "e2e" / "manifests"
+
+    def objects(path: Path) -> dict[str, Any]:
+        return {
+            obj["kind"]: obj
+            for obj in yaml.safe_load_all(path.read_text())
+            if obj["kind"] in ("ServiceAccount", "Role", "RoleBinding")
+        }
+
+    default = objects(manifests / "rbac.yaml")
+    quota = objects(manifests / "quota" / "quota.yaml")
+    assert quota["Role"]["rules"] == default["Role"]["rules"]
+    assert quota["RoleBinding"]["roleRef"] == default["RoleBinding"]["roleRef"]
+    assert (
+        quota["ServiceAccount"]["metadata"]["name"]
+        == (default["ServiceAccount"]["metadata"]["name"])
+    )

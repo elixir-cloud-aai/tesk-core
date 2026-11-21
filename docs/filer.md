@@ -366,8 +366,9 @@ The filer's container requests 100m CPU and 128Mi memory, and is limited
 to 1 CPU and 512Mi, so that namespaces with a `ResourceQuota` on
 `limits.cpu` or `limits.memory` accept its pods. The filer streams its
 transfers to and from the task's volume, so its memory doesn't grow with
-the size of the inputs and outputs: it peaks at about 60 MiB for a 2 GiB
-HTTP input; S3 transfers buffer up to some ten parts of 8 MiB more.
+the size of the inputs and outputs: its peak resident memory was about
+60 MiB for a 2 GiB HTTP input (measured locally for 0.12.0); S3 transfers
+buffer up to some ten parts of 8 MiB more.
 
 The taskmaster's setting `FILER_RESOURCES` replaces these resources (a
 JSON object with the fields of Kubernetes' `ResourceRequirements`; repeat

@@ -203,6 +203,9 @@ def test_defaults_are_copies() -> None:
         '{"limits": {"cpu": "one"}}',
         '{"requests": {"memory": "1 Gi"}}',
         '{"limits": {"memory": ""}}',
+        '{"limits": {"memory": "1e"}}',
+        # Numbers, not strings
+        '{"limits": {"cpu": 1}}',
         # Requests above their limits, which the API server would refuse
         # for each filer pod
         '{"requests": {"cpu": "2"}, "limits": {"cpu": "1"}}',
@@ -444,6 +447,9 @@ def test_ftp_credentials_as_values(
         {"limits": {"memory": "NaN"}},
         {"limits": {"memory": "1Qi"}},
         {"requests": ["cpu"]},
+        {"requests": []},
+        {"limits": ""},
+        {"limits": 0},
     ],
 )
 def test_check_resources_refuses(resources: dict[str, Any]) -> None:
@@ -454,3 +460,17 @@ def test_check_resources_refuses(resources: dict[str, Any]) -> None:
     """
     with pytest.raises(ValueError, match="resources"):
         filer_class._check_resources(resources)
+
+
+@pytest.mark.parametrize(
+    "quantity", ["1", "1.", ".5", "+1", "1k", "1E", "1Ei", "1E3", "1e-3", "1.5Gi"]
+)
+def test_check_resources_accepts(quantity: str) -> None:
+    """Test that quantities in Kubernetes' notations are accepted.
+
+    `1E` is the suffix exa, `1E3` an exponent; a request equal to its limit
+    is accepted.
+    """
+    filer_class._check_resources(
+        {"requests": {"memory": quantity}, "limits": {"memory": quantity}}
+    )

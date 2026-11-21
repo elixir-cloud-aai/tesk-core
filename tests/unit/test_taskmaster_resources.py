@@ -115,7 +115,9 @@ def test_limits_from_requests(
     resources: dict[str, Any], expected: dict[str, Any]
 ) -> None:
     """Test that each missing limit is filled in from its request."""
-    assert limits_from_requests(resources) == expected
+    limits_from_requests(resources)
+
+    assert resources == expected
 
 
 def test_limits_that_are_set_are_kept() -> None:
@@ -128,7 +130,11 @@ def test_limits_that_are_set_are_kept() -> None:
         "limits": {"cpu": "2", "memory": "4Gi"},
     }
 
-    assert limits_from_requests(copy.deepcopy(resources)) == resources
+    filled = copy.deepcopy(resources)
+
+    limits_from_requests(filled)
+
+    assert filled == resources
 
 
 def test_limits_are_not_the_requests_object() -> None:

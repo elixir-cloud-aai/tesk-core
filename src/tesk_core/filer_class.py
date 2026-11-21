@@ -57,13 +57,15 @@ DEFAULT_RESOURCES: dict[str, Any] = {
 }
 """Resources of the filer's container unless `FILER_RESOURCES` is set, so
 that namespaces with a `ResourceQuota` on `limits.cpu` or `limits.memory`
-accept its pods. The filer streams its transfers to and from disk: it peaks
-at about 60 MiB for a 2 GiB HTTP input, and S3 transfers buffer some ten
-parts of 8 MiB."""
+accept its pods; the filer streams its transfers, so its memory doesn't grow
+with their size (see "Resources" in `docs/filer.md`)."""
 
 _QUANTITY = re.compile(r"\+?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+|[KMGTPE]i|[numkMGTPE])?")
 """A Kubernetes quantity that a resource can have: a number that isn't
-negative, with an optional exponent or suffix (`apimachinery`'s grammar)."""
+negative, with an optional exponent or suffix (`apimachinery`'s grammar).
+`parse_quantity` alone also takes what Kubernetes refuses (spaces, `NaN`,
+negative numbers). As in Kubernetes, `1E` is the suffix exa, `1e3` and
+`1E3` an exponent, and `1e` isn't a quantity."""
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +82,12 @@ def _check_resources(resources: dict[str, Any]) -> None:
     Raises:
         ValueError: The resources aren't valid.
     """
-    quantities: dict[str, dict[str, Decimal]] = {}
+    quantities: dict[str, dict[str, Decimal | float]] = {}
     for kind in ("requests", "limits"):
-        values = resources.get(kind) or {}
-        if not isinstance(values, dict):
+        values = resources.get(kind)
+        if values is None:
+            values = {}
+        elif not isinstance(values, dict):
             raise ValueError(f"resources.{kind} isn't an object")
         quantities[kind] = {}
         for resource, quantity in values.items():

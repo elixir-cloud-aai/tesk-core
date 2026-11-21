@@ -193,7 +193,9 @@ def test_task_in_namespace_that_requires_limits(
     memory limit below the executor's request (`tests/e2e/manifests/
     quota/`): the filers get their default limits, and the executor, with
     CPU and memory requests but only a CPU limit (as the TESK API sets
-    `cpu_cores` and `ram_gb`), gets its memory limit from its request.
+    `cpu_cores` and `ram_gb`), gets its memory limit from its request. The
+    executor's memory request (600Mi) must stay above the namespace's
+    default limit (512Mi in `quota.yaml`), which made its pod invalid before.
     """
     upload = f"/out-{uuid.uuid4().hex[:8]}.txt"
     task = run_task(
@@ -219,7 +221,8 @@ def test_task_in_namespace_that_requires_limits(
         assert condition(job, "Complete"), suffix
     executor = task.job("-ex-00").spec.template.spec.containers[0]
     assert executor.resources.limits == {"cpu": "100m", "memory": "600Mi"}
-    filer = task.job("-inputs-filer").spec.template.spec.containers[0]
-    assert filer.resources.limits == {"cpu": "1", "memory": "512Mi"}
+    for suffix in ("-inputs-filer", "-outputs-filer"):
+        filer = task.job(suffix).spec.template.spec.containers[0]
+        assert filer.resources.limits == {"cpu": "1", "memory": "512Mi"}, suffix
     log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
     assert f"PUT {upload} 'quota;'" in log
