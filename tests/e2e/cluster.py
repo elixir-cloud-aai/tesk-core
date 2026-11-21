@@ -13,6 +13,9 @@ import pytest
 
 # Namespace of the tests, with the manifests of `tests/e2e/manifests/`
 NAMESPACE = os.environ.get("TESK_E2E_NAMESPACE", "default")
+# Namespace that requires resource limits, with the manifests of
+# `tests/e2e/manifests/quota/`
+QUOTA_NAMESPACE = "tesk-e2e-quota"
 # Images loaded into the cluster's nodes (also named in `.github/workflows/
 # ci.yml` and `tests/e2e/manifests/http-server.yaml`); the filer image also
 # runs the executors and the HTTP server, so that the tests pull no other
@@ -91,6 +94,8 @@ class Task:
         args: list[str] | None = None,
         job_labels: dict[str, str] | None = None,
         ignore_error: set[int] | None = None,
+        namespace: str = NAMESPACE,
+        taskmaster_resources: dict[str, Any] | None = None,
     ) -> None:
         """Describe the task and its taskmaster job; `submit` creates the job.
 
@@ -108,9 +113,13 @@ class Task:
                 existed).
             ignore_error: The indexes of the executors whose errors are
                 ignored (TES `ignore_error`; the annotation `ignore-error`).
+            namespace: The namespace of the task's jobs.
+            taskmaster_resources: The resources of the taskmaster's
+                container, if any.
         """
         self.batch = batch
         self.core = core
+        self.namespace = namespace
         self.name = f"task-{uuid.uuid4().hex[:8]}"
         executors = [
             executor(self.name, index, script, **(resources or {}))
@@ -127,14 +136,14 @@ class Task:
             "volumes": [],
             "resources": {"disk_gb": 0.1},
         }
-        container = {
+        container: dict[str, Any] = {
             "name": "taskmaster",
             "image": TASKMASTER_IMAGE,
             "imagePullPolicy": "Never",
             "args": [
                 json.dumps(self.data),
                 "-n",
-                NAMESPACE,
+                namespace,
                 "-fn",
                 FILER_NAME,
                 "-fv",
@@ -149,6 +158,8 @@ class Task:
                 {"name": "podinfo", "mountPath": "/podinfo", "readOnly": True}
             ],
         }
+        if taskmaster_resources is not None:
+            container["resources"] = taskmaster_resources
         self.body = {
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -186,7 +197,7 @@ class Task:
 
     def submit(self) -> None:
         """Create the taskmaster job of the task."""
-        self.batch.create_namespaced_job(NAMESPACE, self.body)
+        self.batch.create_namespaced_job(self.namespace, self.body)
 
     def job(self, suffix: str = "") -> Any:
         """Read a job of the task.
@@ -199,7 +210,7 @@ class Task:
             The job, or None if it doesn't exist.
         """
         try:
-            return self.batch.read_namespaced_job(self.name + suffix, NAMESPACE)
+            return self.batch.read_namespaced_job(self.name + suffix, self.namespace)
         except ApiException as ex:
             if ex.status == 404:
                 return None
@@ -244,7 +255,7 @@ class Task:
         """
         return list(
             self.core.list_namespaced_pod(
-                NAMESPACE, label_selector=f"job-name={self.name}{suffix}"
+                self.namespace, label_selector=f"job-name={self.name}{suffix}"
             ).items
         )
 
@@ -273,7 +284,7 @@ class Task:
         for pod in self.pods():
             try:
                 logs.append(
-                    self.core.read_namespaced_pod_log(pod.metadata.name, NAMESPACE)
+                    self.core.read_namespaced_pod_log(pod.metadata.name, self.namespace)
                 )
             except ApiException as ex:
                 # E.g. a container that hasn't started
@@ -300,7 +311,7 @@ class Task:
         """
         try:
             pvc = self.core.read_namespaced_persistent_volume_claim(
-                self.name + "-pvc", NAMESPACE
+                self.name + "-pvc", self.namespace
             )
         except ApiException as ex:
             if ex.status == 404:
@@ -321,7 +332,7 @@ class Task:
         try:
             self.batch.delete_namespaced_job(
                 self.name,
-                NAMESPACE,
+                self.namespace,
                 body=client.V1DeleteOptions(propagation_policy="Background"),
             )
         except ApiException as ex:
@@ -332,7 +343,7 @@ class Task:
             time.sleep(2)
         try:
             self.core.delete_namespaced_persistent_volume_claim(
-                self.name + "-pvc", NAMESPACE
+                self.name + "-pvc", self.namespace
             )
         except ApiException as ex:
             if ex.status != 404:

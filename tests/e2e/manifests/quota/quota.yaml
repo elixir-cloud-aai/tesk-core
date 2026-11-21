@@ -1,0 +1,70 @@
+# A namespace like those of clusters that require resource limits (e.g.
+# CERIT-SC): a `ResourceQuota` on `limits.cpu`, which refuses every
+# container without a CPU limit, and a `LimitRange` with a default memory
+# limit only, below what tasks request. The taskmaster's service account and
+# role are the same as in `../rbac.yaml`; keep them in sync. Applied
+# separately (`kubectl apply -f tests/e2e/manifests/quota/`), as its objects
+# name their namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tesk-e2e-quota
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tesk-e2e-quota
+  namespace: tesk-e2e-quota
+spec:
+  hard:
+    limits.cpu: "8"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tesk-e2e-quota
+  namespace: tesk-e2e-quota
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 512Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tesk-e2e-taskmaster
+  namespace: tesk-e2e-quota
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tesk-e2e-taskmaster
+  namespace: tesk-e2e-quota
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, patch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims, configmaps]
+    verbs: [create, delete, get]
+  - apiGroups: [""]
+    resources: [pods/log, pods/status]
+    verbs: [get, list]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, delete, get, list, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tesk-e2e-taskmaster
+  namespace: tesk-e2e-quota
+subjects:
+  - kind: ServiceAccount
+    name: tesk-e2e-taskmaster
+    namespace: tesk-e2e-quota
+roleRef:
+  kind: Role
+  name: tesk-e2e-taskmaster
+  apiGroup: rbac.authorization.k8s.io

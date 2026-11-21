@@ -11,7 +11,14 @@ import uuid
 
 from kubernetes import client
 
-from tests.e2e.cluster import HTTP_POD, HTTP_URL, NAMESPACE, Task, condition
+from tests.e2e.cluster import (
+    HTTP_POD,
+    HTTP_URL,
+    NAMESPACE,
+    QUOTA_NAMESPACE,
+    Task,
+    condition,
+)
 
 
 def test_task_with_inputs_and_outputs(
@@ -175,3 +182,44 @@ def test_unschedulable_task_times_out(run_task: Callable[..., Task]) -> None:
     assert task.wait_finished() == "Complete", task.logs()
     task.wait(lambda: task.gone("-ex-00"), "the executor job to be deleted")
     assert "wasn't scheduled within 10 s" in task.logs()
+
+
+def test_task_in_namespace_that_requires_limits(
+    run_task: Callable[..., Task], core: client.CoreV1Api
+) -> None:
+    """Test that a task runs where every container needs resource limits.
+
+    In a namespace with a `ResourceQuota` on `limits.cpu` and a default
+    memory limit below the executor's request (`tests/e2e/manifests/
+    quota/`): the filers get their default limits, and the executor, with
+    CPU and memory requests but only a CPU limit (as the TESK API sets
+    `cpu_cores` and `ram_gb`), gets its memory limit from its request.
+    """
+    upload = f"/out-{uuid.uuid4().hex[:8]}.txt"
+    task = run_task(
+        ["cat /data/in/a.txt > /data/out/b.txt"],
+        inputs=[{"path": "/data/in/a.txt", "type": "FILE", "content": "quota;"}],
+        outputs=[{"path": "/data/out/b.txt", "type": "FILE", "url": HTTP_URL + upload}],
+        resources={
+            "requests": {"cpu": "100m", "memory": "600Mi"},
+            "limits": {"cpu": "100m"},
+        },
+        namespace=QUOTA_NAMESPACE,
+        taskmaster_resources={
+            "requests": {"cpu": "100m", "memory": "128Mi"},
+            "limits": {"cpu": "1", "memory": "512Mi"},
+        },
+    )
+
+    assert task.wait_finished() == "Complete", task.logs()
+
+    for suffix in ("-inputs-filer", "-ex-00", "-outputs-filer"):
+        job = task.job(suffix)
+        assert job is not None, suffix
+        assert condition(job, "Complete"), suffix
+    executor = task.job("-ex-00").spec.template.spec.containers[0]
+    assert executor.resources.limits == {"cpu": "100m", "memory": "600Mi"}
+    filer = task.job("-inputs-filer").spec.template.spec.containers[0]
+    assert filer.resources.limits == {"cpu": "1", "memory": "512Mi"}
+    log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
+    assert f"PUT {upload} 'quota;'" in log
