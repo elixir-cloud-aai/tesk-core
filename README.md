@@ -16,6 +16,7 @@
 [![GitHub_tag][badge-github-tag]][badge-url-github-tag]
 [![Taskmaster_image][badge-docker-taskmaster]][badge-url-docker-taskmaster]
 [![Filer_image][badge-docker-filer]][badge-url-docker-filer]
+[![DOI][badge-doi]][badge-url-doi]
 
 The taskmaster and the filer of [TESK][tesk], an implementation of the
 [GA4GH Task Execution Service (TES) API][tes] for
@@ -63,7 +64,10 @@ lint, CI and the docs build.
 
 ## Citation
 
-If you use tesk-core, please cite it with the metadata in
+If you use tesk-core, please cite it with its DOI
+[10.5281/zenodo.24082887](https://doi.org/10.5281/zenodo.24082887), which
+always resolves to the latest version on [Zenodo](https://zenodo.org/); the
+Zenodo record lists the DOI of each version, too. The citation metadata is in
 [`CITATION.cff`](CITATION.cff): on GitHub, "Cite this repository" in the
 sidebar of the repository formats it as APA or BibTeX.
 
@@ -76,6 +80,7 @@ guide][contributing], and mind our [code of conduct][code-of-conduct].
 [badge-coverage]: <https://codecov.io/gh/elixir-cloud-aai/tesk-core/branch/dev/graph/badge.svg?branch=dev>
 [badge-docker-filer]: <https://img.shields.io/docker/v/elixircloud/tesk-core-filer?sort=semver&label=filer&color=C39BD3>
 [badge-docker-taskmaster]: <https://img.shields.io/docker/v/elixircloud/tesk-core-taskmaster?sort=semver&label=taskmaster&color=C39BD3>
+[badge-doi]: <https://zenodo.org/badge/DOI/10.5281/zenodo.24082887.svg>
 [badge-docs]: <https://img.shields.io/readthedocs/tesk>
 [badge-github-tag]: <https://img.shields.io/github/v/tag/elixir-cloud-aai/tesk-core?color=C39BD3>
 [badge-license]: <https://img.shields.io/badge/license-Apache%202.0-blue.svg>
@@ -83,6 +88,7 @@ guide][contributing], and mind our [code of conduct][code-of-conduct].
 [badge-url-coverage]: <https://codecov.io/gh/elixir-cloud-aai/tesk-core?branch=dev>
 [badge-url-docker-filer]: <https://hub.docker.com/r/elixircloud/tesk-core-filer/tags>
 [badge-url-docker-taskmaster]: <https://hub.docker.com/r/elixircloud/tesk-core-taskmaster/tags>
+[badge-url-doi]: <https://doi.org/10.5281/zenodo.24082887>
 [badge-url-docs]: <https://tesk.readthedocs.io/en/latest/tesk-core/>
 [badge-url-github-tag]: <https://github.com/elixir-cloud-aai/tesk-core/tags>
 [badge-url-license]: <https://www.apache.org/licenses/LICENSE-2.0>
