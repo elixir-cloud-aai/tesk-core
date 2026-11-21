@@ -56,6 +56,13 @@ authors:
     family-names: Clark-Casey
   - given-names: Martin
     family-names: Rippin
+doi: 10.5281/zenodo.24082887
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24082887
+    description: >-
+      Concept DOI of all versions on Zenodo; it always resolves to the latest
+      version
 repository-code: "https://github.com/elixir-cloud-aai/tesk-core"
 url: "https://tesk.readthedocs.io/en/latest/tesk-core/"
 keywords:
