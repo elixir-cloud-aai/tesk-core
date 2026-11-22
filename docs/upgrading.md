@@ -48,6 +48,18 @@ your users to request the memory that their tools need at their peak.
 Such executors also count their memory against a `ResourceQuota` on
 `limits.memory` with their request instead of the namespace's default.
 
+To upgrade:
+
+1. Before you switch the images, find tasks that set `cpu_cores` and
+   `ram_gb` and use more memory than their `ram_gb` (e.g., the peak memory
+   of their executor pods in your monitoring), and ask their users to raise
+   `ram_gb` to that peak.
+2. Switch the taskmaster and the filer to 0.13.0 together.
+3. Afterwards, look for executors that end with `OOMKilled` (exit code 137)
+   in tasks with `EXECUTOR_ERROR`, e.g.,
+   `kubectl get pods -n <namespace> -o json | jq -r '.items[] | select(.status.containerStatuses[]?.state.terminated.reason == "OOMKilled") | .metadata.name'`,
+   and have those tasks resubmitted with a higher `ram_gb`.
+
 ## 0.12.0
 
 ### Compatibility
