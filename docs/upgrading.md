@@ -4,7 +4,7 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
-## Unreleased
+## 0.13.0
 
 ### Resources of the filer
 
@@ -22,9 +22,11 @@ behaviour. `FILER_RESOURCES` now also refuses resources that a container
 can't have, quantities that aren't valid and requests above their limits,
 with an error in the taskmaster's log,
 and keeps the default; before, the API server refused each filer pod.
-TESK's Helm chart doesn't have a value for it yet: the TESK API passes its
-environment variable `TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on
-to the taskmaster as `FILER_RESOURCES`.
+The TESK API passes its environment variable
+`TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on to the taskmaster as
+`FILER_RESOURCES`; TESK's Helm chart sets it from `tesk.filer.resources`
+(in the chart release after 0.4.0, with
+[TESK#331](https://github.com/elixir-cloud-aai/TESK/pull/331)).
 
 ### Executors get a limit for each resource they request
 
