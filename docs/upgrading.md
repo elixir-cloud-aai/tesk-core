@@ -56,9 +56,32 @@ To upgrade:
    `ram_gb` to that peak.
 2. Switch the taskmaster and the filer to 0.13.0 together.
 3. Afterwards, look for executors that end with `OOMKilled` (exit code 137)
-   in tasks with `EXECUTOR_ERROR`, e.g.,
-   `kubectl get pods -n <namespace> -o json | jq -r '.items[] | select(.status.containerStatuses[]?.state.terminated.reason == "OOMKilled") | .metadata.name'`,
-   and have those tasks resubmitted with a higher `ram_gb`.
+   in tasks with `EXECUTOR_ERROR`, and have those tasks resubmitted with a
+   higher `ram_gb`. Look regularly, before `TASK_TTL_SECONDS` (if set)
+   deletes the tasks' jobs and pods. This query prints the task, the
+   executor's number and the pod of each executor with a container that
+   was stopped as `OOMKilled`, also if it was restarted; the labels
+   `job-type`, `taskmaster-name` and `executor-no` that the TESK API sets
+   are on the executors' jobs, not on their pods, so it matches the pods to
+   their jobs:
+
+    ```bash
+    kubectl get jobs,pods -n <namespace> -o json | jq -r '
+      (.items
+        | map(select(.kind == "Job" and .metadata.labels["job-type"] == "executor"))
+        | map({key: .metadata.name, value: .metadata.labels})
+        | from_entries) as $executors
+      | .items[]
+      | select(.kind == "Pod")
+      | $executors[.metadata.labels["batch.kubernetes.io/job-name"]
+          // .metadata.labels["job-name"] // ""] as $job
+      | select($job != null)
+      | select(any(.status.containerStatuses[]?;
+          .state.terminated.reason == "OOMKilled"
+          or .lastState.terminated.reason == "OOMKilled"))
+      | [$job["taskmaster-name"], $job["executor-no"], .metadata.name]
+      | @tsv'
+    ```
 
 ## 0.12.0
 
