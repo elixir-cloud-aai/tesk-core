@@ -4,7 +4,7 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
-## Unreleased
+## 0.13.0
 
 ### Resources of the filer
 
@@ -22,9 +22,11 @@ behaviour. `FILER_RESOURCES` now also refuses resources that a container
 can't have, quantities that aren't valid and requests above their limits,
 with an error in the taskmaster's log,
 and keeps the default; before, the API server refused each filer pod.
-TESK's Helm chart doesn't have a value for it yet: the TESK API passes its
-environment variable `TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on
-to the taskmaster as `FILER_RESOURCES`.
+The TESK API passes its environment variable
+`TESK_API_TASKMASTER_ENVIRONMENT_FILER_RESOURCES` on to the taskmaster as
+`FILER_RESOURCES`; TESK's Helm chart sets it from `tesk.filer.resources`
+(in the chart release after 0.4.0, with
+[TESK#331](https://github.com/elixir-cloud-aai/TESK/pull/331)).
 
 ### Executors get a limit for each resource they request
 
@@ -45,6 +47,41 @@ still complete; now Kubernetes stops its executor when it goes over
 your users to request the memory that their tools need at their peak.
 Such executors also count their memory against a `ResourceQuota` on
 `limits.memory` with their request instead of the namespace's default.
+
+To upgrade:
+
+1. Before you switch the images, find tasks that set `cpu_cores` and
+   `ram_gb` and use more memory than their `ram_gb` (e.g., the peak memory
+   of their executor pods in your monitoring), and ask their users to raise
+   `ram_gb` to that peak.
+2. Switch the taskmaster and the filer to 0.13.0 together.
+3. Afterwards, look for executors that end with `OOMKilled` (exit code 137)
+   in tasks with `EXECUTOR_ERROR`, and have those tasks resubmitted with a
+   higher `ram_gb`. Look regularly, before `TASK_TTL_SECONDS` (if set)
+   deletes the tasks' jobs and pods. This query prints the task, the
+   executor's number and the pod of each executor with a container that
+   was stopped as `OOMKilled`, also if it was restarted; the labels
+   `job-type`, `taskmaster-name` and `executor-no` that the TESK API sets
+   are on the executors' jobs, not on their pods, so it matches the pods to
+   their jobs:
+
+    ```bash
+    kubectl get jobs,pods -n <namespace> -o json | jq -r '
+      (.items
+        | map(select(.kind == "Job" and .metadata.labels["job-type"] == "executor"))
+        | map({key: .metadata.name, value: .metadata.labels})
+        | from_entries) as $executors
+      | .items[]
+      | select(.kind == "Pod")
+      | $executors[.metadata.labels["batch.kubernetes.io/job-name"]
+          // .metadata.labels["job-name"] // ""] as $job
+      | select($job != null)
+      | select(any(.status.containerStatuses[]?;
+          .state.terminated.reason == "OOMKilled"
+          or .lastState.terminated.reason == "OOMKilled"))
+      | [$job["taskmaster-name"], $job["executor-no"], .metadata.name]
+      | @tsv'
+    ```
 
 ## 0.12.0
 
