@@ -358,7 +358,18 @@ user 1000 with group 1000 on the task's volume, set
 `{"runAsNonRoot": true, "runAsUser": 1000, "fsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}}`
 (repeat the defaults that you want to keep). On OpenShift, the defaults
 work with the `restricted-v2` security context constraint, which assigns
-the user.
+the user and the `fsGroup`.
+
+Without an `fsGroup`, user 100 can write to the task's volume only if its
+root is writable for everyone, as with the `local-path` storage of kind.
+On CSI volumes whose root belongs to root (e.g., CephFS, Ceph RBD or
+Cinder), the filer then fails with `PermissionError` in its log and the
+task ends with `SYSTEM_ERROR`: set `FILER_POD_SECURITY_CONTEXT` to
+`{"runAsNonRoot": true, "runAsUser": 100, "fsGroup": 100, "seccompProfile": {"type": "RuntimeDefault"}}`,
+and give the executors' pods the same `fsGroup`, so that they can write
+their outputs too. This needs a CSI driver that applies `fsGroup`
+(`fsGroupPolicy: File`, e.g., Rook's CephFS driver by default). Not on
+OpenShift with `restricted-v2`, which assigns them itself.
 
 ### Resources
 
