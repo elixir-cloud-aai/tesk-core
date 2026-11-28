@@ -502,7 +502,8 @@ class Job:
         pods, and only events (`FailedCreate`) tell why. This applies to a
         running job without pods: none active, ready or terminating, none
         succeeded, and not suspended (e.g. by a queue such as Kueue). A job
-        that never had a pod has had none since its creation.
+        that never had a pod has had none since it started or resumed
+        (`status.startTime`).
 
         The latest such event is read once the job has had no pods for
         `CREATE_CHECK_DELAY` seconds, then after `create_check_interval`
@@ -545,17 +546,16 @@ class Job:
             return False
         if self.no_pods_since is None:
             self.no_pods_since = now
-            created = getattr(
-                getattr(job, "metadata", None), "creation_timestamp", None
-            )
+            started = getattr(status, "start_time", None)
             if (
                 not failed
                 and self.pods_seen_at is None
-                and isinstance(created, datetime)
+                and isinstance(started, datetime)
             ):
-                # A job that never had a pod has had none since its creation,
-                # also for a taskmaster that restarted
-                self.no_pods_since = min(created, now)
+                # A job that never had a pod has had none since it started
+                # (or resumed, after a suspension), also for a taskmaster
+                # that restarted
+                self.no_pods_since = min(started, now)
             self.next_create_check = now + timedelta(seconds=CREATE_CHECK_DELAY)
         waited = (now - self.no_pods_since).total_seconds()
         max_wait = None

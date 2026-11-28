@@ -217,9 +217,10 @@ since the taskmaster last knew it to have one count.
   the message in the task's system logs.
 - Otherwise, e.g. while other tasks use up a quota, the job keeps waiting.
   With `TESK_MAX_QUEUE_SECONDS`, it ends once it has had no pods for that
-  many seconds (counted from the job's creation if it never had a pod,
-  also after a restart of the taskmaster, otherwise from when the
-  taskmaster first saw it without pods), with the latest event's message in the log (`No pod of job '...'
+  many seconds (counted from when the job started or resumed after a
+  suspension if it never had a pod, also after a restart of the
+  taskmaster, otherwise from when the taskmaster first saw it without
+  pods), with the latest event's message in the log (`No pod of job '...'
   was created within 600 s: ...`), checked at every poll. A job whose pod
   failed before (a retry, with `EXECUTOR_BACKOFF_LIMIT` or
   `FILER_BACKOFF_LIMIT`) may wait up to 6 minutes for its retry without

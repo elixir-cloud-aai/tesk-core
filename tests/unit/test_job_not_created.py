@@ -56,7 +56,7 @@ def events_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
 def job_without_pods(
     suspend: bool | None = False,
     uid: str | None = "uid-1",
-    created: datetime.datetime | None = None,
+    started: datetime.datetime | None = None,
     **status: Any,
 ) -> MockObject:
     """Mock a running job without pods.
@@ -64,7 +64,7 @@ def job_without_pods(
     Args:
         suspend: The job's `spec.suspend`.
         uid: The job's UID.
-        created: The job's creation time.
+        started: When the job started or resumed (`status.startTime`).
         **status: Fields of the job's status that replace the defaults.
 
     Returns:
@@ -77,12 +77,12 @@ def job_without_pods(
         "succeeded": None,
         "failed": None,
         "conditions": None,
-        "start_time": NOW,
+        "start_time": started,
     }
     fields.update(status)
     return MockObject(
         {
-            "metadata": {"uid": uid, "creation_timestamp": created},
+            "metadata": {"uid": uid},
             "spec": {"suspend": suspend, "active_deadline_seconds": None},
             "status": fields,
         }
@@ -892,12 +892,12 @@ def test_retry_refused_before_check_ends(
 @patch("tesk_core.job.Job.delete")
 @patch("kubernetes.client.CoreV1Api.list_namespaced_event")
 @patch("kubernetes.client.BatchV1Api.read_namespaced_job")
-def test_never_had_pods_waits_since_creation(
+def test_never_had_pods_waits_since_start(
     mock_read: MagicMock,
     mock_events: MagicMock,
     mock_delete: MagicMock,
 ) -> None:
-    """Test that a job that never had a pod has waited since its creation.
+    """Test that a job that never had a pod has waited since it started.
 
     So a taskmaster that restarted doesn't start the max queue time over.
 
@@ -906,15 +906,15 @@ def test_never_had_pods_waits_since_creation(
         mock_events: The mocked listing of the job's events.
         mock_delete: The mocked deletion of the job.
     """
-    created = datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=5)
-    mock_read.return_value = job_without_pods(created=created)
+    started = datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=5)
+    mock_read.return_value = job_without_pods(started=started)
     mock_events.return_value = events(event(QUOTA))
     job = new_job(max_queue=60)
     job.no_pods_since = None
 
     assert job.get_status(False) == ("Failed", False)
 
-    assert job.no_pods_since == created
+    assert job.no_pods_since == started
     mock_delete.assert_called_once()
 
 
@@ -929,8 +929,8 @@ def test_job_with_failed_pod_waits_since_seen(
         mock_read: The mocked reading of the job.
         mock_events: The mocked listing of the job's events.
     """
-    created = datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=1)
-    mock_read.return_value = job_without_pods(created=created, failed=1)
+    started = datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=1)
+    mock_read.return_value = job_without_pods(started=started, failed=1)
     mock_events.return_value = events(event(QUOTA))
     job = new_job(max_queue=60)
     job.no_pods_since = None
@@ -938,4 +938,36 @@ def test_job_with_failed_pod_waits_since_seen(
     assert job.get_status(False) == ("Running", False)
 
     assert job.no_pods_since is not None
-    assert job.no_pods_since > created
+    assert job.no_pods_since > started
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_resumed_job_waits_since_resumed(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+) -> None:
+    """Test that the time a job was suspended doesn't count as waiting.
+
+    E.g. a queue such as Kueue creates the job suspended and admits it an
+    hour later: Kubernetes sets its start time then, before its first pod.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+    """
+    mock_events.return_value = events()
+    job = new_job(max_queue=600)
+    job.no_pods_since = None
+    mock_read.return_value = job_without_pods(suspend=True)
+    assert job.get_status(False) == ("Running", False)
+
+    resumed = datetime.datetime.now(timezone.utc)
+    mock_read.return_value = job_without_pods(started=resumed)
+    assert job.get_status(False) == ("Running", False)
+
+    assert job.no_pods_since == resumed
+    mock_delete.assert_not_called()
