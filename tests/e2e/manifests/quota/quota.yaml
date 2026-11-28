@@ -1,10 +1,14 @@
 # A namespace like those of clusters that require resource limits (e.g.
 # CERIT-SC): a `ResourceQuota` on `limits.cpu`, which refuses every
 # container without a CPU limit, and a `LimitRange` with a default memory
-# limit only, below what tasks request. The taskmaster's service account and
-# role are the same as in `../rbac.yaml`; keep them in sync. Applied
-# separately (`kubectl apply -f tests/e2e/manifests/quota/`), as its objects
-# name their namespace
+# limit below what tasks request, and a maximum that refuses larger
+# containers. The taskmaster's service account and role are the same as in
+# `../rbac.yaml`; keep them in sync. A second role grants `list` on
+# `events` (optional: the taskmaster then tells why Kubernetes refuses to
+# create a pod, and ends the task at once), so that the tests in this
+# namespace run with it, and those in `../` without it. Applied separately
+# (`kubectl apply -f tests/e2e/manifests/quota/`), as its objects name their
+# namespace
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -29,6 +33,8 @@ spec:
     - type: Container
       default:
         memory: 512Mi
+      max:
+        memory: 1Gi
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -67,4 +73,28 @@ subjects:
 roleRef:
   kind: Role
   name: tesk-e2e-taskmaster
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tesk-e2e-taskmaster-events
+  namespace: tesk-e2e-quota
+rules:
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tesk-e2e-taskmaster-events
+  namespace: tesk-e2e-quota
+subjects:
+  - kind: ServiceAccount
+    name: tesk-e2e-taskmaster
+    namespace: tesk-e2e-quota
+roleRef:
+  kind: Role
+  name: tesk-e2e-taskmaster-events
   apiGroup: rbac.authorization.k8s.io

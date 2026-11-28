@@ -121,20 +121,28 @@ def test_quota_namespace_has_the_taskmaster_role() -> None:
 
     `tests/e2e/manifests/quota/quota.yaml` copies the service account, role
     and binding of `tests/e2e/manifests/rbac.yaml` into its namespace; both
-    must grant the same rules (those of TESK's Helm chart).
+    must grant the same rules (those of TESK's Helm chart). Its second role
+    grants only `list` on `events`, which the taskmaster uses if it may.
     """
     manifests = Path(__file__).parents[1] / "e2e" / "manifests"
+    name = "tesk-e2e-taskmaster"
 
-    def objects(path: Path) -> dict[str, Any]:
+    def objects(path: Path, name: str = name) -> dict[str, Any]:
         return {
             obj["kind"]: obj
             for obj in yaml.safe_load_all(path.read_text())
             if obj["kind"] in ("ServiceAccount", "Role", "RoleBinding")
+            and obj["metadata"]["name"] == name
         }
 
     default = objects(manifests / "rbac.yaml")
     quota = objects(manifests / "quota" / "quota.yaml")
+    events = objects(manifests / "quota" / "quota.yaml", name + "-events")
     assert quota["Role"]["rules"] == default["Role"]["rules"]
+    assert events["Role"]["rules"] == [
+        {"apiGroups": [""], "resources": ["events"], "verbs": ["list"]}
+    ]
+    assert events["RoleBinding"]["subjects"] == quota["RoleBinding"]["subjects"]
     assert quota["RoleBinding"]["roleRef"] == default["RoleBinding"]["roleRef"]
     assert (
         quota["ServiceAccount"]["metadata"]["name"]
