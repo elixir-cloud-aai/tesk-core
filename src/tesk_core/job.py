@@ -47,6 +47,8 @@ TEMPORARY_MARKERS = (
     "because it is being terminated",
     "status unknown for quota",
 )
+# A quota's usage in its refusal, left out of the log
+QUOTA_USAGE_PATTERN = re.compile(r"used: \S+?(?=, limited: )")
 # A quota's refusal: what the pod requests, what the namespace uses, and the
 # quota's hard limits, each as `name=quantity,...`
 QUOTA_PATTERN = re.compile(
@@ -172,28 +174,39 @@ def _event_time(event: Any) -> datetime:
         event: The event.
 
     Returns:
-        Its last timestamp, event time or creation time, the first that is
-        set; the earliest time if none is.
+        The latest of its last timestamp, the last time its series (of
+        repeats) was seen and its event time; else its creation time; the
+        earliest time if none is set.
     """
-    for seen in (
-        getattr(event, "last_timestamp", None),
-        getattr(event, "event_time", None),
-        getattr(getattr(event, "metadata", None), "creation_timestamp", None),
-    ):
-        if seen is not None:
-            return seen
+    times = [
+        seen
+        for seen in (
+            getattr(event, "last_timestamp", None),
+            getattr(getattr(event, "series", None), "last_observed_time", None),
+            getattr(event, "event_time", None),
+        )
+        if isinstance(seen, datetime)
+    ]
+    if times:
+        return max(times)
+    created = getattr(getattr(event, "metadata", None), "creation_timestamp", None)
+    if isinstance(created, datetime):
+        return created
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _shorten(message: str) -> str:
-    """Shorten a message for the log.
+    """Shorten an event's message for the log, which the task's user sees.
 
     Args:
         message: The message.
 
     Returns:
-        The message, cut after `MAX_MESSAGE_LENGTH` characters.
+        The message without a quota's usage, which tells about other
+        workloads of the namespace, cut after `MAX_MESSAGE_LENGTH`
+        characters.
     """
+    message = QUOTA_USAGE_PATTERN.sub("used: (not shown)", message)
     if len(message) <= MAX_MESSAGE_LENGTH:
         return message
     return message[:MAX_MESSAGE_LENGTH] + "…"
@@ -535,8 +548,11 @@ class Job:
         if has_pods:
             self.pods_seen_at = now
         elif failed > self.seen_failed:
-            # A pod failed since the last check, so it existed then
+            # A pod failed since the last check, so it existed then, and the
+            # job has had no pods only since
             self.pods_seen_at = self.last_create_check or now
+            self.no_pods_since = None
+            self.create_check_interval = float(self.pod_check_interval)
         self.seen_failed = failed
         self.last_create_check = now
         # A job that resumes counts as suspended until the job controller
@@ -610,7 +626,8 @@ class Job:
         the list if the taskmaster's role doesn't grant `list` on `events`:
         then a warning is logged, once per taskmaster, and no job reads
         events again (`events_forbidden`).
-        Other errors are logged at `DEBUG`; the next check tries again.
+        Other errors are logged as warnings (at most once per check); the
+        next check tries again.
 
         Args:
             job: The job, as read from the Kubernetes API.
@@ -648,12 +665,12 @@ class Job:
                     ex.reason,
                 )
             else:
-                logging.debug(
+                logging.warning(
                     "Can't read the events of job '%s' (%s)", self.name, ex.status
                 )
             return None
         except HTTPError as ex:
-            logging.debug("Can't read the events of job '%s' (%s)", self.name, ex)
+            logging.warning("Can't read the events of job '%s' (%s)", self.name, ex)
             return None
         if self.pods_seen_at is not None:
             # Event times have whole seconds
@@ -686,7 +703,7 @@ class Job:
         return self.delete_unscheduled()
 
     def delete_unscheduled(self) -> str:
-        """Delete the job whose pod wasn't scheduled in time.
+        """Delete the job whose pod wasn't scheduled, or created, in time.
 
         If the Kubernetes API rejects the deletion (a client error), fails
         the job instead (`fail`). After other errors, including a request
@@ -794,7 +811,8 @@ class Job:
 
         Only on cancellation, on an interrupt of the taskmaster, if the
         Kubernetes API rejects failing it (`fail`), and for an executor whose
-        pod wasn't scheduled in time (`delete_unscheduled`).
+        pod wasn't scheduled in time, or that Kubernetes refuses to create
+        (`delete_unscheduled`).
 
         Args:
             request_timeout: Seconds to connect and to wait for the

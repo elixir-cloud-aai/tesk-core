@@ -41,6 +41,8 @@ QUOTA = (
     'Error creating: pods "task-ex-00-abcde" is forbidden: exceeded quota:'
     " q, requested: limits.cpu=2, used: limits.cpu=7, limited: limits.cpu=8"
 )
+# How it is logged: without the namespace's usage
+QUOTA_LOGGED = QUOTA.replace("used: limits.cpu=7", "used: (not shown)")
 
 
 @pytest.fixture(autouse=True)
@@ -337,7 +339,11 @@ def test_temporary_refusal_waits_for_max_queue(
 
     assert job.get_status(False) == ("Failed", False)
     mock_delete.assert_called_once_with(request_timeout=DELETE_TIMEOUT)
-    assert f"No pod of job 'task-ex-00' was created within 60 s: {QUOTA}" in caplog.text
+    assert (
+        f"No pod of job 'task-ex-00' was created within 60 s: {QUOTA_LOGGED}"
+        in caplog.text
+    )
+    assert "limits.cpu=7" not in caplog.text
 
 
 @patch("tesk_core.job.Job.delete")
@@ -418,6 +424,7 @@ def test_events_error_tries_again(
     mock_events: MagicMock,
     mock_delete: MagicMock,
     error: Exception,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test that after other errors, the events are read again at the next check.
 
@@ -426,13 +433,16 @@ def test_events_error_tries_again(
         mock_events: The mocked listing of the job's events.
         mock_delete: The mocked deletion of the job.
         error: The error of the listing.
+        caplog: The fixture that captures the log.
     """
     mock_read.return_value = job_without_pods()
     mock_events.side_effect = [error, events(event(INVALID))]
     job = new_job()
 
-    assert job.get_status(False) == ("Running", False)
+    with caplog.at_level(logging.WARNING):
+        assert job.get_status(False) == ("Running", False)
     mock_delete.assert_not_called()
+    assert "Can't read the events of job 'task-ex-00'" in caplog.text
 
     job.next_create_check = None
     assert job.get_status(False) == ("Failed", False)
@@ -522,6 +532,8 @@ def test_retry_pod_not_created_keeps_job(
     mock_read.return_value = job_without_pods(failed=1)
     mock_events.return_value = events(event(OVER_MAX))
     job = new_job()
+    # The taskmaster saw the pod fail at an earlier check
+    job.seen_failed = 1
 
     with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
         assert job.get_status(False) == ("Running", False)
@@ -579,9 +591,9 @@ def test_long_message_shortened(
 
     assert job.get_status(False) == ("Failed", False)
 
-    assert INVALID in caplog.text
-    assert "x" * (MAX_MESSAGE_LENGTH + 1) not in caplog.text
-    assert "x…" in caplog.text
+    kept = MAX_MESSAGE_LENGTH - len(INVALID)
+    assert INVALID + "x" * kept + "…" in caplog.text
+    assert "x" * (kept + 1) not in caplog.text
 
 
 @patch("tesk_core.job.Job.delete")
@@ -706,6 +718,8 @@ def test_retry_wait_not_ended_by_max_queue(
     mock_read.return_value = job_without_pods(failed=4)
     mock_events.return_value = events(event(QUOTA))
     job = new_job(delete_unschedulable=False, max_queue=120)
+    # The taskmaster saw the pods fail at earlier checks
+    job.seen_failed = 4
     assert job.no_pods_since is not None
     job.no_pods_since -= datetime.timedelta(seconds=300)
 
@@ -821,7 +835,7 @@ def test_max_queue_checked_between_reads(
 
     mock_events.assert_called_once()
     mock_delete.assert_called_once()
-    assert f"was created within 60 s: {QUOTA}" in caplog.text
+    assert f"was created within 60 s: {QUOTA_LOGGED}" in caplog.text
 
 
 @patch("kubernetes.client.CoreV1Api.list_namespaced_event")
@@ -984,3 +998,81 @@ def test_resumed_job_waits_since_resumed(
 
     assert job.no_pods_since == resumed
     mock_delete.assert_not_called()
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_repeated_refusal_counts_when_last_seen(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+) -> None:
+    """Test that an event's series (of repeats) tells when it was last seen.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+    """
+    now = datetime.datetime.now(timezone.utc)
+    old = now - datetime.timedelta(hours=1)
+    repeated = MockObject(
+        {
+            "message": OVER_MAX,
+            "last_timestamp": old,
+            "event_time": old,
+            "series": {"last_observed_time": now},
+            "metadata": {"creation_timestamp": old},
+        }
+    )
+    mock_read.return_value = job_without_pods()
+    mock_events.return_value = events(repeated)
+    job = new_job()
+    # The job had a pod ten minutes ago: only events since count
+    job.pods_seen_at = now - datetime.timedelta(minutes=10)
+
+    assert job.get_status(False) == ("Failed", False)
+
+    mock_delete.assert_called_once()
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_pod_failed_between_checks_restarts_wait(
+    mock_read: MagicMock, mock_events: MagicMock
+) -> None:
+    """Test that a pod that came and failed between two checks restarts the wait.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+    """
+    mock_events.return_value = events()
+    job = new_job(delete_unschedulable=False, max_queue=60)
+    job.no_pods_since = datetime.datetime.now(timezone.utc) - datetime.timedelta(
+        minutes=5
+    )
+    mock_read.return_value = job_without_pods(failed=1)
+
+    with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
+        assert job.get_status(False) == ("Running", False)
+        mock_patch.assert_not_called()
+
+    assert job.no_pods_since is not None
+    waited = datetime.datetime.now(timezone.utc) - job.no_pods_since
+    assert waited < datetime.timedelta(seconds=5)
+
+
+def test_event_time_falls_back_to_creation() -> None:
+    """Test that an event without timestamps counts from its creation."""
+    created = datetime.datetime.now(timezone.utc)
+    bare = MockObject(
+        {
+            "last_timestamp": None,
+            "event_time": None,
+            "metadata": {"creation_timestamp": created},
+        }
+    )
+
+    assert job_module._event_time(bare) == created

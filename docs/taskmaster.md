@@ -221,7 +221,8 @@ since the taskmaster last knew it to have one count.
   suspension if it never had a pod, also after a restart of the
   taskmaster, otherwise from when the taskmaster first saw it without
   pods), with the latest event's message in the log (`No pod of job '...'
-  was created within 600 s: ...`), checked at every poll. A job whose pod
+  was created within 600 s: ...`; a quota's usage, which tells about other
+  workloads in the namespace, is left out), checked at every poll. A job whose pod
   failed before (a retry, with `EXECUTOR_BACKOFF_LIMIT` or
   `FILER_BACKOFF_LIMIT`) may wait up to 6 minutes for its retry without
   pods, so it gets another 360 seconds. Admission webhooks that deny a pod (e.g. Kyverno or Gatekeeper
@@ -234,7 +235,8 @@ taskmaster's service account. Without it, the taskmaster logs a warning
 once, doesn't read events again, and ends a job without pods only after
 `TESK_MAX_QUEUE_SECONDS`, if set, with a pointer to the job's events
 (`kubectl describe job`) instead of the message. Without both, a task whose
-pod Kubernetes refuses waits forever, as before.
+pod Kubernetes refuses waits forever, as before. Other errors reading the
+events are logged as warnings, and the next read tries again.
 
 The max queue time covers the pods of the task's jobs only, not the
 taskmaster's own pod: a task whose taskmaster can't be scheduled (or
