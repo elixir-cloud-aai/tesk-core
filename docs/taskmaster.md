@@ -195,8 +195,8 @@ against the namespace's Pod Security Standard, or while a quota is used
 up). The job then has no pods, and only its events (`FailedCreate`) tell
 why; earlier releases waited for a pod forever, and the task stayed
 `RUNNING`. While a job has no pods (none active, ready or
-terminating, none succeeded, and the job isn't suspended, e.g. by a queue
-such as Kueue), the taskmaster reads the job's latest `FailedCreate` event:
+terminating, none succeeded, and the job isn't suspended or resuming,
+e.g. by a queue such as Kueue), the taskmaster reads the job's latest `FailedCreate` event:
 first once the job has had no pods for 10 seconds, then after a minute, and
 after twice as long each time, up to every 10 minutes, so that jobs that
 wait long (e.g. for a quota) add little load on the Kubernetes API. If the

@@ -539,7 +539,14 @@ class Job:
             self.pods_seen_at = self.last_create_check or now
         self.seen_failed = failed
         self.last_create_check = now
-        if has_pods or getattr(getattr(job, "spec", None), "suspend", None):
+        # A job that resumes counts as suspended until the job controller
+        # has seen it (and reset its start time): its `Suspended` condition
+        # is still true until then
+        suspended = getattr(getattr(job, "spec", None), "suspend", None) or any(
+            condition.type == "Suspended" and condition.status == "True"
+            for condition in status.conditions or []
+        )
+        if has_pods or suspended:
             self.no_pods_since = None
             self.next_create_check = None
             self.create_check_interval = float(self.pod_check_interval)

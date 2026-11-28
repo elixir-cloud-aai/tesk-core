@@ -57,6 +57,7 @@ def job_without_pods(
     suspend: bool | None = False,
     uid: str | None = "uid-1",
     started: datetime.datetime | None = None,
+    created: datetime.datetime | None = None,
     **status: Any,
 ) -> MockObject:
     """Mock a running job without pods.
@@ -65,6 +66,7 @@ def job_without_pods(
         suspend: The job's `spec.suspend`.
         uid: The job's UID.
         started: When the job started or resumed (`status.startTime`).
+        created: When the job was created.
         **status: Fields of the job's status that replace the defaults.
 
     Returns:
@@ -82,7 +84,7 @@ def job_without_pods(
     fields.update(status)
     return MockObject(
         {
-            "metadata": {"uid": uid},
+            "metadata": {"uid": uid, "creation_timestamp": created},
             "spec": {"suspend": suspend, "active_deadline_seconds": None},
             "status": fields,
         }
@@ -962,11 +964,22 @@ def test_resumed_job_waits_since_resumed(
     mock_events.return_value = events()
     job = new_job(max_queue=600)
     job.no_pods_since = None
-    mock_read.return_value = job_without_pods(suspend=True)
+    now = datetime.datetime.now(timezone.utc)
+    created = now - datetime.timedelta(hours=1)
+    mock_read.return_value = job_without_pods(suspend=True, created=created)
     assert job.get_status(False) == ("Running", False)
 
+    # Resumed, before the job controller has seen it: the start time is
+    # still the one from before the suspension
+    suspended = MockObject({"type": "Suspended", "status": "True"})
+    mock_read.return_value = job_without_pods(
+        created=created, started=created, conditions=[suspended]
+    )
+    assert job.get_status(False) == ("Running", False)
+    assert job.no_pods_since is None
+
     resumed = datetime.datetime.now(timezone.utc)
-    mock_read.return_value = job_without_pods(started=resumed)
+    mock_read.return_value = job_without_pods(created=created, started=resumed)
     assert job.get_status(False) == ("Running", False)
 
     assert job.no_pods_since == resumed
