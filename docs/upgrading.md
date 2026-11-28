@@ -4,7 +4,7 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
-## Unreleased
+## 0.13.0
 
 ### Tasks whose pods can't be created end
 
@@ -32,8 +32,6 @@ warning ("Can't read the events of job ...") and ends a job without pods
 only after `TESK_MAX_QUEUE_SECONDS`, if set, without Kubernetes' message;
 it doesn't fail otherwise. Without both, a task whose pod Kubernetes
 refuses still waits forever, as before.
-
-## 0.13.0
 
 ### Resources of the filer
 
