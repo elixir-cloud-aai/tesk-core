@@ -43,7 +43,18 @@ TEMPORARY_MARKERS = (
     "error looking up service account",
     "failed calling webhook",
     "because it is being terminated",
+    "status unknown for quota",
 )
+# Seconds after which the events of a job without pods are first read, so
+# that jobs whose first pod is on its way don't read them
+CREATE_CHECK_DELAY = 10
+# The longest interval between reads of a job's events: the interval starts
+# at `POD_CHECK_INTERVAL` and doubles after each read that doesn't end the
+# job, so that jobs that wait long (e.g. for a quota) read them rarely
+MAX_CREATE_CHECK_INTERVAL = 600
+# Whether the Kubernetes API refused to list events (no right to): then no
+# job reads them again, and the warning is logged once per taskmaster
+events_forbidden = False
 # Seconds between checks of a job's pending pods, so that queued tasks
 # don't list their pods on every poll
 POD_CHECK_INTERVAL = 60
@@ -179,8 +190,10 @@ class Job:
             taskmaster has seen; `None` while it has some.
         next_create_check: When the events of a job without pods are read
             next (`check_not_created`); `None` before the first check.
-        read_events: Whether the job's events are read; `False` once the
-            Kubernetes API refused it (no right to list events).
+        create_check_interval: Seconds until the events are read again;
+            doubles after each read up to `MAX_CREATE_CHECK_INTERVAL`.
+        had_pods: Whether the taskmaster saw a pod of the job; then only
+            events since it last saw none count (`failed_create_message`).
         end_reason: Why the job is ended (`end_unschedulable`), for the log
             when its deletion is rejected and it is failed instead.
         deleting: Whether a deletion of `end_unschedulable` failed, and is
@@ -218,7 +231,8 @@ class Job:
         self.max_queue: int | None = None
         self.no_pods_since: datetime | None = None
         self.next_create_check: datetime | None = None
-        self.read_events = True
+        self.create_check_interval = float(POD_CHECK_INTERVAL)
+        self.had_pods = False
         self.end_reason = UNSCHEDULED_REASON
         self.delete_unschedulable = False
         self.deleting = False
@@ -422,10 +436,12 @@ class Job:
         pods, and only events (`FailedCreate`) tell why. For a running job
         without pods (none active, ready or terminating, none succeeded, and
         not suspended, e.g. by a queue such as Kueue), reads the latest such
-        event at most every `pod_check_interval` seconds. A permanent refusal
-        (`permanent_create_error`) ends the job at once; others, or none
-        that can be read, end it once it has had no pods for longer than
-        `max_queue`, if set. Ending the job is as for a pod that can't be
+        event once it has had no pods for `CREATE_CHECK_DELAY` seconds, then
+        after `create_check_interval` seconds, which doubles each time. A
+        permanent refusal (`permanent_create_error`) ends the job at once;
+        others, or none that can be read, end it once it has had no pods for
+        longer than `max_queue`, if set, unless a pod of it failed before (it
+        may wait to retry, with a backoff). Ending the job is as for a pod that can't be
         scheduled (`end_unschedulable`): an executor whose pods never ran is
         deleted, so that the TESK API reports `SYSTEM_ERROR`; the log, which
         the TESK API shows in the task's system logs, has Kubernetes'
@@ -446,13 +462,25 @@ class Job:
             or status.succeeded
         ):
             self.no_pods_since = None
+            self.next_create_check = None
+            self.create_check_interval = float(self.pod_check_interval)
+            self.had_pods = self.had_pods or bool(
+                status.active
+                or getattr(status, "ready", None)
+                or getattr(status, "terminating", None)
+                or status.succeeded
+            )
             return False
         now = datetime.now(timezone.utc)
         if self.no_pods_since is None:
             self.no_pods_since = now
+            self.next_create_check = now + timedelta(seconds=CREATE_CHECK_DELAY)
         if self.next_create_check is not None and now < self.next_create_check:
             return False
-        self.next_create_check = now + timedelta(seconds=self.pod_check_interval)
+        self.next_create_check = now + timedelta(seconds=self.create_check_interval)
+        self.create_check_interval = min(
+            2 * self.create_check_interval, MAX_CREATE_CHECK_INTERVAL
+        )
         message = self.failed_create_message(job)
         if message is not None and permanent_create_error(message):
             logging.error(
@@ -461,7 +489,8 @@ class Job:
             self.status = self.end_unschedulable(reason=NOT_CREATED_REASON)
             return True
         waited = (now - self.no_pods_since).total_seconds()
-        if self.max_queue is not None and waited > self.max_queue:
+        # Not for a job whose pod failed: it may wait to retry (backoff)
+        if self.max_queue is not None and waited > self.max_queue and not status.failed:
             logging.error(
                 "No pod of job '%s' was created within %s s: %s",
                 self.name,
@@ -478,11 +507,13 @@ class Job:
         """Read why Kubernetes last refused to create a pod of the job.
 
         Lists the job's `FailedCreate` events (of this job, by its UID, not
-        of an earlier one of the same name). The Kubernetes API refuses it
-        if the taskmaster's role doesn't grant `list` on `events`: then a
-        warning is logged, and the events aren't read again
-        (`read_events`). Other errors are logged at `DEBUG`; the next
-        check tries again.
+        of an earlier one of the same name); if the taskmaster saw a pod of
+        the job, only events last seen since it last saw none count, so that
+        a refusal from before a pod that was created after all doesn't end
+        its retry. The Kubernetes API refuses the list if the taskmaster's
+        role doesn't grant `list` on `events`: then a warning is logged, once
+        per taskmaster, and no job reads events again (`events_forbidden`).
+        Other errors are logged at `DEBUG`; the next check tries again.
 
         Args:
             job: The job, as read from the Kubernetes API.
@@ -491,7 +522,8 @@ class Job:
             The message of the latest such event, or `None` if there is none
             or it can't be read.
         """
-        if not self.read_events:
+        global events_forbidden  # noqa: PLW0603 -- shared by the task's jobs
+        if events_forbidden:
             return None
         selector = (
             f"involvedObject.kind=Job,involvedObject.name={self.name}"
@@ -508,7 +540,7 @@ class Job:
             ).items
         except ApiException as ex:
             if ex.status == 403:
-                self.read_events = False
+                events_forbidden = True
                 logging.warning(
                     "Can't read the events of job '%s' (%s %s): a pod that"
                     " Kubernetes refuses to create ends the task only after"
@@ -526,6 +558,9 @@ class Job:
         except HTTPError as ex:
             logging.debug("Can't read the events of job '%s' (%s)", self.name, ex)
             return None
+        if self.had_pods and self.no_pods_since is not None:
+            since = self.no_pods_since
+            events = [event for event in events if _event_time(event) >= since]
         if not events:
             return None
         message: str | None = max(events, key=_event_time).message

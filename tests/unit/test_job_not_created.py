@@ -10,9 +10,12 @@ from kubernetes.client.rest import ApiException
 import pytest
 from urllib3.exceptions import ProtocolError
 
+from tesk_core import job as job_module
 from tesk_core.job import (
+    CREATE_CHECK_DELAY,
     DELETE_TIMEOUT,
     EVENTS_TIMEOUT,
+    MAX_CREATE_CHECK_INTERVAL,
     MAX_MESSAGE_LENGTH,
     NOT_CREATED_REASON,
     Job,
@@ -36,6 +39,16 @@ QUOTA = (
     'Error creating: pods "task-ex-00-abcde" is forbidden: exceeded quota:'
     " q, requested: limits.cpu=2, used: limits.cpu=7, limited: limits.cpu=8"
 )
+
+
+@pytest.fixture(autouse=True)
+def events_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test as if the taskmaster may list events.
+
+    Args:
+        monkeypatch: The fixture that resets the module's flag.
+    """
+    monkeypatch.setattr(job_module, "events_forbidden", False)
 
 
 def job_without_pods(
@@ -88,7 +101,8 @@ def event(
     Returns:
         The event.
     """
-    seen = NOW - datetime.timedelta(minutes=minutes) if timestamps else None
+    now = datetime.datetime.now(timezone.utc)
+    seen = now - datetime.timedelta(minutes=minutes) if timestamps else None
     return MockObject(
         {
             "message": message,
@@ -125,6 +139,10 @@ def new_job(delete_unschedulable: bool = True, max_queue: int | None = None) -> 
     job = Job({"metadata": {}}, "task-ex-00", "ns")
     job.delete_unschedulable = delete_unschedulable
     job.max_queue = max_queue
+    # Without pods for long enough that the events are read at once
+    job.no_pods_since = datetime.datetime.now(timezone.utc) - datetime.timedelta(
+        seconds=CREATE_CHECK_DELAY
+    )
     return job
 
 
@@ -159,6 +177,15 @@ def new_job(delete_unschedulable: bool = True, max_queue: int | None = None) -> 
             False,
         ),
         ("Error creating: the server was unable to return a response", False),
+        (
+            'Error creating: pods "p" is forbidden: status unknown for quota: q,'
+            " resources: limits.cpu",
+            False,
+        ),
+        (
+            'Error creating: admission webhook "w" denied the request: no',
+            False,
+        ),
     ],
 )
 def test_permanent_create_error(message: str, expected: bool) -> None:
@@ -564,3 +591,154 @@ def test_rejected_deletion_fails_with_reason(
 
     mock_patch.assert_called_once()
     assert f"Failing job 'task-ex-00': {NOT_CREATED_REASON}" in caplog.text
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_first_check_delayed(mock_read: MagicMock, mock_events: MagicMock) -> None:
+    """Test that a job just seen without pods doesn't read its events yet.
+
+    Its first pod may be on its way, so the events are read only after
+    `CREATE_CHECK_DELAY` seconds without pods.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+    """
+    mock_read.return_value = job_without_pods()
+    job = new_job()
+    job.no_pods_since = None
+
+    assert job.get_status(False) == ("Running", False)
+
+    mock_events.assert_not_called()
+    assert job.next_create_check is not None
+    assert job.no_pods_since is not None
+    delay = (job.next_create_check - job.no_pods_since).total_seconds()
+    assert delay == CREATE_CHECK_DELAY
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_check_interval_doubles(mock_read: MagicMock, mock_events: MagicMock) -> None:
+    """Test that the interval between reads doubles, up to its maximum.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+    """
+    mock_read.return_value = job_without_pods()
+    mock_events.return_value = events(event(QUOTA))
+    job = new_job()
+    intervals = []
+
+    for _ in range(6):
+        job.next_create_check = None
+        assert job.get_status(False) == ("Running", False)
+        intervals.append(job.create_check_interval)
+
+    assert intervals == [120, 240, 480, 600, 600, 600]
+    assert MAX_CREATE_CHECK_INTERVAL == 600
+    assert mock_events.call_count == 6
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.BatchV1Api.patch_namespaced_job")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_retry_wait_not_ended_by_max_queue(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_patch: MagicMock,
+    mock_delete: MagicMock,
+) -> None:
+    """Test that a job waiting to retry a failed pod outlasts `max_queue`.
+
+    Kubernetes waits up to 6 minutes before it retries a failed pod, without
+    pods meanwhile; only a permanent refusal ends such a job.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_patch: The mocked patch of the job.
+        mock_delete: The mocked deletion of the job.
+    """
+    mock_read.return_value = job_without_pods(failed=4)
+    mock_events.return_value = events()
+    job = new_job(delete_unschedulable=False, max_queue=120)
+    assert job.no_pods_since is not None
+    job.no_pods_since -= datetime.timedelta(seconds=300)
+
+    assert job.get_status(False) == ("Running", False)
+
+    mock_patch.assert_not_called()
+    mock_delete.assert_not_called()
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_refusal_before_last_pod_ignored(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+    mock_pods: MagicMock,
+) -> None:
+    """Test that a refusal from before a pod that was created after all is ignored.
+
+    E.g. an operator raised a `LimitRange`'s maximum, the pod ran and
+    failed, and the job waits to retry it: the old event doesn't end it,
+    but a refusal of the retry does.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+        mock_pods: The mocked listing of the job's pods.
+    """
+    mock_pods.return_value = MockObject({"items": []})
+    job = new_job(delete_unschedulable=False)
+    mock_read.return_value = job_without_pods(active=1)
+    assert job.get_status(False)[0] == "Running"
+    assert job.had_pods
+
+    mock_read.return_value = job_without_pods(failed=1)
+    mock_events.return_value = events(event(OVER_MAX, minutes=5))
+    assert job.get_status(False) == ("Running", False)  # Waits CREATE_CHECK_DELAY
+    assert job.no_pods_since is not None
+    job.no_pods_since -= datetime.timedelta(seconds=CREATE_CHECK_DELAY)
+    job.next_create_check = None
+    with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
+        assert job.get_status(False) == ("Running", False)
+        mock_patch.assert_not_called()
+
+        mock_events.return_value = events(event(OVER_MAX, minutes=5), event(INVALID))
+        job.next_create_check = None
+        assert job.get_status(False) == ("Running", False)
+        mock_patch.assert_called_once()
+    mock_delete.assert_not_called()
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_events_forbidden_shared(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that after one refusal, no job of the task reads events, nor warns.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        caplog: The fixture that captures the log.
+    """
+    mock_read.return_value = job_without_pods()
+    mock_events.side_effect = ApiException(status=403, reason="Forbidden")
+
+    for _ in range(2):
+        assert new_job().get_status(False) == ("Running", False)
+
+    mock_events.assert_called_once()
+    assert caplog.text.count("Can't read the events") == 1

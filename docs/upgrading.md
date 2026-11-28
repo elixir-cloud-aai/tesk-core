@@ -30,7 +30,8 @@ namespace of the tasks. Add it to your taskmaster role:
 TESK's Helm chart doesn't grant it yet. Without it, the taskmaster logs a
 warning ("Can't read the events of job ...") and ends a job without pods
 only after `TESK_MAX_QUEUE_SECONDS`, if set, without Kubernetes' message;
-it doesn't fail otherwise.
+it doesn't fail otherwise. Without both, a task whose pod Kubernetes
+refuses still waits forever, as before.
 
 ## 0.13.0
 

@@ -196,12 +196,17 @@ up). The job then has no pods, and only its events (`FailedCreate`) tell
 why; earlier releases waited for a pod forever, and the task stayed
 `RUNNING`. While a job has no pods (none active, ready or
 terminating, none succeeded, and the job isn't suspended, e.g. by a queue
-such as Kueue), the taskmaster reads the job's latest `FailedCreate` event,
-at most once a minute:
+such as Kueue), the taskmaster reads the job's latest `FailedCreate` event:
+first once the job has had no pods for 10 seconds, then after a minute, and
+after twice as long each time, up to every 10 minutes, so that jobs that
+wait long (e.g. for a quota) add little load on the Kubernetes API. If the
+job had a pod before (e.g. one that failed, before a retry), only events
+since then count.
 
 - If Kubernetes refuses the pod for good (an invalid pod, or a forbidden
-  one other than a used-up quota, a missing service account, a webhook that
-  can't be called or a namespace that is being deleted), the taskmaster
+  one other than a used-up quota or one whose status isn't known yet, a
+  missing service account, a webhook that can't be called or a namespace
+  that is being deleted), the taskmaster
   logs an error with Kubernetes' message, e.g. `Pods of job
   'task-1234-ex-00' can't be created: Error creating: Pod "..." is invalid:
   spec.containers[0].resources.requests: Invalid value: "2147483648": must
@@ -213,13 +218,20 @@ at most once a minute:
   With `TESK_MAX_QUEUE_SECONDS`, it ends once it has had no pods for that
   many seconds (counted from when the taskmaster first saw it without
   pods), with the latest event's message in the log (`No pod of job '...'
-  was created within 600 s: ...`).
+  was created within 600 s: ...`). A job whose pod failed before (a retry,
+  with `EXECUTOR_BACKOFF_LIMIT` or `FILER_BACKOFF_LIMIT`) may wait up to 6
+  minutes for its retry without pods, so it ends only for a permanent
+  refusal. Admission webhooks that deny a pod (e.g. Kyverno or Gatekeeper
+  policies: `admission webhook "..." denied the request`) count as
+  temporary too, as their policies may change: such a pod ends the task
+  only after `TESK_MAX_QUEUE_SECONDS`.
 
 Reading the events needs `list` on `events` (core API group) for the
 taskmaster's service account. Without it, the taskmaster logs a warning
-once per job, doesn't read the events again, and ends a job without pods
-only after `TESK_MAX_QUEUE_SECONDS`, if set, with a pointer to the job's
-events (`kubectl describe job`) instead of the message.
+once, doesn't read events again, and ends a job without pods only after
+`TESK_MAX_QUEUE_SECONDS`, if set, with a pointer to the job's events
+(`kubectl describe job`) instead of the message. Without both, a task whose
+pod Kubernetes refuses waits forever, as before.
 
 The max queue time covers the pods of the task's jobs only, not the
 taskmaster's own pod: a task whose taskmaster can't be scheduled (or
