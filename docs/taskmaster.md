@@ -187,10 +187,43 @@ minute: with `TESK_MAX_QUEUE_SECONDS=600` and `--pod-timeout 240`, from
 240 seconds on. So a task can end up to about a minute later than the max
 queue time.
 
+Kubernetes may also refuse to create a job's pod at all: the pod is
+invalid (e.g. it requests more memory than the default limit that a
+`LimitRange` of the namespace adds to it), or forbidden (e.g. above a
+`LimitRange`'s maximum, without the limits that a `ResourceQuota` requires,
+against the namespace's Pod Security Standard, or while a quota is used
+up). The job then has no pods, and only its events (`FailedCreate`) tell
+why; earlier releases waited for a pod forever, and the task stayed
+`RUNNING`. While a job has no pods (none active, ready or
+terminating, none succeeded, and the job isn't suspended, e.g. by a queue
+such as Kueue), the taskmaster reads the job's latest `FailedCreate` event,
+at most once a minute:
+
+- If Kubernetes refuses the pod for good (an invalid pod, or a forbidden
+  one other than a used-up quota, a missing service account, a webhook that
+  can't be called or a namespace that is being deleted), the taskmaster
+  logs an error with Kubernetes' message, e.g. `Pods of job
+  'task-1234-ex-00' can't be created: Error creating: Pod "..." is invalid:
+  spec.containers[0].resources.requests: Invalid value: "2147483648": must
+  be less than or equal to memory limit of 1Gi`, ends the job as for a pod
+  that can't be scheduled (an executor's job is deleted, a filer's job
+  failed and kept), and stops: the TESK API reports `SYSTEM_ERROR`, with
+  the message in the task's system logs.
+- Otherwise, e.g. while other tasks use up a quota, the job keeps waiting.
+  With `TESK_MAX_QUEUE_SECONDS`, it ends once it has had no pods for that
+  many seconds (counted from when the taskmaster first saw it without
+  pods), with the latest event's message in the log (`No pod of job '...'
+  was created within 600 s: ...`).
+
+Reading the events needs `list` on `events` (core API group) for the
+taskmaster's service account. Without it, the taskmaster logs a warning
+once per job, doesn't read the events again, and ends a job without pods
+only after `TESK_MAX_QUEUE_SECONDS`, if set, with a pointer to the job's
+events (`kubectl describe job`) instead of the message.
+
 The max queue time covers the pods of the task's jobs only, not the
-taskmaster's own pod: a task whose taskmaster can't be scheduled waits as
-before. Neither does it cover pods that are never created, e.g. because a
-`ResourceQuota` of the namespace is used up.
+taskmaster's own pod: a task whose taskmaster can't be scheduled (or
+created) waits as before.
 
 Executor jobs aren't retried (`backoffLimit: 0`) unless
 `EXECUTOR_BACKOFF_LIMIT` (or the job) sets a limit, so that the state and logs
@@ -291,7 +324,7 @@ credentials come from a Kubernetes secret (see [Filer](filer.md#ftp)).
 | `FILER_BACKOFF_LIMIT` | Retries of each filer job (`backoffLimit`), from 0 to 2147483647; unset or empty, Kubernetes' default. Other values log an error and are ignored. |
 | `FILER_HTTP_TIMEOUT` | Timeout of the filer's HTTP(S) requests (not FTP or S3), in seconds, for connecting and each read (see [Filer](filer.md#https)); passed on to the filer; 300 if unset. |
 | `STORAGE_CLASS_NAME` | Storage class of the task's PVC; the cluster's default if unset. |
-| `TESK_MAX_QUEUE_SECONDS` | Seconds after which a pod that the scheduler can't place ends the task with `SYSTEM_ERROR` (see [What it does](#what-it-does)), from 1 to 2147483647; unset or empty waits forever. Other values log an error and wait forever. |
+| `TESK_MAX_QUEUE_SECONDS` | Seconds after which a pod that the scheduler can't place, or a job whose pod Kubernetes doesn't create for a reason that can resolve (e.g. a used-up quota), ends the task with `SYSTEM_ERROR` (see [What it does](#what-it-does)), from 1 to 2147483647; unset or empty waits forever. Other values log an error and wait forever. Pods that Kubernetes refuses for good end the task without it, if the taskmaster may list events. |
 | `TASK_TTL_SECONDS` | Seconds after which Kubernetes deletes the taskmaster's finished job, and with it the task's jobs (`ttlSecondsAfterFinished`; see [Deleting finished tasks](#deleting-finished-tasks)), from 0 to 2147483647; unset or empty keeps them. Other values log an error and set no TTL. |
 | `KEEP_FAILED_PVC` | `true` keeps the PVC of a task that doesn't complete (a job failed, or the task was cancelled); unset, empty or `false` deletes it (see above). Other values log a warning and delete it. |
 | `FILER_POD_SECURITY_CONTEXT`, `FILER_SECURITY_CONTEXT` | Security context of the filer's pod and of its container, as JSON objects; each replaces its whole default (repeat the default fields that you want to keep, see [Pod security](filer.md#pod-security)), and `{}` leaves it out. Unset or empty values keep the defaults; values that aren't JSON objects, or whose fields or types don't fit Kubernetes' `PodSecurityContext` or `SecurityContext`, log an error and keep them too. |

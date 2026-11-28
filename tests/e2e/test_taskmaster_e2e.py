@@ -226,3 +226,36 @@ def test_task_in_namespace_that_requires_limits(
         assert filer.resources.limits == {"cpu": "1", "memory": "512Mi"}, suffix
     log = core.read_namespaced_pod_log(HTTP_POD, NAMESPACE)
     assert f"PUT {upload} 'quota;'" in log
+
+
+def test_executor_that_cant_be_created_ends_task(
+    run_task: Callable[..., Task],
+) -> None:
+    """Test that an executor whose pod Kubernetes refuses ends the task.
+
+    Its memory (2Gi, a limit from its request) is above the maximum of the
+    namespace's `LimitRange` (1Gi in `quota.yaml`), so the job never gets a
+    pod (`FailedCreate`). With the right to list events, which only this
+    namespace grants, the taskmaster logs Kubernetes' message and deletes
+    the executor's job without waiting for a max queue time, from which the
+    TESK API derives `SYSTEM_ERROR`; before, the task stayed `RUNNING`
+    (issue #169).
+    """
+    task = run_task(
+        ["true"],
+        resources={
+            "requests": {"cpu": "100m", "memory": "2Gi"},
+            "limits": {"cpu": "100m"},
+        },
+        namespace=QUOTA_NAMESPACE,
+        taskmaster_resources={
+            "requests": {"cpu": "100m", "memory": "128Mi"},
+            "limits": {"cpu": "1", "memory": "512Mi"},
+        },
+    )
+
+    assert task.wait_finished() == "Complete", task.logs()
+    task.wait(lambda: task.gone("-ex-00"), "the executor job to be deleted")
+    logs = task.logs()
+    assert "can't be created" in logs, logs
+    assert "maximum memory usage per Container is 1Gi" in logs, logs

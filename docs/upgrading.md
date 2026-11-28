@@ -4,6 +4,34 @@ Changes that operators must act on when they upgrade the taskmaster and the
 filer. Upgrade both images together: the taskmaster passes the settings on
 to the filer.
 
+## Unreleased
+
+### Tasks whose pods can't be created end
+
+A job whose pod Kubernetes refuses to create (e.g. an invalid pod, or one
+above a `LimitRange`'s maximum) used to wait forever, and its task stayed
+`RUNNING` ([#169](https://github.com/elixir-cloud-aai/tesk-core/issues/169)).
+The taskmaster now reads the job's `FailedCreate` events: a refusal that
+waiting can't resolve ends the task at once with `SYSTEM_ERROR`, with
+Kubernetes' message in the taskmaster's log (the task's system logs); other
+refusals, e.g. a used-up quota, wait up to `TESK_MAX_QUEUE_SECONDS`, if
+set, which now covers jobs without pods too (see [What it
+does](taskmaster.md#what-it-does)).
+
+This needs a new permission: `list` on `events` (core API group) in the
+namespace of the tasks. Add it to your taskmaster role:
+
+```yaml
+- apiGroups: [""]
+  resources: [events]
+  verbs: [list]
+```
+
+TESK's Helm chart doesn't grant it yet. Without it, the taskmaster logs a
+warning ("Can't read the events of job ...") and ends a job without pods
+only after `TESK_MAX_QUEUE_SECONDS`, if set, without Kubernetes' message;
+it doesn't fail otherwise.
+
 ## 0.13.0
 
 ### Resources of the filer

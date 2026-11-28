@@ -93,8 +93,10 @@ check the resulting jobs, PVCs and uploads: a task with inputs and outputs
 ignored, a cancelled task, a task that can't be scheduled
 (`TESK_MAX_QUEUE_SECONDS`), and a task in a namespace that requires
 resource limits (`tesk-e2e-quota`, from `tests/e2e/manifests/quota/`: a
-`ResourceQuota` on `limits.cpu` and a default memory limit below the
-executor's request). The images
+`ResourceQuota` on `limits.cpu`, and a `LimitRange` with a default memory
+limit below the executor's request), and, in that namespace, a task whose
+executor's pod Kubernetes refuses to create (above the `LimitRange`'s
+maximum). The images
 run with `imagePullPolicy: Never`, and the filer image also runs the
 executors and the HTTP server, so no other image is pulled. The unit tests in `tests/unit/test_manifests.py`
 check the manifests against the Kubernetes client's models without a
@@ -126,7 +128,10 @@ their own namespace, without `-n`). The image
 names are fixed (`tests/e2e/cluster.py`). The role in
 `tests/e2e/manifests/rbac.yaml` (and its copy in
 `tests/e2e/manifests/quota/quota.yaml`) grants what the role of TESK's
-chart grants: update them together.
+chart grants: update them together. The namespace `tesk-e2e-quota` also
+has a second role with `list` on `events`, which the taskmaster uses when
+it may (see [What it does](taskmaster.md#what-it-does)), so that the tests
+there run with it and those in `default` without it.
 
 ## Continuous integration
 
