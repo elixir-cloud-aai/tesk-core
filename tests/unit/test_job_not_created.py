@@ -56,6 +56,7 @@ def events_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
 def job_without_pods(
     suspend: bool | None = False,
     uid: str | None = "uid-1",
+    created: datetime.datetime | None = None,
     **status: Any,
 ) -> MockObject:
     """Mock a running job without pods.
@@ -63,6 +64,7 @@ def job_without_pods(
     Args:
         suspend: The job's `spec.suspend`.
         uid: The job's UID.
+        created: The job's creation time.
         **status: Fields of the job's status that replace the defaults.
 
     Returns:
@@ -80,7 +82,7 @@ def job_without_pods(
     fields.update(status)
     return MockObject(
         {
-            "metadata": {"uid": uid},
+            "metadata": {"uid": uid, "creation_timestamp": created},
             "spec": {"suspend": suspend, "active_deadline_seconds": None},
             "status": fields,
         }
@@ -164,6 +166,25 @@ def new_job(delete_unschedulable: bool = True, max_queue: int | None = None) -> 
             True,
         ),
         (QUOTA, False),
+        (  # The pod alone requests more than the quota's hard limit
+            'Error creating: pods "p" is forbidden: exceeded quota: q,'
+            " requested: limits.memory=2Gi,requests.memory=2Gi, used:"
+            " limits.memory=0,requests.memory=0, limited:"
+            " limits.memory=1Gi,requests.memory=1Gi",
+            True,
+        ),
+        (
+            'Error creating: pods "p" is forbidden: exceeded quota: q,'
+            " requested: limits.memory=1Gi, used: limits.memory=1Gi, limited:"
+            " limits.memory=1Gi",
+            False,
+        ),
+        (
+            'Error creating: pods "p" is forbidden: exceeded quota: q,'
+            " requested: limits.memory=2Xi, used: limits.memory=0, limited:"
+            " limits.memory=1Gi",
+            False,
+        ),
         (
             'Error creating: pods "p" is forbidden: error looking up service'
             ' account ns/sa: serviceaccount "sa" not found',
@@ -333,12 +354,15 @@ def test_without_max_queue_waits(
         mock_delete: The mocked deletion of the job.
     """
     mock_read.return_value = job_without_pods()
-    mock_events.return_value = events()
+    mock_events.return_value = events(event(QUOTA))
     job = new_job()
     job.no_pods_since = NOW - datetime.timedelta(days=30)
 
-    assert job.get_status(False) == ("Running", False)
+    with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
+        assert job.get_status(False) == ("Running", False)
+        mock_patch.assert_not_called()
 
+    mock_events.assert_called_once()
     mock_delete.assert_not_called()
 
 
@@ -635,10 +659,19 @@ def test_check_interval_doubles(mock_read: MagicMock, mock_events: MagicMock) ->
     intervals = []
 
     for _ in range(6):
+        interval = job.create_check_interval
         # Due again, without waiting for the interval
         job.next_create_check = None
+        before = datetime.datetime.now(timezone.utc)
         assert job.get_status(False) == ("Running", False)
+        after = datetime.datetime.now(timezone.utc)
         intervals.append(job.create_check_interval)
+        # The next read is due after the interval before the doubling
+        assert job.next_create_check is not None
+        assert before + datetime.timedelta(seconds=interval) <= job.next_create_check
+        assert job.next_create_check <= after + datetime.timedelta(seconds=interval)
+        # And not before
+        assert job.get_status(False) == ("Running", False)
 
     assert intervals == [
         min(POD_CHECK_INTERVAL * 2**n, MAX_CREATE_CHECK_INTERVAL) for n in range(1, 7)
@@ -711,7 +744,7 @@ def test_refusal_before_last_pod_ignored(
     job = new_job(delete_unschedulable=False)
     mock_read.return_value = job_without_pods(active=1)
     assert job.get_status(False)[0] == "Running"
-    assert job.had_pods
+    assert job.pods_seen_at is not None
 
     mock_read.return_value = job_without_pods(failed=1)
     mock_events.return_value = events(event(OVER_MAX, minutes=5))
@@ -807,5 +840,102 @@ def test_failed_pod_counts_as_seen(
     with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
         assert job.get_status(False) == ("Running", False)
 
-    assert job.had_pods
+    assert job.pods_seen_at is not None
     mock_patch.assert_not_called()
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_retry_refused_before_check_ends(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+    mock_pods: MagicMock,
+) -> None:
+    """Test that a retry refused between two checks ends the job.
+
+    The pod fails and its retry is refused before the taskmaster sees the
+    job without pods: the refusal is newer than the last check that saw the
+    pod, so it counts.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+        mock_pods: The mocked listing of the job's pods.
+    """
+    mock_pods.return_value = MockObject({"items": []})
+    job = new_job()
+    mock_read.return_value = job_without_pods(active=1)
+    assert job.get_status(False)[0] == "Running"
+    # The check that saw the pod was two minutes ago
+    two_minutes = datetime.timedelta(minutes=2)
+    assert job.pods_seen_at is not None
+    assert job.last_create_check is not None
+    job.pods_seen_at -= two_minutes
+    job.last_create_check -= two_minutes
+
+    mock_read.return_value = job_without_pods(failed=1)
+    mock_events.return_value = events(event(OVER_MAX, minutes=1))
+    assert job.get_status(False) == ("Running", False)  # Waits CREATE_CHECK_DELAY
+    job.next_create_check = None
+
+    # A job whose pod failed is failed and kept, for the pod's logs
+    with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
+        assert job.get_status(False) == ("Running", False)
+        mock_patch.assert_called_once()
+    mock_delete.assert_not_called()
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_never_had_pods_waits_since_creation(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+) -> None:
+    """Test that a job that never had a pod has waited since its creation.
+
+    So a taskmaster that restarted doesn't start the max queue time over.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+    """
+    created = datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=5)
+    mock_read.return_value = job_without_pods(created=created)
+    mock_events.return_value = events(event(QUOTA))
+    job = new_job(max_queue=60)
+    job.no_pods_since = None
+
+    assert job.get_status(False) == ("Failed", False)
+
+    assert job.no_pods_since == created
+    mock_delete.assert_called_once()
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_job_with_failed_pod_waits_since_seen(
+    mock_read: MagicMock, mock_events: MagicMock
+) -> None:
+    """Test that a job whose pod failed has waited since the taskmaster saw it.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+    """
+    created = datetime.datetime.now(timezone.utc) - datetime.timedelta(hours=1)
+    mock_read.return_value = job_without_pods(created=created, failed=1)
+    mock_events.return_value = events(event(QUOTA))
+    job = new_job(max_queue=60)
+    job.no_pods_since = None
+
+    assert job.get_status(False) == ("Running", False)
+
+    assert job.no_pods_since is not None
+    assert job.no_pods_since > created

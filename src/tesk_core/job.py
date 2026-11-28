@@ -3,11 +3,13 @@
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 import time
 from typing import Any
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+from kubernetes.utils import parse_quantity
 from urllib3.exceptions import HTTPError
 
 from tesk_core.Util import pprint
@@ -44,6 +46,11 @@ TEMPORARY_MARKERS = (
     "failed calling webhook",
     "because it is being terminated",
     "status unknown for quota",
+)
+# A quota's refusal: what the pod requests, what the namespace uses, and the
+# quota's hard limits, each as `name=quantity,...`
+QUOTA_PATTERN = re.compile(
+    r"exceeded quota: .*?, requested: (\S+), used: \S+, limited: (\S+)"
 )
 # Seconds after which the events of a job without pods are first read, so
 # that jobs whose first pod is on its way don't read them
@@ -103,11 +110,59 @@ def permanent_create_error(message: str) -> bool:
 
     Returns:
         Whether the pod is invalid or forbidden for a reason that waiting
-        can't resolve (see `REFUSED_MARKERS` and `TEMPORARY_MARKERS`).
+        can't resolve (see `REFUSED_MARKERS` and `TEMPORARY_MARKERS`); a
+        pod that requests more than a quota's hard limit (`beyond_quota`)
+        is refused for good.
     """
-    return any(marker in message for marker in REFUSED_MARKERS) and not any(
-        marker in message for marker in TEMPORARY_MARKERS
+    if not any(marker in message for marker in REFUSED_MARKERS):
+        return False
+    if beyond_quota(message):
+        return True
+    return not any(marker in message for marker in TEMPORARY_MARKERS)
+
+
+def beyond_quota(message: str) -> bool:
+    """Tell whether a pod that a quota refuses requests more than its limit.
+
+    Args:
+        message: The message of a `FailedCreate` event of the pod's job.
+
+    Returns:
+        Whether the message is a quota's refusal (`QUOTA_PATTERN`) in which
+        the pod alone requests more of a resource than the quota's hard
+        limit, so that no other task's end makes room; `False` for other
+        messages, or quantities that can't be read.
+    """
+    match = QUOTA_PATTERN.search(message)
+    if match is None:
+        return False
+    try:
+        requested = _quantities(match.group(1))
+        limited = _quantities(match.group(2))
+    except ValueError:
+        return False
+    return any(
+        name in limited and amount > limited[name] for name, amount in requested.items()
     )
+
+
+def _quantities(text: str) -> dict[str, Any]:
+    """Read the resources of a quota's message.
+
+    Args:
+        text: The resources, as `name=quantity,...`.
+
+    Returns:
+        The quantity of each resource, by name.
+
+    Raises:
+        ValueError: If a quantity can't be read.
+    """
+    quantities = {}
+    for pair in text.rstrip(",.").split(","):
+        name, _, quantity = pair.partition("=")
+        quantities[name] = parse_quantity(quantity)
+    return quantities
 
 
 def _event_time(event: Any) -> datetime:
@@ -196,8 +251,13 @@ class Job:
             next (`check_not_created`); `None` before the first check.
         create_check_interval: Seconds until the events are read again;
             doubles after each read up to `MAX_CREATE_CHECK_INTERVAL`.
-        had_pods: Whether the taskmaster saw a pod of the job; then only
-            events since it last saw none count (`failed_create_message`).
+        pods_seen_at: When the taskmaster last knew the job to have a pod:
+            the poll that saw it, or for a pod that failed between two polls,
+            the earlier one; then only events since count
+            (`failed_create_message`). `None` before the job had a pod.
+        seen_failed: The number of the job's failed pods at the last check.
+        last_create_check: When the job's pods were last checked
+            (`check_not_created`).
         end_reason: Why the job is ended (`end_unschedulable`), for the log
             when its deletion is rejected and it is failed instead.
         deleting: Whether a deletion of `end_unschedulable` failed, and is
@@ -236,7 +296,9 @@ class Job:
         self.no_pods_since: datetime | None = None
         self.next_create_check: datetime | None = None
         self.create_check_interval = float(self.pod_check_interval)
-        self.had_pods = False
+        self.pods_seen_at: datetime | None = None
+        self.seen_failed = 0
+        self.last_create_check: datetime | None = None
         self.end_reason = UNSCHEDULED_REASON
         self.delete_unschedulable = False
         self.deleting = False
@@ -439,7 +501,8 @@ class Job:
         that a `LimitRange`, a quota or an admission policy forbids) has no
         pods, and only events (`FailedCreate`) tell why. This applies to a
         running job without pods: none active, ready or terminating, none
-        succeeded, and not suspended (e.g. by a queue such as Kueue).
+        succeeded, and not suspended (e.g. by a queue such as Kueue). A job
+        that never had a pod has had none since its creation.
 
         The latest such event is read once the job has had no pods for
         `CREATE_CHECK_DELAY` seconds, then after `create_check_interval`
@@ -460,22 +523,39 @@ class Job:
             Whether the job was ended; `status` is set then.
         """
         status = job.status
+        now = datetime.now(timezone.utc)
         has_pods = bool(
             status.active
             or getattr(status, "ready", None)
             or getattr(status, "terminating", None)
             or status.succeeded
         )
-        # A failed pod shows that the job had one, also between two polls
-        self.had_pods = self.had_pods or has_pods or bool(status.failed)
+        failed = status.failed or 0
+        if has_pods:
+            self.pods_seen_at = now
+        elif failed > self.seen_failed:
+            # A pod failed since the last check, so it existed then
+            self.pods_seen_at = self.last_create_check or now
+        self.seen_failed = failed
+        self.last_create_check = now
         if has_pods or getattr(getattr(job, "spec", None), "suspend", None):
             self.no_pods_since = None
             self.next_create_check = None
             self.create_check_interval = float(self.pod_check_interval)
             return False
-        now = datetime.now(timezone.utc)
         if self.no_pods_since is None:
             self.no_pods_since = now
+            created = getattr(
+                getattr(job, "metadata", None), "creation_timestamp", None
+            )
+            if (
+                not failed
+                and self.pods_seen_at is None
+                and isinstance(created, datetime)
+            ):
+                # A job that never had a pod has had none since its creation,
+                # also for a taskmaster that restarted
+                self.no_pods_since = min(created, now)
             self.next_create_check = now + timedelta(seconds=CREATE_CHECK_DELAY)
         waited = (now - self.no_pods_since).total_seconds()
         max_wait = None
@@ -516,12 +596,13 @@ class Job:
         """Read why Kubernetes last refused to create a pod of the job.
 
         Lists the job's `FailedCreate` events (of this job, by its UID, not
-        of an earlier one of the same name); if the taskmaster saw a pod of
-        the job, only events last seen since it last saw none count, so that
-        a refusal from before a pod that was created after all doesn't end
-        its retry. The Kubernetes API refuses the list if the taskmaster's
-        role doesn't grant `list` on `events`: then a warning is logged, once
-        per taskmaster, and no job reads events again (`events_forbidden`).
+        of an earlier one of the same name); if the job had a pod, only
+        events last seen since the taskmaster last knew it to have one
+        (`pods_seen_at`) count, so that a refusal from before a pod that was
+        created after all doesn't end its retry. The Kubernetes API refuses
+        the list if the taskmaster's role doesn't grant `list` on `events`:
+        then a warning is logged, once per taskmaster, and no job reads
+        events again (`events_forbidden`).
         Other errors are logged at `DEBUG`; the next check tries again.
 
         Args:
@@ -567,8 +648,9 @@ class Job:
         except HTTPError as ex:
             logging.debug("Can't read the events of job '%s' (%s)", self.name, ex)
             return None
-        if self.had_pods and self.no_pods_since is not None:
-            since = self.no_pods_since
+        if self.pods_seen_at is not None:
+            # Event times have whole seconds
+            since = self.pods_seen_at.replace(microsecond=0)
             events = [event for event in events if _event_time(event) >= since]
         if not events:
             return None

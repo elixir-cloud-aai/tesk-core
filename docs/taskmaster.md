@@ -201,12 +201,13 @@ first once the job has had no pods for 10 seconds, then after a minute, and
 after twice as long each time, up to every 10 minutes, so that jobs that
 wait long (e.g. for a quota) add little load on the Kubernetes API. If the
 job had a pod before (e.g. one that failed, before a retry), only events
-since then count.
+since the taskmaster last knew it to have one count.
 
 - If Kubernetes refuses the pod for good (an invalid pod, or a forbidden
   one other than a used-up quota or one whose status isn't known yet, a
   missing service account, a webhook that can't be called or a namespace
-  that is being deleted), the taskmaster
+  that is being deleted; a pod that alone requests more than a quota's hard
+  limit counts as refused for good), the taskmaster
   logs an error with Kubernetes' message, e.g. `Pods of job
   'task-1234-ex-00' can't be created: Error creating: Pod "..." is invalid:
   spec.containers[0].resources.requests: Invalid value: "2147483648": must
@@ -216,8 +217,9 @@ since then count.
   the message in the task's system logs.
 - Otherwise, e.g. while other tasks use up a quota, the job keeps waiting.
   With `TESK_MAX_QUEUE_SECONDS`, it ends once it has had no pods for that
-  many seconds (counted from when the taskmaster first saw it without
-  pods), with the latest event's message in the log (`No pod of job '...'
+  many seconds (counted from the job's creation if it never had a pod,
+  also after a restart of the taskmaster, otherwise from when the
+  taskmaster first saw it without pods), with the latest event's message in the log (`No pod of job '...'
   was created within 600 s: ...`), checked at every poll. A job whose pod
   failed before (a retry, with `EXECUTOR_BACKOFF_LIMIT` or
   `FILER_BACKOFF_LIMIT`) may wait up to 6 minutes for its retry without
