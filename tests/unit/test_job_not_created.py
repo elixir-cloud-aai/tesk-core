@@ -17,7 +17,9 @@ from tesk_core.job import (
     EVENTS_TIMEOUT,
     MAX_CREATE_CHECK_INTERVAL,
     MAX_MESSAGE_LENGTH,
+    MAX_RETRY_BACKOFF,
     NOT_CREATED_REASON,
+    POD_CHECK_INTERVAL,
     Job,
     permanent_create_error,
 )
@@ -633,12 +635,15 @@ def test_check_interval_doubles(mock_read: MagicMock, mock_events: MagicMock) ->
     intervals = []
 
     for _ in range(6):
+        # Due again, without waiting for the interval
         job.next_create_check = None
         assert job.get_status(False) == ("Running", False)
         intervals.append(job.create_check_interval)
 
-    assert intervals == [120, 240, 480, 600, 600, 600]
-    assert MAX_CREATE_CHECK_INTERVAL == 600
+    assert intervals == [
+        min(POD_CHECK_INTERVAL * 2**n, MAX_CREATE_CHECK_INTERVAL) for n in range(1, 7)
+    ]
+    assert intervals[-1] == MAX_CREATE_CHECK_INTERVAL
     assert mock_events.call_count == 6
 
 
@@ -664,7 +669,7 @@ def test_retry_wait_not_ended_by_max_queue(
         mock_delete: The mocked deletion of the job.
     """
     mock_read.return_value = job_without_pods(failed=4)
-    mock_events.return_value = events()
+    mock_events.return_value = events(event(QUOTA))
     job = new_job(delete_unschedulable=False, max_queue=120)
     assert job.no_pods_since is not None
     job.no_pods_since -= datetime.timedelta(seconds=300)
@@ -673,6 +678,11 @@ def test_retry_wait_not_ended_by_max_queue(
 
     mock_patch.assert_not_called()
     mock_delete.assert_not_called()
+
+    # Still refused after the longest backoff: the job ends
+    job.no_pods_since -= datetime.timedelta(seconds=MAX_RETRY_BACKOFF)
+    assert job.get_status(False) == ("Running", False)  # Failing
+    mock_patch.assert_called_once()
 
 
 @patch("kubernetes.client.CoreV1Api.list_namespaced_pod")
@@ -742,3 +752,60 @@ def test_events_forbidden_shared(
 
     mock_events.assert_called_once()
     assert caplog.text.count("Can't read the events") == 1
+
+
+@patch("tesk_core.job.Job.delete")
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_max_queue_checked_between_reads(
+    mock_read: MagicMock,
+    mock_events: MagicMock,
+    mock_delete: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that the max queue time ends a job at the next poll, not the next read.
+
+    The events are read then, for the log, even before their next read is due.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+        mock_delete: The mocked deletion of the job.
+        caplog: The fixture that captures the log.
+    """
+    mock_read.return_value = job_without_pods()
+    mock_events.return_value = events(event(QUOTA))
+    job = new_job(max_queue=60)
+    job.next_create_check = datetime.datetime.now(timezone.utc) + datetime.timedelta(
+        minutes=10
+    )
+    assert job.no_pods_since is not None
+    job.no_pods_since -= datetime.timedelta(seconds=61)
+
+    assert job.get_status(False) == ("Failed", False)
+
+    mock_events.assert_called_once()
+    mock_delete.assert_called_once()
+    assert f"was created within 60 s: {QUOTA}" in caplog.text
+
+
+@patch("kubernetes.client.CoreV1Api.list_namespaced_event")
+@patch("kubernetes.client.BatchV1Api.read_namespaced_job")
+def test_failed_pod_counts_as_seen(
+    mock_read: MagicMock, mock_events: MagicMock
+) -> None:
+    """Test that a failed pod, also one never seen running, filters old refusals.
+
+    Args:
+        mock_read: The mocked reading of the job.
+        mock_events: The mocked listing of the job's events.
+    """
+    mock_read.return_value = job_without_pods(failed=1)
+    mock_events.return_value = events(event(INVALID, minutes=5))
+    job = new_job(delete_unschedulable=False)
+
+    with patch("kubernetes.client.BatchV1Api.patch_namespaced_job") as mock_patch:
+        assert job.get_status(False) == ("Running", False)
+
+    assert job.had_pods
+    mock_patch.assert_not_called()

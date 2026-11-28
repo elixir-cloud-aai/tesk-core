@@ -52,6 +52,10 @@ CREATE_CHECK_DELAY = 10
 # at `POD_CHECK_INTERVAL` and doubles after each read that doesn't end the
 # job, so that jobs that wait long (e.g. for a quota) read them rarely
 MAX_CREATE_CHECK_INTERVAL = 600
+# Seconds that Kubernetes may wait before it retries a failed pod (its
+# longest pod failure backoff), which a job whose pod failed gets on top of
+# the max queue time
+MAX_RETRY_BACKOFF = 360
 # Whether the Kubernetes API refused to list events (no right to): then no
 # job reads them again, and the warning is logged once per taskmaster
 events_forbidden = False
@@ -231,7 +235,7 @@ class Job:
         self.max_queue: int | None = None
         self.no_pods_since: datetime | None = None
         self.next_create_check: datetime | None = None
-        self.create_check_interval = float(POD_CHECK_INTERVAL)
+        self.create_check_interval = float(self.pod_check_interval)
         self.had_pods = False
         self.end_reason = UNSCHEDULED_REASON
         self.delete_unschedulable = False
@@ -433,19 +437,21 @@ class Job:
 
         A job whose pods Kubernetes refuses (e.g. an invalid pod, or one
         that a `LimitRange`, a quota or an admission policy forbids) has no
-        pods, and only events (`FailedCreate`) tell why. For a running job
-        without pods (none active, ready or terminating, none succeeded, and
-        not suspended, e.g. by a queue such as Kueue), reads the latest such
-        event once it has had no pods for `CREATE_CHECK_DELAY` seconds, then
-        after `create_check_interval` seconds, which doubles each time. A
-        permanent refusal (`permanent_create_error`) ends the job at once;
-        others, or none that can be read, end it once it has had no pods for
-        longer than `max_queue`, if set, unless a pod of it failed before (it
-        may wait to retry, with a backoff). Ending the job is as for a pod that can't be
-        scheduled (`end_unschedulable`): an executor whose pods never ran is
-        deleted, so that the TESK API reports `SYSTEM_ERROR`; the log, which
-        the TESK API shows in the task's system logs, has Kubernetes'
-        message.
+        pods, and only events (`FailedCreate`) tell why. This applies to a
+        running job without pods: none active, ready or terminating, none
+        succeeded, and not suspended (e.g. by a queue such as Kueue).
+
+        The latest such event is read once the job has had no pods for
+        `CREATE_CHECK_DELAY` seconds, then after `create_check_interval`
+        seconds, which doubles each time. A permanent refusal
+        (`permanent_create_error`) ends the job at once. Otherwise, the job
+        ends once it has had no pods for longer than `max_queue`, if set,
+        checked at every poll; a job whose pod failed before gets another
+        `MAX_RETRY_BACKOFF` seconds, as Kubernetes may wait that long before
+        it retries. Ending the job is as for a pod that can't be scheduled
+        (`end_unschedulable`): an executor whose pods never ran is deleted,
+        so that the TESK API reports `SYSTEM_ERROR`. The log, which the TESK
+        API shows in the task's system logs, has Kubernetes' message.
 
         Args:
             job: The job, as read from the Kubernetes API.
@@ -454,28 +460,33 @@ class Job:
             Whether the job was ended; `status` is set then.
         """
         status = job.status
-        if (
-            getattr(getattr(job, "spec", None), "suspend", None)
-            or status.active
+        has_pods = bool(
+            status.active
             or getattr(status, "ready", None)
             or getattr(status, "terminating", None)
             or status.succeeded
-        ):
+        )
+        # A failed pod shows that the job had one, also between two polls
+        self.had_pods = self.had_pods or has_pods or bool(status.failed)
+        if has_pods or getattr(getattr(job, "spec", None), "suspend", None):
             self.no_pods_since = None
             self.next_create_check = None
             self.create_check_interval = float(self.pod_check_interval)
-            self.had_pods = self.had_pods or bool(
-                status.active
-                or getattr(status, "ready", None)
-                or getattr(status, "terminating", None)
-                or status.succeeded
-            )
             return False
         now = datetime.now(timezone.utc)
         if self.no_pods_since is None:
             self.no_pods_since = now
             self.next_create_check = now + timedelta(seconds=CREATE_CHECK_DELAY)
-        if self.next_create_check is not None and now < self.next_create_check:
+        waited = (now - self.no_pods_since).total_seconds()
+        max_wait = None
+        if self.max_queue is not None:
+            max_wait = self.max_queue + (MAX_RETRY_BACKOFF if status.failed else 0)
+        timed_out = max_wait is not None and waited > max_wait
+        if (
+            not timed_out
+            and self.next_create_check is not None
+            and now < self.next_create_check
+        ):
             return False
         self.next_create_check = now + timedelta(seconds=self.create_check_interval)
         self.create_check_interval = min(
@@ -488,13 +499,11 @@ class Job:
             )
             self.status = self.end_unschedulable(reason=NOT_CREATED_REASON)
             return True
-        waited = (now - self.no_pods_since).total_seconds()
-        # Not for a job whose pod failed: it may wait to retry (backoff)
-        if self.max_queue is not None and waited > self.max_queue and not status.failed:
+        if timed_out:
             logging.error(
                 "No pod of job '%s' was created within %s s: %s",
                 self.name,
-                self.max_queue,
+                max_wait,
                 _shorten(message)
                 if message is not None
                 else "see the job's events (kubectl describe job)",

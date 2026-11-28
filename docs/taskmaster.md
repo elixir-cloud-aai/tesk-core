@@ -218,10 +218,10 @@ since then count.
   With `TESK_MAX_QUEUE_SECONDS`, it ends once it has had no pods for that
   many seconds (counted from when the taskmaster first saw it without
   pods), with the latest event's message in the log (`No pod of job '...'
-  was created within 600 s: ...`). A job whose pod failed before (a retry,
-  with `EXECUTOR_BACKOFF_LIMIT` or `FILER_BACKOFF_LIMIT`) may wait up to 6
-  minutes for its retry without pods, so it ends only for a permanent
-  refusal. Admission webhooks that deny a pod (e.g. Kyverno or Gatekeeper
+  was created within 600 s: ...`), checked at every poll. A job whose pod
+  failed before (a retry, with `EXECUTOR_BACKOFF_LIMIT` or
+  `FILER_BACKOFF_LIMIT`) may wait up to 6 minutes for its retry without
+  pods, so it gets another 360 seconds. Admission webhooks that deny a pod (e.g. Kyverno or Gatekeeper
   policies: `admission webhook "..." denied the request`) count as
   temporary too, as their policies may change: such a pod ends the task
   only after `TESK_MAX_QUEUE_SECONDS`.
